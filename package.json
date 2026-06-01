@@ -1,0 +1,27 @@
+{
+  "name": "forge-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A tutorial-driven, from-scratch coding agent harness built in TypeScript.",
+  "type": "module",
+  "bin": {
+    "forge-harness": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/cli/index.js"
+  },
+  "keywords": [
+    "agent",
+    "coding-agent",
+    "harness",
+    "typescript",
+    "tutorial"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.0"
+  }
+}
