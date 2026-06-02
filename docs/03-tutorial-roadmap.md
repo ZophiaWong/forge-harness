@@ -23,6 +23,8 @@ The first loop should be intuitive. Later stages should earn every abstraction.
 
 ## Stage 0: High-Level Overview
 
+- Chapter: [c00-overview](tutorial/c00-overview.md)
+
 - What is an agent harness?
 - What is Forge Harness?
 - What is the direct agent-loop data flow?
@@ -153,12 +155,12 @@ Deterministic model fixtures can be added later for tests, docs, and offline exa
 
 ## Chapter Map
 
-Tutorial chapters should be written in Chinese. Technical terms such as `Agent Loop`, `Tool Runtime`, `Context Projection`, `Session`, `Trace`, `Observation`, `Permission Policy`, and `ChangeSet` should stay in English.
+Tutorial chapters should be written in Chinese and follow [Tutorial Writing Style](05-tutorial-writing-style.md). Technical terms such as `Agent Loop`, `Tool Runtime`, `Context Projection`, `Session`, `Trace`, `Observation`, `Permission Policy`, and `ChangeSet` should stay in English.
 
 Initial chapter map:
 
 - Stage 0: Orientation
-  - `c00-overview`
+  - [c00-overview](tutorial/c00-overview.md)
 - Stage 1: The Direct Loop
   - `c01-minimal-real-llm-loop`
   - `c02-cli-and-message-history`

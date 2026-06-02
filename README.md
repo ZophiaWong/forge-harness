@@ -91,7 +91,7 @@ The repository currently contains project direction, architecture notes, tutoria
 - Stage 6: verification and recovery, introduced because a coding agent should prove work before claiming completion.
 - Stage 7: extensions, introduced after the single-agent foundation is real.
 
-See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the tutorial path.
+Start with [docs/tutorial/c00-overview.md](docs/tutorial/c00-overview.md) for the first tutorial chapter. See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the full tutorial path.
 
 ## Project Layout
 
@@ -135,11 +135,13 @@ npm run start
 
 ## Documentation
 
-Tutorial lesson documents will live in `docs/tutorial/` once the first lesson is written. Tutorial lessons are written in Chinese, with technical terms kept in English. Historical runnable lesson states are captured by chapter-based branches and tags such as `tutorial/c01-minimal-real-llm-loop` and `tutorial-c01-minimal-real-llm-loop`; see the roadmap for the full strategy.
+Tutorial lesson documents live in `docs/tutorial/`. Tutorial lessons are written in Chinese, with technical terms kept in English, and should follow the tutorial writing style guide. Historical runnable lesson states are captured by chapter-based branches and tags such as `tutorial/c01-minimal-real-llm-loop` and `tutorial-c01-minimal-real-llm-loop`; see the roadmap for the full strategy.
 
 - [Project Charter](docs/00-project-charter.md)
 - [Architecture](docs/01-architecture.md)
 - [Principles](docs/02-principles.md)
 - [Tutorial Roadmap](docs/03-tutorial-roadmap.md)
+- [Tutorial c00 Overview](docs/tutorial/c00-overview.md)
 - [Glossary](docs/04-glossary.md)
+- [Tutorial Writing Style](docs/05-tutorial-writing-style.md)
 - [Reference Notes](docs/reference/pi-versus-claude.md)
