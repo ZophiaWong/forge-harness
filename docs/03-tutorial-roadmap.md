@@ -57,6 +57,11 @@ Pain points exposed:
 
 Outcome: readers see the core agent pattern run for real before learning the harness mechanisms around it.
 
+Chapter split:
+
+- `c01-minimal-real-llm-loop` implements the full first loop: args-only CLI, real Responses API call, one local `bash` function tool, local input history, tool-result feedback, transcript output, and stop condition.
+- `c02-cli-and-message-history` improves usability and observability around that loop. It can make CLI options, transcript display, and message history easier to inspect, but it should not introduce the full Tool Runtime.
+
 ## Stage 2: Tool Runtime Enhancement
 
 The Stage 1 loop has one inline bash function. That is fine for the first lesson, but it does not scale once tools multiply.
@@ -162,8 +167,8 @@ Initial chapter map:
 - Stage 0: Orientation
   - [c00-overview](tutorial/c00-overview.md)
 - Stage 1: The Direct Loop
-  - `c01-minimal-real-llm-loop`
-  - `c02-cli-and-message-history`
+  - [c01-minimal-real-llm-loop](tutorial/c01-minimal-real-llm-loop.md)
+  - `c02-cli-and-message-history` as CLI and message-history observability
 - Stage 2: Tool Runtime Grows Out Of Bash
   - `c03-inline-bash-pain`
   - `c04-tool-schema-and-registry`

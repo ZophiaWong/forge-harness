@@ -1,13 +1,36 @@
 #!/usr/bin/env node
 
-const message = [
-  "Forge Harness scaffold",
-  "",
-  "This repository currently contains project direction, architecture notes,",
-  "and a lightweight TypeScript shell.",
-  "",
-  "The agent runtime is intentionally not implemented yet.",
-  "See docs/03-tutorial-roadmap.md for the planned tutorial milestones."
-];
+import "dotenv/config";
 
-console.log(message.join("\n"));
+import { parseTaskFromArgs, usageText } from "./args.js";
+import { runMinimalLoop } from "../core/minimalLoop.js";
+
+const task = parseTaskFromArgs(process.argv.slice(2));
+
+if (!task) {
+  console.error(usageText("forge-harness"));
+  process.exitCode = 1;
+} else {
+  await runMinimalLoop({
+    cwd: process.cwd(),
+    task,
+    transcript: {
+      roundStart(round, model) {
+        console.log(`\n[round ${round}] model=${model}`);
+      },
+      toolCall(round, command) {
+        console.log(`[round ${round}] bash: ${command}`);
+      },
+      toolResult(round, resultText) {
+        console.log(`[round ${round}] tool_result:\n${resultText}`);
+      },
+      finalAnswer(answer) {
+        console.log(`\n[final]\n${answer}`);
+      },
+    },
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`forge-harness failed: ${message}`);
+    process.exitCode = 1;
+  });
+}

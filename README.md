@@ -76,9 +76,11 @@ Those projects and ideas inform the capability map, but Forge Harness follows it
 
 ## Current Status
 
-Initial scaffold.
+Stage 1 minimal loop in progress.
 
-The repository currently contains project direction, architecture notes, tutorial planning, terminology, and a lightweight TypeScript project shell. The real agent runtime has not been implemented yet.
+The repository now contains the first direct real-LLM loop: a CLI task goes to the OpenAI Responses API, the model may request a local `bash` function tool, the harness executes it, and the tool result is appended back into local input history until the model stops requesting tools.
+
+This is intentionally still a small tutorial milestone. It does not include a full tool runtime, permission system, trace/session persistence, context projection, or verification/recovery loop.
 
 ## Initial Roadmap
 
@@ -91,7 +93,7 @@ The repository currently contains project direction, architecture notes, tutoria
 - Stage 6: verification and recovery, introduced because a coding agent should prove work before claiming completion.
 - Stage 7: extensions, introduced after the single-agent foundation is real.
 
-Start with [docs/tutorial/c00-overview.md](docs/tutorial/c00-overview.md) for the first tutorial chapter. See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the full tutorial path.
+Start with [docs/tutorial/c00-overview.md](docs/tutorial/c00-overview.md), then run the first loop with [docs/tutorial/c01-minimal-real-llm-loop.md](docs/tutorial/c01-minimal-real-llm-loop.md). See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the full tutorial path.
 
 ## Project Layout
 
@@ -107,30 +109,44 @@ src/
   extensions/   Future hooks, skills, subagents, MCP adapter, worktree isolation.
 ```
 
-## Placeholder Commands
+## Commands
 
-Install dependencies when implementation begins:
+Use Node.js `>=20.19.0`.
+
+Install dependencies:
 
 ```sh
 npm install
 ```
 
-Type-check the scaffold:
+Copy the environment example and fill in `OPENAI_API_KEY`:
+
+```sh
+cp .env.example .env
+```
+
+Run tests for deterministic local behavior:
+
+```sh
+npm run test
+```
+
+Type-check the TypeScript source and tests:
 
 ```sh
 npm run typecheck
 ```
 
-Build the placeholder CLI:
+Build the CLI:
 
 ```sh
 npm run build
 ```
 
-Run the placeholder CLI after building:
+Run the minimal loop after building:
 
 ```sh
-npm run start
+npm run start -- "inspect this project scaffold and summarize what is implemented"
 ```
 
 ## Documentation
@@ -142,6 +158,7 @@ Tutorial lesson documents live in `docs/tutorial/`. Tutorial lessons are written
 - [Principles](docs/02-principles.md)
 - [Tutorial Roadmap](docs/03-tutorial-roadmap.md)
 - [Tutorial c00 Overview](docs/tutorial/c00-overview.md)
+- [Tutorial c01 Minimal Real LLM Loop](docs/tutorial/c01-minimal-real-llm-loop.md)
 - [Glossary](docs/04-glossary.md)
 - [Tutorial Writing Style](docs/05-tutorial-writing-style.md)
 - [Reference Notes](docs/reference/pi-versus-claude.md)
