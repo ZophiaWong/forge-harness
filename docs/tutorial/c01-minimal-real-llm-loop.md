@@ -193,4 +193,4 @@ blocked_reason: sudo is blocked in the minimal loop
 - 本地 harness 执行工具，而不是 OpenAI hosted shell 执行工具。
 - 本地 input history 明确保存 user task、model output 和 `function_call_output`。
 - `bash` 的危险和 noisy output 已经出现，但还没有被完整治理。
-- 下一章先改善 CLI 和 message history 的可观察性，不急着抽完整 `Tool Runtime`。
+- 下一章先用 `--show-history` 看清楚 local input history，不急着抽完整 `Tool Runtime`。

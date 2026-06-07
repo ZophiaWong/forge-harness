@@ -93,7 +93,7 @@ This is intentionally still a small tutorial milestone. It does not include a fu
 - Stage 6: verification and recovery, introduced because a coding agent should prove work before claiming completion.
 - Stage 7: extensions, introduced after the single-agent foundation is real.
 
-Start with [docs/tutorial/c00-overview.md](docs/tutorial/c00-overview.md), then run the first loop with [docs/tutorial/c01-minimal-real-llm-loop.md](docs/tutorial/c01-minimal-real-llm-loop.md). See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the full tutorial path.
+Start with [docs/tutorial/c00-overview.md](docs/tutorial/c00-overview.md), run the first loop with [docs/tutorial/c01-minimal-real-llm-loop.md](docs/tutorial/c01-minimal-real-llm-loop.md), then inspect the local message history with [docs/tutorial/c02-inspect-message-history.md](docs/tutorial/c02-inspect-message-history.md). See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the full tutorial path.
 
 ## Project Layout
 
@@ -149,6 +149,12 @@ Run the minimal loop after building:
 npm run start -- "inspect this project scaffold and summarize what is implemented"
 ```
 
+Inspect the local input history passed to each model call:
+
+```sh
+npm run start -- --show-history "inspect this project scaffold and summarize what is implemented"
+```
+
 ## Documentation
 
 Tutorial lesson documents live in `docs/tutorial/`. Tutorial lessons are written in Chinese, with technical terms kept in English, and should follow the tutorial writing style guide. Historical runnable lesson states are captured by chapter-based branches and tags such as `tutorial/c01-minimal-real-llm-loop` and `tutorial-c01-minimal-real-llm-loop`; see the roadmap for the full strategy.
@@ -159,6 +165,7 @@ Tutorial lesson documents live in `docs/tutorial/`. Tutorial lessons are written
 - [Tutorial Roadmap](docs/03-tutorial-roadmap.md)
 - [Tutorial c00 Overview](docs/tutorial/c00-overview.md)
 - [Tutorial c01 Minimal Real LLM Loop](docs/tutorial/c01-minimal-real-llm-loop.md)
+- [Tutorial c02 Inspect Message History](docs/tutorial/c02-inspect-message-history.md)
 - [Glossary](docs/04-glossary.md)
 - [Tutorial Writing Style](docs/05-tutorial-writing-style.md)
 - [Reference Notes](docs/reference/pi-versus-claude.md)

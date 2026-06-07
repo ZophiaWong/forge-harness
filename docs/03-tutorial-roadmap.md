@@ -60,7 +60,7 @@ Outcome: readers see the core agent pattern run for real before learning the har
 Chapter split:
 
 - `c01-minimal-real-llm-loop` implements the full first loop: args-only CLI, real Responses API call, one local `bash` function tool, local input history, tool-result feedback, transcript output, and stop condition.
-- `c02-cli-and-message-history` improves usability and observability around that loop. It can make CLI options, transcript display, and message history easier to inspect, but it should not introduce the full Tool Runtime.
+- `c02-inspect-message-history` makes the local input history visible with an explicit `--show-history` mode. It teaches that transcript output is not the same as the model's next input, without introducing the full Tool Runtime or Context Projection.
 
 ## Stage 2: Tool Runtime Enhancement
 
@@ -168,7 +168,7 @@ Initial chapter map:
   - [c00-overview](tutorial/c00-overview.md)
 - Stage 1: The Direct Loop
   - [c01-minimal-real-llm-loop](tutorial/c01-minimal-real-llm-loop.md)
-  - `c02-cli-and-message-history` as CLI and message-history observability
+  - [c02-inspect-message-history](tutorial/c02-inspect-message-history.md)
 - Stage 2: Tool Runtime Grows Out Of Bash
   - `c03-inline-bash-pain`
   - `c04-tool-schema-and-registry`
@@ -210,7 +210,7 @@ Recommended tutorial document layout:
 docs/tutorial/
   c00-overview.md
   c01-minimal-real-llm-loop.md
-  c02-cli-and-message-history.md
+  c02-inspect-message-history.md
   c03-inline-bash-pain.md
 ```
 
@@ -222,7 +222,7 @@ Conceptual branch names:
 
 - `tutorial/c00-overview`
 - `tutorial/c01-minimal-real-llm-loop`
-- `tutorial/c02-cli-and-message-history`
+- `tutorial/c02-inspect-message-history`
 - `tutorial/c03-inline-bash-pain`
 
 Suggested policy:

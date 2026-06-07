@@ -98,3 +98,7 @@ Keep documentation practical, concise, and implementation-oriented. When adding 
 Agents may suggest or remind the user to create a tutorial branch or tag, but must not create one without explicit user confirmation. Do not move published tutorial tags; fix the matching branch and create a new tag such as `tutorial-c01-minimal-real-llm-loop-v2`. Do not copy complete historical stage source trees into `docs/tutorial/`; keep source in `src/` and let git preserve runnable checkpoints.
 
 Future `docs/tutorial/*` content should be written in Chinese. Technical terms should remain English unless there is already a widely accepted Chinese equivalent. Do not translate identifiers, filenames, commands, APIs, or protocol names.
+
+When adding, rewriting, or expanding `docs/tutorial/*.md`, run a final `$humanizer-zh` review pass before claiming the tutorial text is done. Use it to remove AI-flavored phrasing, empty value statements, mechanical parallelism, overused connectors, and vague summary sentences. Do not let this pass change code blocks, commands, filenames, identifiers, API names, or established English technical terms.
+
+After the `$humanizer-zh` pass, re-check technical accuracy: commands should still be runnable, source paths should still point to real files, and the chapter should still explain which pain point forced the next mechanism to exist. In the final response, state that the tutorial text received the `$humanizer-zh` review, or state why it could not be run.

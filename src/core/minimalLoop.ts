@@ -27,6 +27,7 @@ interface BashToolArguments {
 
 export interface MinimalLoopTranscript {
   finalAnswer(answer: string): void;
+  historySnapshot?(round: number, input: readonly ResponseInputItem[]): void;
   roundStart(round: number, model: string): void;
   toolCall(round: number, command: string): void;
   toolResult(round: number, resultText: string): void;
@@ -83,6 +84,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
 
   for (let round = 1; round <= maxToolRounds; round += 1) {
     options.transcript?.roundStart(round, model);
+    options.transcript?.historySnapshot?.(round, input);
 
     const response = await client.responses.create({
       include: ["reasoning.encrypted_content"],

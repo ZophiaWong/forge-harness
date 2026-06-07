@@ -118,6 +118,27 @@ Forge Harness 的教程文档使用中文写作，技术术语在需要精确时
 好：这一章只保留一件事：LLM 请求工具，harness 执行工具，再把结果交回给 LLM。
 ```
 
+## 终稿使用 humanizer-zh
+
+每次写完或改完 `docs/tutorial/*.md`，最后做一遍 `$humanizer-zh` 润色。
+
+推荐顺序：
+
+```text
+写完章节草稿
+  -> 检查技术事实、命令和代码路径
+  -> 使用 $humanizer-zh 去掉 AI 味
+  -> 再核对 code block、command、identifier、API 名称和 English technical terms 没有被误改
+```
+
+这一步不是重新设计章节，也不是把技术边界写得更宏大。它只负责把句子改得更像工程师写给工程师看的教程：
+
+- 删除空泛金句和价值宣言。
+- 减少“此外”“然而”“关键”“格局”“彰显”这类高频 AI 词。
+- 避免重复的“不是 X，而是 Y”。
+- 把抽象总结改成具体动作、数据流、命令或实现边界。
+- 保留必要的 English technical terms，不翻译 identifier、filename、command 和 API。
+
 ## 推荐章节结构
 
 教程章节可以使用这个轻量结构：
@@ -160,3 +181,4 @@ Forge Harness 的教程文档使用中文写作，技术术语在需要精确时
 - 是否有不必要的价值宣言、排比和空泛总结？
 - English technical terms 是否保留一致？
 - 读完这一章后，是否清楚下一章要做什么？
+- 是否已经用 `$humanizer-zh` 做过终稿润色，并复核代码块和命令没有被改坏？

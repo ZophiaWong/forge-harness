@@ -2,21 +2,27 @@
 
 import "dotenv/config";
 
-import { parseTaskFromArgs, usageText } from "./args.js";
+import { parseCliArgs, usageText } from "./args.js";
+import { formatHistorySnapshot } from "../core/historyInspector.js";
 import { runMinimalLoop } from "../core/minimalLoop.js";
 
-const task = parseTaskFromArgs(process.argv.slice(2));
+const cliArgs = parseCliArgs(process.argv.slice(2));
 
-if (!task) {
+if (!cliArgs.task) {
   console.error(usageText("forge-harness"));
   process.exitCode = 1;
 } else {
   await runMinimalLoop({
     cwd: process.cwd(),
-    task,
+    task: cliArgs.task,
     transcript: {
       roundStart(round, model) {
         console.log(`\n[round ${round}] model=${model}`);
+      },
+      historySnapshot(round, input) {
+        if (cliArgs.showHistory) {
+          console.log(`[round ${round}] input_history:\n${formatHistorySnapshot(input)}`);
+        }
       },
       toolCall(round, command) {
         console.log(`[round ${round}] bash: ${command}`);

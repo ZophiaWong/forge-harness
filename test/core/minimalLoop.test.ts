@@ -96,4 +96,64 @@ describe("runMinimalLoop", () => {
       }),
     ).rejects.toThrow("Minimal loop stopped after 1 tool rounds without a final answer.");
   });
+
+  it("emits input history snapshots before each model call", async () => {
+    const events: string[] = [];
+
+    createResponseMock
+      .mockImplementationOnce(() => {
+        events.push("model:1");
+        return Promise.resolve({
+          output: [
+            {
+              arguments: JSON.stringify({ command: "printf snapshot-ok" }),
+              call_id: "call_snapshot",
+              name: "bash",
+              type: "function_call",
+            },
+          ],
+          output_text: "",
+        });
+      })
+      .mockImplementationOnce(() => {
+        events.push("model:2");
+        return Promise.resolve({
+          output: [],
+          output_text: "done",
+        });
+      });
+
+    const snapshots: Array<{ input: unknown[]; round: number }> = [];
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      task: "inspect",
+      transcript: {
+        finalAnswer() {},
+        historySnapshot(round, input) {
+          events.push(`snapshot:${round}`);
+          snapshots.push({ input: [...input], round });
+        },
+        roundStart() {},
+        toolCall() {},
+        toolResult() {},
+      },
+    });
+
+    expect(snapshots).toHaveLength(2);
+    expect(events).toEqual(["snapshot:1", "model:1", "snapshot:2", "model:2"]);
+    expect(snapshots[0]).toMatchObject({
+      input: [expect.objectContaining({ content: "inspect", role: "user" })],
+      round: 1,
+    });
+    expect(snapshots[1]?.round).toBe(2);
+    expect(snapshots[1]?.input).toContainEqual(
+      expect.objectContaining({
+        call_id: "call_snapshot",
+        output: expect.stringContaining("stdout:\nsnapshot-ok"),
+        type: "function_call_output",
+      }),
+    );
+  });
 });
