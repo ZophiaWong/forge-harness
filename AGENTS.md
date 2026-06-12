@@ -2,103 +2,73 @@
 
 Instructions for coding agents working in this repository.
 
-## Project Identity
+## Project
 
-Forge Harness is a tutorial-driven, from-scratch coding agent harness built in TypeScript. The repository should demonstrate agent runtime engineering through runnable milestones, not just API usage.
+Forge Harness is a tutorial-driven TypeScript project for building a coding agent harness from scratch.
 
-The tutorial starts from the direct loop:
+Current phase: documentation baseline. Source scaffold is intentionally absent until the next tutorial milestone.
 
-```text
-user -> LLM -> tool_use -> bash -> tool_result -> LLM -> done
-```
+Do not turn this repo into a full platform ahead of the course. Each chapter should add the smallest mechanism needed to solve the current problem.
 
-Then it forges harness mechanisms from the pain points exposed by that loop.
+## Course rules
 
-The hardened direction is:
+- Use `Part 1: Core Harness` and `Part 2: Scale & Extensions` as the course part names.
+- Use the five Forge layers consistently: `L1 Loop & Execution`, `L2 Governance & Action Boundary`, `L3 Context & Knowledge`, `L4 State, Evidence & Reliability`, `L5 Coordination & Scale`.
+- Treat layers as an architecture lens, not chapter order.
+- Each runnable chapter should follow: `problem -> naive code or pain -> mechanism -> runnable milestone -> next pressure`.
+- Before adding a mechanism, state which concrete pain point forced it to exist.
 
-```text
-Agent Loop
-+ Tool Runtime
-+ Context Projection
-+ Permission Governance
-+ Session / Trace Persistence
-+ Runtime State Model
-+ Verification / Recovery
-```
-
-## Current Phase
-
-This project is in its documentation and lightweight scaffold phase.
-
-Do not implement a full agent runtime unless a task explicitly asks for the next tutorial milestone. Keep early changes small, readable, and aligned with the tutorial roadmap.
-
-## TypeScript Preference
+## TypeScript
 
 - Use TypeScript for source code.
-- Keep Stage 1 centered on a real LLM tool-calling loop.
-- Prefer explicit domain types over loose object shapes once runtime behavior needs them.
-- Keep modules small and easy to explain in tutorial order.
+- Keep modules small enough to explain in tutorial order.
+- Prefer explicit domain types once behavior needs them.
 - Avoid framework-first dependencies.
-- Do not introduce LangGraph, AutoGen, or similar orchestration frameworks as core dependencies.
+- Do not add LangGraph, AutoGen, or similar orchestration frameworks as core dependencies.
 
-## Module Ownership
+## Source layout
 
-- `src/cli/`: CLI entry points and command routing.
-- `src/core/`: agent loop, turn orchestration, minimal LLM integration.
-- `src/domain/`: shared types, protocols, trace events, task/session/turn/tool models.
-- `src/tools/`: tool registry, schema, dispatcher, implementations.
-- `src/governance/`: permission policy, risk classification, approval model.
-- `src/context/`: context projection, observation normalization, compaction placeholder.
-- `src/runtime/`: session store, trace writer, workspace management, persistence, replay placeholder.
-- `src/extensions/`: future hooks, skills, subagents, MCP adapter, worktree isolation, team protocols.
+When source returns, follow the target module boundaries in `docs/01-project-architecture.md`. Do not introduce broad source layout changes unless the current chapter needs them.
 
-Do not create a centralized `src/state/` god module. Keep state as explicit domain models and runtime projections owned by the modules that use them.
+Do not create a centralized `src/state/` god module. Runtime state should be explicit domain data and module-owned projections.
 
-## Naming Conventions
+## Documentation
 
-- Use clear runtime terms: `Session`, `TraceEvent`, `RuntimeState`, `ToolCall`, `ToolResult`, `Observation`, `PermissionDecision`.
-- Prefer `ContextProjection` over early `ContextCompaction`.
-- Prefer `ChangeSet` or `diff-first file mutation` over making the project identity `patch-first`.
-- Name tutorial chapters with `c00`, `c01`, and so on. Branches and tags should use the chapter slug, for example `tutorial/c01-minimal-real-llm-loop` and `tutorial-c01-minimal-real-llm-loop`.
+Reader-facing documentation responsibilities live in `README.md` and `docs/*.md`; do not duplicate long course explanations here.
 
-## Verification Expectations
+Tutorial docs should be written in Chinese. Keep identifiers, paths, commands, APIs, and precise technical terms in English.
 
-- Keep tutorial milestones runnable.
-- Add or update tests when behavior is implemented.
-- Do not claim completion of a coding-agent action without a verification step, such as type-checking, tests, command output, or an explicit reason verification could not run.
-- Preserve traceability for future file mutations and command execution.
+When adding or rewriting `docs/tutorial/*.md`:
 
-## Do Not Overbuild
+- keep the chapter tied to the current branch implementation
+- include commands and expected observations
+- say what the chapter does not implement yet
+- run a final `$humanizer-zh` review pass
+- re-check code blocks, commands, filenames, identifiers, and API names after that pass
 
-Do not add these unless explicitly requested or the current tutorial milestone has created the need:
+## Branches and tags
 
-- Production-grade LLM runtime.
-- Complete tool runtime.
-- Complete permission system.
-- Multi-agent platform.
-- MCP adapter.
-- Worktree isolation.
-- Dashboard or UI.
-- Benchmark system.
-- Production SaaS structure.
+- `main` holds the latest integrated course.
+- `tutorial/cNN-*` branches hold runnable chapter checkpoints.
+- `tutorial-cNN-*` tags are frozen checkpoints.
+- Do not move published tutorial tags.
+- If a published checkpoint needs a fix, update the matching branch and create a new tag such as `tutorial-c02-tool-runtime-v2`.
 
-Stage 1 includes a real LLM integration, but it should stay minimal: one model call path, one simple tool, messages history, tool results, and a stop condition. Do not make provider abstraction, tool registries, policy engines, or session stores the first lesson.
+Agents may remind the user to create, merge, or tag tutorial branches. Do not perform those actions without explicit confirmation.
 
-## Tutorial Discipline
+## Verification
 
-Docs order, source layout, tutorial branches, and tutorial tags serve different purposes:
+Do not claim a coding-agent change is complete without fresh verification.
 
-- `docs/tutorial/` defines the readable tutorial path.
-- Source directories define maintainable implementation boundaries.
-- `tutorial/cNN-name` branches are living chapter milestone lines.
-- `tutorial-cNN-name` tags are stable tutorial checkpoints.
+For documentation-only work:
 
-Keep documentation practical, concise, and implementation-oriented. When adding a mechanism, state which pain point in the previous loop forced it to exist.
+- check `git status`
+- check Markdown links point to existing files
+- keep future source layout notes clearly marked as future structure
 
-Agents may suggest or remind the user to create a tutorial branch or tag, but must not create one without explicit user confirmation. Do not move published tutorial tags; fix the matching branch and create a new tag such as `tutorial-c01-minimal-real-llm-loop-v2`. Do not copy complete historical stage source trees into `docs/tutorial/`; keep source in `src/` and let git preserve runnable checkpoints.
+For runnable chapters after source is reintroduced:
 
-Future `docs/tutorial/*` content should be written in Chinese. Technical terms should remain English unless there is already a widely accepted Chinese equivalent. Do not translate identifiers, filenames, commands, APIs, or protocol names.
-
-When adding, rewriting, or expanding `docs/tutorial/*.md`, run a final `$humanizer-zh` review pass before claiming the tutorial text is done. Use it to remove AI-flavored phrasing, empty value statements, mechanical parallelism, overused connectors, and vague summary sentences. Do not let this pass change code blocks, commands, filenames, identifiers, API names, or established English technical terms.
-
-After the `$humanizer-zh` pass, re-check technical accuracy: commands should still be runnable, source paths should still point to real files, and the chapter should still explain which pain point forced the next mechanism to exist. In the final response, state that the tutorial text received the `$humanizer-zh` review, or state why it could not be run.
+- `npm run test`
+- `npm run typecheck`
+- `npm run build`
+- chapter command smoke test

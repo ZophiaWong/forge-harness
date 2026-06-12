@@ -1,171 +1,51 @@
 # Forge Harness
 
-Forge Harness is a tutorial-driven, from-scratch coding agent harness built in TypeScript.
+Forge Harness is a tutorial project for building a coding agent harness from scratch in TypeScript.
 
-It starts with the most direct coding-agent loop:
-
-```text
-user -> LLM -> tool_use -> bash -> tool_result -> LLM -> done
-```
-
-Then it hardens that loop one problem at a time. Each tutorial stage begins with something uncomfortable in the previous stage, then forges the next harness mechanism to solve it: tool structure, permission governance, context projection, trace persistence, session recovery, verification, and extension points.
-
-This is not primarily a framework demo. The value of the project is in implementing the agent harness runtime mechanics directly, while keeping the first runnable experience easy to see and easy to reason about.
-
-## Core Summary
-
-Forge Harness begins with:
+The course starts with one real loop:
 
 ```text
-Agent Loop
-+ Tool Use
-+ Context Management
-+ Permission Governance
-+ Session Persistence
+user -> LLM -> tool_call -> tool_result -> LLM -> done
 ```
 
-The repository is both:
+Then each chapter pulls one problem out of that loop and turns it into a small harness mechanism.
 
-1. An implementation-first engineering project.
-2. A tutorial-style breakdown of how the harness evolves.
+## Status
 
-The runnable code is the primary artifact. The documentation explains the design decisions, milestones, and implementation path.
+This branch is the documentation baseline for the redesigned course. Source scaffold and runnable chapters return in `c01`.
 
-## Tutorial Method
+## Docs
 
-The learning path should feel like forging a harness from a working loop:
+- [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
+- [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
+- [Writing style](docs/03-writing-style.md): how tutorial chapters should read.
+- [Agent instructions](AGENTS.md): rules for coding agents working in this repo.
 
-```text
-direct implementation
-  -> exposed pain point
-  -> harness mechanism
-  -> stronger implementation
-```
+## Who this is for
 
-Stage 1 should not start by asking readers to understand a full runtime architecture. It should show a real LLM calling a simple bash tool, feeding the result back into messages, and stopping when the model stops asking for tools.
+This project is for engineers who want to understand coding agent runtime design by building one small piece at a time.
 
-Later stages then ask practical questions:
+You should be comfortable reading TypeScript and running CLI tools. You do not need to know agent framework internals.
 
-- Bash can do anything. How do we govern side effects?
-- Tool outputs get noisy. What should the model actually see next?
-- The run is hard to inspect. What should we trace?
-- The process can be interrupted. What is a session?
-- The model says it is done. How do we verify that?
+## Course shape
 
-## Why This Exists
+The course has two parts:
 
-Forge Harness is intended for learning, portfolio use, and incremental development toward AI Agent / LLM Application Engineer roles.
+- `Part 1: Core Harness` builds the single-agent runtime.
+- `Part 2: Scale & Extensions` handles longer tasks, wider boundaries, and external tools after the core is stable.
 
-The goal is not only to write a tutorial, and not only to recreate an existing tool. The goal is:
+The detailed route is in [docs/02-tutorial-roadmap.md](docs/02-tutorial-roadmap.md).
 
-> I implemented an agent harness, and I organized the implementation process as a tutorial.
+## What "production-like" means here
 
-## What It Is Not
+`production-like` does not mean SaaS, dashboards, multi-tenant auth, or a complete platform.
 
-Forge Harness is not:
+In this course it means the harness can govern actions, record what happened, recover useful state, verify work before final answer, and accept new mechanisms without turning the loop into special cases.
 
-- A LangGraph, AutoGen, or framework-first project.
-- A dashboard or TypeScript UI.
-- A complete MCP adapter.
-- A multi-agent platform.
-- A production SaaS.
-- A benchmark suite.
-- A clone or fork of Claude Code, learn-claude-code, or Pi.
+See [docs/01-project-architecture.md](docs/01-project-architecture.md) for the system model.
 
-Those projects and ideas inform the capability map, but Forge Harness follows its own implementation path.
+## Non-goals
 
-## Current Status
+The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI.
 
-Stage 1 minimal loop in progress.
-
-The repository now contains the first direct real-LLM loop: a CLI task goes to the OpenAI Responses API, the model may request a local `bash` function tool, the harness executes it, and the tool result is appended back into local input history until the model stops requesting tools.
-
-This is intentionally still a small tutorial milestone. It does not include a full tool runtime, permission system, trace/session persistence, context projection, or verification/recovery loop.
-
-## Initial Roadmap
-
-- Stage 0: high-level overview and the direct agent-loop mental model.
-- Stage 1: real LLM, one bash tool, messages history, tool result feedback, and stop condition.
-- Stage 2: tool runtime, introduced because a single inline bash function does not scale.
-- Stage 3: permission governance, introduced because raw bash is too powerful.
-- Stage 4: context management, introduced because raw messages and tool output become noisy.
-- Stage 5: session and trace runtime, introduced because runs need inspection, resume, fork, and replay.
-- Stage 6: verification and recovery, introduced because a coding agent should prove work before claiming completion.
-- Stage 7: extensions, introduced after the single-agent foundation is real.
-
-Start with [docs/tutorial/c00-overview.md](docs/tutorial/c00-overview.md), run the first loop with [docs/tutorial/c01-minimal-real-llm-loop.md](docs/tutorial/c01-minimal-real-llm-loop.md), then inspect the local message history with [docs/tutorial/c02-inspect-message-history.md](docs/tutorial/c02-inspect-message-history.md). See [docs/03-tutorial-roadmap.md](docs/03-tutorial-roadmap.md) for the full tutorial path.
-
-## Project Layout
-
-```text
-src/
-  cli/          CLI entry points.
-  core/         Agent loop, turn orchestration, minimal LLM integration.
-  domain/       Types, protocols, event models, tool calls/results, sessions, traces.
-  tools/        Tool registry, schema, dispatcher, and tool implementations.
-  governance/   Permission policy, risk classification, approvals, command risk rules.
-  context/      Context projection, observation normalization, compaction placeholder.
-  runtime/      Session store, trace writer, workspace management, persistence.
-  extensions/   Future hooks, skills, subagents, MCP adapter, worktree isolation.
-```
-
-## Commands
-
-Use Node.js `>=20.19.0`.
-
-Install dependencies:
-
-```sh
-npm install
-```
-
-Copy the environment example and fill in `OPENAI_API_KEY`:
-
-```sh
-cp .env.example .env
-```
-
-Run tests for deterministic local behavior:
-
-```sh
-npm run test
-```
-
-Type-check the TypeScript source and tests:
-
-```sh
-npm run typecheck
-```
-
-Build the CLI:
-
-```sh
-npm run build
-```
-
-Run the minimal loop after building:
-
-```sh
-npm run start -- "inspect this project scaffold and summarize what is implemented"
-```
-
-Inspect the local input history passed to each model call:
-
-```sh
-npm run start -- --show-history "inspect this project scaffold and summarize what is implemented"
-```
-
-## Documentation
-
-Tutorial lesson documents live in `docs/tutorial/`. Tutorial lessons are written in Chinese, with technical terms kept in English, and should follow the tutorial writing style guide. Historical runnable lesson states are captured by chapter-based branches and tags such as `tutorial/c01-minimal-real-llm-loop` and `tutorial-c01-minimal-real-llm-loop`; see the roadmap for the full strategy.
-
-- [Project Charter](docs/00-project-charter.md)
-- [Architecture](docs/01-architecture.md)
-- [Principles](docs/02-principles.md)
-- [Tutorial Roadmap](docs/03-tutorial-roadmap.md)
-- [Tutorial c00 Overview](docs/tutorial/c00-overview.md)
-- [Tutorial c01 Minimal Real LLM Loop](docs/tutorial/c01-minimal-real-llm-loop.md)
-- [Tutorial c02 Inspect Message History](docs/tutorial/c02-inspect-message-history.md)
-- [Glossary](docs/04-glossary.md)
-- [Tutorial Writing Style](docs/05-tutorial-writing-style.md)
-- [Reference Notes](docs/reference/pi-versus-claude.md)
+Those topics can appear later, after the core harness has stable boundaries.
