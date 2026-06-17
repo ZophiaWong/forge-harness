@@ -12,11 +12,31 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch is the documentation baseline for the redesigned course. Source scaffold and runnable chapters return in `c01`.
+This branch contains the documentation baseline plus the first runnable checkpoint, `c01 Minimal Real Loop`.
+
+## Setup
+
+Use Node.js `20.19.0` or newer.
+
+```bash
+npm install
+cp .env.example .env
+```
+
+Fill in `.env`:
+
+```text
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-5.4-mini
+OPENAI_BASE_URL=
+```
+
+Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gateway.
 
 ## Docs
 
 - [c00 Orientation](docs/tutorial/c00-orientation.md): first checkpoint for the course direction and docs-only baseline.
+- [c01 Minimal Real Loop](docs/tutorial/c01-minimal-real-loop.md): first runnable checkpoint with a real LLM tool-call round trip.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

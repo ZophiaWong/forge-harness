@@ -1,6 +1,6 @@
 # 项目架构
 
-这份文档描述 Forge Harness 完成后的项目形态。现在的 reset branch 还没有 source scaffold；下面的模块边界是目标方向，不是 `c01` 必须一次建完的目录清单。
+这份文档描述 Forge Harness 完成后的项目形态。`c01` 只恢复 `src/cli/` 和 `src/core/` 的最小 scaffold；下面的模块边界仍然是目标方向，不是 `c01` 必须一次建完的目录清单。
 
 章节顺序放在 [教程路线](02-tutorial-roadmap.md)。这里关心的是：最后这个 harness 由哪些部分组成，一次 agent turn 怎样跑起来，每个部分大概在哪些章节里长出来。
 

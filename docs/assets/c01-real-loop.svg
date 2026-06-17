@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 740" role="img" aria-labelledby="title desc">
+  <title id="title">c01 Minimal Real Loop code trace</title>
+  <desc id="desc">A code-trace style diagram for c01. A user task enters input history, responseCreate sends input and tools to the LLM, response.output is inspected, final answer returns when there is no function call, or bash runs locally and function_call_output is appended back to input.</desc>
+  <defs>
+    <marker id="arrow" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-loop" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrow-final" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#15803d"/>
+    </marker>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .title { fill: #0f172a; font: 700 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #334155; font: 700 17px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .2px; }
+      .body { fill: #475569; font: 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #0f172a; font: 600 16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .mono-small { fill: #334155; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .code-card { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
+      .trace-card { fill: #f0fdfa; stroke: #0f766e; stroke-width: 2; }
+      .final-card { fill: #f0fdf4; stroke: #15803d; stroke-width: 2; }
+      .tool-card { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .pill { fill: #e2e8f0; }
+      .pill-text { fill: #334155; font: 700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .line { fill: none; stroke: #334155; stroke-width: 2.4; marker-end: url(#arrow); }
+      .loop { fill: none; stroke: #0f766e; stroke-width: 2.6; stroke-dasharray: 7 6; marker-end: url(#arrow-loop); }
+      .final { fill: none; stroke: #15803d; stroke-width: 2.6; marker-end: url(#arrow-final); }
+      .branch-label { fill: #334155; font: 700 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .final-label { fill: #15803d; font: 700 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .loop-label { fill: #0f766e; font: 700 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="740"/>
+
+  <text class="title" x="64" y="58">c01 Minimal Real Loop</text>
+  <text class="subtitle" x="64" y="86">code trace: input[] grows until the model can answer without another function_call</text>
+
+  <rect class="card" x="64" y="126" width="324" height="96" rx="12"/>
+  <rect class="pill" x="84" y="146" width="34" height="22" rx="11"/>
+  <text class="pill-text" x="101" y="162" text-anchor="middle">01</text>
+  <text class="section" x="132" y="163">user task</text>
+  <text class="mono" x="84" y="197">"inspect project"</text>
+
+  <rect class="trace-card" x="64" y="292" width="386" height="168" rx="12"/>
+  <rect class="pill" x="84" y="314" width="34" height="22" rx="11"/>
+  <text class="pill-text" x="101" y="330" text-anchor="middle">02</text>
+  <text class="section" x="132" y="331">input[]</text>
+  <rect class="code-card" x="84" y="350" width="346" height="34" rx="7"/>
+  <text class="mono-small" x="100" y="372">[{ role: "user", content: task }]</text>
+  <rect class="code-card" x="84" y="392" width="346" height="34" rx="7"/>
+  <text class="mono-small" x="100" y="414">+ response.output</text>
+  <rect class="code-card" x="84" y="434" width="346" height="16" rx="6"/>
+  <text class="mono-small" x="100" y="446">+ function_call_output</text>
+
+  <rect class="card" x="532" y="150" width="420" height="124" rx="12"/>
+  <rect class="pill" x="552" y="172" width="34" height="22" rx="11"/>
+  <text class="pill-text" x="569" y="188" text-anchor="middle">03</text>
+  <text class="section" x="600" y="189">responseCreate</text>
+  <text class="mono" x="552" y="224">responseCreate({ input, tools })</text>
+  <text class="body" x="552" y="252">store: false, tools: [bashToolDefinition]</text>
+
+  <rect class="card" x="532" y="334" width="420" height="150" rx="12"/>
+  <rect class="pill" x="552" y="356" width="34" height="22" rx="11"/>
+  <text class="pill-text" x="569" y="372" text-anchor="middle">04</text>
+  <text class="section" x="600" y="373">inspect response.output</text>
+  <rect class="code-card" x="552" y="392" width="380" height="72" rx="7"/>
+  <text class="mono-small" x="568" y="416">toolCalls = filter(function_call)</text>
+  <text class="mono-small" x="568" y="439">if toolCalls.length === 0 -> final</text>
+  <text class="mono-small" x="568" y="462">else -> run local bash</text>
+
+  <rect class="final-card" x="1000" y="346" width="150" height="108" rx="12"/>
+  <text class="section" x="1075" y="383" text-anchor="middle">final answer</text>
+  <text class="mono-small" x="1075" y="414" text-anchor="middle">return</text>
+  <text class="mono-small" x="1075" y="436" text-anchor="middle">output_text</text>
+
+  <rect class="tool-card" x="532" y="548" width="420" height="116" rx="12"/>
+  <rect class="pill" x="552" y="570" width="34" height="22" rx="11"/>
+  <text class="pill-text" x="569" y="586" text-anchor="middle">05</text>
+  <text class="section" x="600" y="587">local bash</text>
+  <text class="mono" x="552" y="622">runBashCommand(command)</text>
+  <text class="body" x="552" y="650">stdout / stderr / exit_code</text>
+
+  <rect class="trace-card" x="64" y="548" width="386" height="116" rx="12"/>
+  <rect class="pill" x="84" y="570" width="34" height="22" rx="11"/>
+  <text class="pill-text" x="101" y="586" text-anchor="middle">06</text>
+  <text class="section" x="132" y="587">function_call_output</text>
+  <text class="mono" x="84" y="622">input.push({ call_id, output })</text>
+  <text class="body" x="84" y="650">append result back to input[]</text>
+
+  <path class="line" d="M226 222 V279"/>
+  <path class="line" d="M450 376 C485 376 494 212 519 212"/>
+  <path class="line" d="M742 274 V321"/>
+  <path class="final" d="M952 410 H987"/>
+  <path class="line" d="M742 484 V535"/>
+  <path class="line" d="M532 606 H463"/>
+  <path class="loop" d="M257 548 V486"/>
+
+  <text class="final-label" x="956" y="396">no function_call</text>
+  <text class="branch-label" x="760" y="506">function_call</text>
+  <text class="loop-label" x="277" y="516">loop back</text>
+</svg>

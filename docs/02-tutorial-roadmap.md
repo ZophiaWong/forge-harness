@@ -84,7 +84,7 @@ flowchart TB
 | Chapter | Layer | Problem | Mechanism | Milestone |
 | --- | --- | --- | --- | --- |
 | [`c00` Orientation](tutorial/c00-orientation.md) | all | 课程需要先讲清楚方向。 | harness philosophy、5 layers、chapter contract。 | 能解释课程怎样按问题生长。 |
-| `c01` Minimal Real Loop | `L1` | LLM 只能回答，不能行动。 | 最小 model call + one tool path。 | CLI 跑通一次 tool call round trip。 |
+| [`c01` Minimal Real Loop](tutorial/c01-minimal-real-loop.md) | `L1` | LLM 只能回答，不能行动。 | 最小 model call + one tool path。 | CLI 跑通一次 tool call round trip。 |
 | `c02` Tool Runtime | `L1` | 第二个工具会让 loop routing 膨胀。 | tool definition、registry、dispatcher、result protocol。 | 新工具能注册进 runtime，不改 core loop。 |
 | `c03` Permission Governance | `L2` | Tool call 会产生 side effects。 | risk classification、permission decision、approval model。 | 高风险动作执行前经过决策。 |
 | `c04` Reviewable File Editing | `L1 + L2` | coding agent 需要改文件，但不能只靠 shell。 | exact edit、write tool、diff-like result。 | 文件修改变成可 review 的 tool result。 |
