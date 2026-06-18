@@ -6,7 +6,7 @@ Instructions for coding agents working in this repository.
 
 Forge Harness is a tutorial-driven TypeScript project for building a coding agent harness from scratch.
 
-Current phase: documentation baseline. Source scaffold is intentionally absent until the next tutorial milestone.
+Current phase: `c01 Minimal Real Loop` is integrated. The repository now has the first runnable TypeScript checkpoint.
 
 Do not turn this repo into a full platform ahead of the course. Each chapter should add the smallest mechanism needed to solve the current problem.
 
@@ -15,7 +15,7 @@ Do not turn this repo into a full platform ahead of the course. Each chapter sho
 - Use `Part 1: Core Harness` and `Part 2: Scale & Extensions` as the course part names.
 - Use the five Forge layers consistently: `L1 Loop & Execution`, `L2 Governance & Action Boundary`, `L3 Context & Knowledge`, `L4 State, Evidence & Reliability`, `L5 Coordination & Scale`.
 - Treat layers as an architecture lens, not chapter order.
-- Each runnable chapter should follow: `problem -> naive code or pain -> mechanism -> runnable milestone -> next pressure`.
+- Each runnable chapter should follow: `问题 -> 解决方案 -> 最小实现 -> 运行验证 -> 下一步缺口`.
 - Before adding a mechanism, state which concrete pain point forced it to exist.
 
 ## TypeScript
@@ -43,6 +43,10 @@ When adding or rewriting `docs/tutorial/*.md`:
 - keep the chapter tied to the current branch implementation
 - include commands and expected observations
 - say what the chapter does not implement yet
+- put shared setup in `README.md`; tutorial chapters should link to it instead of repeating global setup
+- map concept steps to short annotated code snippets; do not paste full functions when a focused excerpt explains the mechanism better
+- keep tutorial verification focused on reader-visible smoke runs and observations
+- keep detailed test coverage outside reader tutorials unless the tests are part of the chapter's learning goal
 - run a final `$humanizer-zh` review pass
 - re-check code blocks, commands, filenames, identifiers, and API names after that pass
 

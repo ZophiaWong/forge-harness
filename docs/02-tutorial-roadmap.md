@@ -112,7 +112,7 @@ flowchart TB
 
 ## 章节约束
 
-每个 runnable chapter 都要有一份章节约束。它可以放在章节开头或结尾，但写作前先确定。
+每个 runnable chapter 都要有一份章节约束。它是作者和 agent 的写作前检查，不是默认展示给读者的章节内容。
 
 章节约束至少包含：
 
@@ -123,6 +123,7 @@ flowchart TB
 - doc invariants
 - verification steps
 - known non-goals
+- next gap
 
 如果文档和实现不一致，先判断改动属于 evergreen docs、milestone-coupled docs 还是 shared fix。共享修复从最早受影响 branch 开始，再 forward-port 到后续 branches 和 `main`。
 
@@ -130,4 +131,4 @@ flowchart TB
 
 后续创建本地 skill：`forge-tutorial-maintenance`。
 
-第一版只需要 workflow。它负责提醒 agent 检查 chapter contract、docs/source 一致性、branch backport 或 forward-port、tag readiness，以及 `docs/tutorial/*.md` 的 `$humanizer-zh` pass。脚本等流程稳定后再补。
+第一版只需要 workflow。它负责提醒 agent 检查 author-facing chapter contract、docs/source 一致性、branch backport 或 forward-port、tag readiness，以及 `docs/tutorial/*.md` 的 `$humanizer-zh` pass。脚本等流程稳定后再补。
