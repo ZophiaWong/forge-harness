@@ -90,7 +90,7 @@ if (toolCall.name === "read_file") {
 怎么验证它真的工作了？
 ```
 
-讲实现时，优先按解决方案的数据流拆成小段代码。比如先讲 user task 怎样进入 `input[]`，再讲 `input + tools` 怎样发给模型，然后讲怎样判断 `function_call`、怎样执行 tool、怎样回填 `function_call_output`。最后再说明这些步骤怎样被外层 loop 包起来。
+讲实现时，优先按解决方案的数据流拆成小段代码。先说明输入怎样进入本章机制，再说明机制怎样处理它，最后说明输出、状态或结果怎样进入下一步。如果这些步骤在循环、队列或状态机里运行，再单独解释外层结构。
 
 不要为了显得完整而直接贴整个函数。读者需要看到概念和代码怎样一一对应，不需要在教程里读完所有分支和错误处理。
 
@@ -114,7 +114,7 @@ if (toolCall.name === "read_file") {
 
 全局环境配置放在 `README.md`。教程章节只链接到 shared setup，再给出本章自己的 command 和 observation。
 
-解释 transcript 或 command output 时，要说清楚结论从哪里来。比如看到 `function_call`，要指出它来自 harness 从 `response.output` 里筛出的 `type === "function_call"`；看到 `tool_result`，要指出它来自本地 tool 执行后的 stdout/stderr/exit code；看到 `[final]`，要指出 loop 走到了没有 tool call 的分支。
+解释 transcript、command output 或其他 observation 时，要说清楚结论从哪里来。证据可以来自某一行 transcript、一次 command output、一个 file diff、一条 trace event、一个 test result，或代码里的某个分支。
 
 ## 图和可视化
 
@@ -122,14 +122,13 @@ if (toolCall.name === "read_file") {
 
 机制图优先画本章新增的局部路径，不要把后续所有机制都堆进一张不断变大的总图。总图可以单独存在；章节图更像显微镜，只解释这一章新增的那段。
 
-讲代码流或数据流时，可以使用 `Code Trace` 风格：把 `input[]`、`responseCreate({ input, tools })`、`response.output`、`function_call_output` 这类代码概念串起来。这样图和后面的代码片段能一一对应。
+讲代码流或数据流时，可以使用 `Code Trace` 风格：把当前章节自己的 artifact、state、event、result 名称串起来。这样图和后面的代码片段能一一对应。
 
 条件判断要保留，因为它通常是 loop 的出口或分支点。但不一定要画成传统流程图菱形。对于 `Code Trace` 图，可以直接写成代码式 `if/else`：
 
 ```text
-toolCalls = filter(function_call)
-if toolCalls.length === 0 -> final
-else -> run local tool
+if no work remains -> return result
+else -> execute next step
 ```
 
 如果一个机制跨多个模块，可以换成 swimlane 或 sequence diagram。不要为了统一风格牺牲可读性。
