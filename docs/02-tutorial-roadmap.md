@@ -79,16 +79,18 @@ flowchart TB
 | `c16` MCP / Plugin Routing | `c02 Tool Runtime` + `c03 Permission Governance` | 外部 tools 不能绕过 registry、permission 和 result protocol。 | 外部工具走同一条 tool runtime path。 |
 | `c17` Team Protocols / Comprehensive Harness | `c08 Verification / Recovery` + `c15 Child Sessions / Subagents` + `c16 MCP / Plugin Routing` | 机制变多后，需要重新收束成一条可解释的 agent turn。 | 一个 capstone run 串起 tools、permission、context、trace、state、verification。 |
 
+`c02` 只落地 `bash`、`read`、`ls` 这三个 built-in tools。`edit` / `write` 会在 `c04 Reviewable File Editing` 里进入；`grep` / `find` 会在 `c05 Context Projection` 里和搜索输出的上下文压力一起讲。
+
 ## 章节表
 
 | Chapter | Layer | Problem | Mechanism | Milestone |
 | --- | --- | --- | --- | --- |
 | [`c00` Orientation](tutorial/c00-orientation.md) | all | 课程需要先讲清楚方向。 | harness philosophy、5 layers、chapter contract。 | 能解释课程怎样按问题生长。 |
 | [`c01` Minimal Real Loop](tutorial/c01-minimal-real-loop.md) | `L1` | LLM 只能回答，不能行动。 | 最小 model call + one tool path。 | CLI 跑通一次 tool call round trip。 |
-| `c02` Tool Runtime | `L1` | 第二个工具会让 loop routing 膨胀。 | tool definition、registry、dispatcher、result protocol。 | 新工具能注册进 runtime，不改 core loop。 |
+| [`c02` Tool Runtime](tutorial/c02-tool-runtime.md) | `L1` | 第二个工具会让 loop routing 膨胀。 | tool definition、registry、dispatcher、result protocol；内置 `bash`、`read`、`ls`。 | 新工具能注册进 runtime，不改 core loop。 |
 | `c03` Permission Governance | `L2` | Tool call 会产生 side effects。 | risk classification、permission decision、approval model。 | 高风险动作执行前经过决策。 |
-| `c04` Reviewable File Editing | `L1 + L2` | coding agent 需要改文件，但不能只靠 shell。 | exact edit、write tool、diff-like result。 | 文件修改变成可 review 的 tool result。 |
-| `c05` Context Projection | `L3` | raw history 和 tool output 会挤满下一轮 input。 | `Observation`、`ContextProjection`。 | 模型下一轮只看到被投影后的上下文。 |
+| `c04` Reviewable File Editing | `L1 + L2` | coding agent 需要改文件，但不能只靠 shell。 | exact edit、`edit` / `write` tools、diff-like result。 | 文件修改变成可 review 的 tool result。 |
+| `c05` Context Projection | `L3` | raw history、tool output 和搜索结果会挤满下一轮 input。 | `grep` / `find` search tools、`Observation`、`ContextProjection`。 | 模型下一轮只看到被投影后的上下文。 |
 | `c06` Session / Trace | `L4` | 运行结束后无法 inspect、resume 或 replay。 | `Session` metadata、JSONL `TraceEvent`。 | 每次 run 留下可检查 trace。 |
 | `c07` Runtime State Model | `L4` | Trace 记录过去，但 harness 还需要当前决策视图。 | `RuntimeState` projection。 | 当前任务、工具、错误和检查状态可读。 |
 | `c08` Verification / Recovery | `L4` | final answer 不等于任务完成。 | checks、failure summary、repair loop、retry limit。 | harness 完成前会验证，失败后能进入 repair。 |

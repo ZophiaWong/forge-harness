@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
+  <title id="title">c02 Tool Runtime architecture boundary</title>
+  <desc id="desc">An architecture boundary diagram for c02. Core Loop owns request response flow. Tool Runtime owns registry, dispatcher, and ToolResult. Built-in tools are bash, read, and ls.</desc>
+  <defs>
+    <marker id="arrow" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-runtime" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#0f766e"/>
+    </marker>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .title { fill: #0f172a; font: 700 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #334155; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section-runtime { fill: #134e4a; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section-tools { fill: #7c2d12; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .body { fill: #475569; font: 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #0f172a; font: 600 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .mono-small { fill: #334155; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .core { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 2.2; }
+      .runtime { fill: #f0fdfa; stroke: #0f766e; stroke-width: 3; }
+      .tools { fill: #fff7ed; stroke: #c2410c; stroke-width: 2.2; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; }
+      .runtime-card { fill: #ffffff; stroke: #99f6e4; stroke-width: 1.6; }
+      .tool-card { fill: #ffffff; stroke: #fed7aa; stroke-width: 1.6; }
+      .result-card { fill: #ffffff; stroke: #0f766e; stroke-width: 2; }
+      .line { fill: none; stroke: #334155; stroke-width: 2.4; marker-end: url(#arrow); }
+      .runtime-line { fill: none; stroke: #0f766e; stroke-width: 2.4; marker-end: url(#arrow-runtime); }
+      .label { fill: #334155; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .runtime-label { fill: #0f766e; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="700"/>
+
+  <text class="title" x="64" y="56">c02 Tool Runtime</text>
+  <text class="subtitle" x="64" y="84">architecture boundary: Core Loop -> Tool Runtime -> Built-in Tools</text>
+
+  <rect class="core" x="64" y="148" width="308" height="356" rx="14"/>
+  <text class="section" x="96" y="188">Core Loop</text>
+  <text class="body" x="96" y="216">Owns the agent turn flow.</text>
+  <rect class="card" x="96" y="248" width="244" height="48" rx="8"/>
+  <text class="mono-small" x="116" y="278">responseCreate({ input, tools })</text>
+  <rect class="card" x="96" y="316" width="244" height="48" rx="8"/>
+  <text class="mono-small" x="116" y="346">inspect response.output</text>
+  <rect class="card" x="96" y="384" width="244" height="48" rx="8"/>
+  <text class="mono-small" x="116" y="414">push function_call_output</text>
+  <text class="body" x="96" y="470">No tool-name branches here.</text>
+
+  <rect class="runtime" x="446" y="118" width="308" height="416" rx="14"/>
+  <text class="section-runtime" x="478" y="158">Tool Runtime</text>
+  <text class="body" x="478" y="186">Owns the tool boundary.</text>
+  <rect class="runtime-card" x="478" y="218" width="112" height="48" rx="8"/>
+  <text class="mono-small" x="534" y="247" text-anchor="middle">registry</text>
+  <rect class="runtime-card" x="610" y="218" width="112" height="48" rx="8"/>
+  <text class="mono-small" x="666" y="247" text-anchor="middle">dispatcher</text>
+  <rect class="runtime-card" x="478" y="292" width="244" height="48" rx="8"/>
+  <text class="mono-small" x="600" y="322" text-anchor="middle">toolDefinitions()</text>
+  <rect class="runtime-card" x="478" y="360" width="244" height="48" rx="8"/>
+  <text class="mono-small" x="600" y="390" text-anchor="middle">execute({ name, arguments })</text>
+  <rect class="result-card" x="478" y="438" width="244" height="56" rx="8"/>
+  <text class="mono-small" x="600" y="462" text-anchor="middle">ToolResult</text>
+  <text class="mono-small" x="600" y="482" text-anchor="middle">{ toolName, status, content }</text>
+
+  <rect class="tools" x="828" y="148" width="308" height="356" rx="14"/>
+  <text class="section-tools" x="860" y="188">Built-in Tools</text>
+  <text class="body" x="860" y="216">Own their local details.</text>
+  <rect class="tool-card" x="860" y="248" width="244" height="54" rx="8"/>
+  <text class="mono" x="880" y="272">bash</text>
+  <text class="mono-small" x="880" y="292">run one command</text>
+  <rect class="tool-card" x="860" y="322" width="244" height="54" rx="8"/>
+  <text class="mono" x="880" y="346">read</text>
+  <text class="mono-small" x="880" y="366">line-numbered UTF-8 text</text>
+  <rect class="tool-card" x="860" y="396" width="244" height="54" rx="8"/>
+  <text class="mono" x="880" y="420">ls</text>
+  <text class="mono-small" x="880" y="440">one directory level</text>
+  <text class="body" x="860" y="478">Each tool parses and validates its args.</text>
+
+  <path class="line" d="M372 296 H433"/>
+  <text class="label" x="402" y="282" text-anchor="middle">schemas</text>
+  <path class="line" d="M372 384 H433"/>
+  <text class="label" x="402" y="370" text-anchor="middle">calls</text>
+
+  <path class="runtime-line" d="M754 314 H815"/>
+  <text class="runtime-label" x="784" y="300" text-anchor="middle">dispatch</text>
+  <path class="runtime-line" d="M828 438 H767"/>
+  <text class="runtime-label" x="798" y="424" text-anchor="middle">result</text>
+
+  <path class="runtime-line" d="M600 534 V596 C600 620 218 620 218 518"/>
+  <text class="runtime-label" x="454" y="614">format result -> function_call_output</text>
+</svg>

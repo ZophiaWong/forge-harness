@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">c02 Tool Runtime code trace</title>
+  <desc id="desc">A before and after code-trace diagram for c02. Before Tool Runtime, minimalLoop branches on each tool name. After Tool Runtime, the loop asks the runtime for tool definitions, executes a tool call through the runtime, receives a ToolResult, and appends function_call_output.</desc>
+  <defs>
+    <marker id="arrow" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-warn" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#c2410c"/>
+    </marker>
+    <marker id="arrow-runtime" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#0f766e"/>
+    </marker>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .title { fill: #0f172a; font: 700 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .panel-title { fill: #334155; font: 700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #334155; font: 700 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .body { fill: #475569; font: 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #0f172a; font: 600 15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .mono-small { fill: #334155; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .panel-before { fill: #fff7ed; stroke: #c2410c; stroke-width: 2.2; }
+      .panel-after { fill: #f0fdfa; stroke: #0f766e; stroke-width: 2.2; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.6; }
+      .before-card { fill: #ffffff; stroke: #fdba74; stroke-width: 1.6; }
+      .after-card { fill: #ffffff; stroke: #5eead4; stroke-width: 1.6; }
+      .result-card { fill: #ffffff; stroke: #0f766e; stroke-width: 2; }
+      .pill-before { fill: #fed7aa; }
+      .pill-after { fill: #99f6e4; }
+      .pill-text-before { fill: #7c2d12; font: 700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .pill-text-after { fill: #134e4a; font: 700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .line { fill: none; stroke: #334155; stroke-width: 2.2; marker-end: url(#arrow); }
+      .warn-line { fill: none; stroke: #c2410c; stroke-width: 2.4; marker-end: url(#arrow-warn); }
+      .runtime-line { fill: none; stroke: #0f766e; stroke-width: 2.4; marker-end: url(#arrow-runtime); }
+      .warn-label { fill: #9a3412; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .runtime-label { fill: #0f766e; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="720"/>
+
+  <text class="title" x="64" y="56">c02 Tool Runtime</text>
+  <text class="subtitle" x="64" y="84">code trace: move tool routing out of minimalLoop.ts</text>
+
+  <rect class="panel-before" x="64" y="126" width="510" height="510" rx="14"/>
+  <rect class="pill-before" x="92" y="154" width="74" height="26" rx="13"/>
+  <text class="pill-text-before" x="129" y="172" text-anchor="middle">Before</text>
+  <text class="panel-title" x="184" y="173">branches inside minimalLoop.ts</text>
+  <text class="body" x="92" y="206">Every new tool adds another local routing branch.</text>
+
+  <rect class="before-card" x="104" y="244" width="430" height="62" rx="9"/>
+  <text class="section" x="124" y="269">response.output</text>
+  <text class="mono-small" x="124" y="291">function_call: { name, arguments }</text>
+
+  <path class="warn-line" d="M319 306 V337"/>
+  <text class="warn-label" x="337" y="330">tool name branch</text>
+
+  <rect class="before-card" x="104" y="348" width="430" height="48" rx="9"/>
+  <text class="mono" x="124" y="378">if name === "bash" -> parse + run</text>
+
+  <rect class="before-card" x="104" y="410" width="430" height="48" rx="9"/>
+  <text class="mono" x="124" y="440">if name === "read" -> parse + read</text>
+
+  <rect class="before-card" x="104" y="472" width="430" height="48" rx="9"/>
+  <text class="mono" x="124" y="502">if name === "ls" -> parse + list</text>
+
+  <path class="warn-line" d="M319 520 V551"/>
+  <rect class="before-card" x="104" y="562" width="430" height="46" rx="9"/>
+  <text class="mono-small" x="124" y="590">each branch formats its own output text</text>
+
+  <rect class="panel-after" x="626" y="126" width="510" height="510" rx="14"/>
+  <rect class="pill-after" x="654" y="154" width="62" height="26" rx="13"/>
+  <text class="pill-text-after" x="685" y="172" text-anchor="middle">After</text>
+  <text class="panel-title" x="734" y="173">minimalLoop.ts calls Tool Runtime</text>
+  <text class="body" x="654" y="206">The loop keeps the turn flow; tools live behind one boundary.</text>
+
+  <rect class="after-card" x="666" y="244" width="430" height="62" rx="9"/>
+  <text class="section" x="686" y="269">model request</text>
+  <text class="mono-small" x="686" y="291">tools: toolRuntime.toolDefinitions()</text>
+
+  <path class="runtime-line" d="M881 306 V337"/>
+  <text class="runtime-label" x="899" y="330">function_call</text>
+
+  <rect class="after-card" x="666" y="348" width="430" height="54" rx="9"/>
+  <text class="mono" x="686" y="381">toolRuntime.execute({ name, arguments })</text>
+
+  <path class="runtime-line" d="M881 402 V431"/>
+  <text class="runtime-label" x="899" y="424">registry lookup</text>
+
+  <rect class="after-card" x="666" y="442" width="130" height="50" rx="9"/>
+  <text class="mono" x="731" y="473" text-anchor="middle">bash</text>
+  <rect class="after-card" x="816" y="442" width="130" height="50" rx="9"/>
+  <text class="mono" x="881" y="473" text-anchor="middle">read</text>
+  <rect class="after-card" x="966" y="442" width="130" height="50" rx="9"/>
+  <text class="mono" x="1031" y="473" text-anchor="middle">ls</text>
+
+  <path class="runtime-line" d="M881 492 V523"/>
+  <rect class="result-card" x="666" y="534" width="430" height="46" rx="9"/>
+  <text class="mono-small" x="686" y="562">ToolResult { toolName, status, content }</text>
+
+  <path class="runtime-line" d="M881 580 V609"/>
+  <text class="runtime-label" x="899" y="603">function_call_output</text>
+</svg>

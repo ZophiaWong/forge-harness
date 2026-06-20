@@ -5,7 +5,7 @@ import {
   findDangerousCommandReason,
   runBashCommand,
   truncateOutput,
-} from "../../src/core/bashTool.js";
+} from "../../src/tools/bashTool.js";
 
 describe("findDangerousCommandReason", () => {
   it("blocks obvious destructive commands", () => {
@@ -81,4 +81,3 @@ describe("runBashCommand", () => {
     expect(result.stderr).toContain("[timed out after 25ms]");
   });
 });
-

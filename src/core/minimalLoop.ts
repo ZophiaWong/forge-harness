@@ -1,17 +1,19 @@
 import OpenAI from "openai";
 
-import { formatBashResultForModel, runBashCommand } from "./bashTool.js";
+import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
+import { formatToolResultForModel } from "../tools/result.js";
+import type { ToolDefinition, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 
-const BASH_TOOL_NAME = "bash";
-
 const SYSTEM_INSTRUCTIONS = [
   "You are running inside a minimal coding-agent loop.",
-  "You may call the bash tool to inspect the local project.",
+  "You may call tools to inspect the local project.",
+  "Prefer ls for directory listings and read for reading text files.",
+  "Use bash only when a shell command is needed.",
   "Use inspect-only commands unless the user explicitly asks for something else.",
-  "Call at most one bash command at a time.",
+  "Call at most one tool at a time.",
   "After receiving a tool result, decide whether another command is needed.",
   "When no more tool calls are needed, answer the user directly and briefly.",
 ].join("\n");
@@ -38,24 +40,6 @@ export type ResponseOutputItem = ResponseFunctionToolCall | { type: string; [key
 
 export type ResponseInputItem = UserInputItem | FunctionCallOutputItem | ResponseOutputItem;
 
-export interface FunctionToolDefinition {
-  type: "function";
-  name: string;
-  description: string;
-  strict: boolean;
-  parameters: {
-    type: "object";
-    additionalProperties: false;
-    properties: {
-      command: {
-        type: "string";
-        description: string;
-      };
-    };
-    required: ["command"];
-  };
-}
-
 export interface ResponseCreateRequest {
   include: string[];
   input: ResponseInputItem[];
@@ -69,7 +53,7 @@ export interface ResponseCreateRequest {
   text: {
     verbosity: "low";
   };
-  tools: FunctionToolDefinition[];
+  tools: ToolDefinition[];
 }
 
 export interface MinimalResponse {
@@ -78,10 +62,6 @@ export interface MinimalResponse {
 }
 
 export type ResponseCreate = (request: ResponseCreateRequest) => Promise<MinimalResponse>;
-
-interface BashToolArguments {
-  command: string;
-}
 
 export interface MinimalLoopTranscript {
   finalAnswer(answer: string): void;
@@ -98,6 +78,7 @@ export interface MinimalLoopOptions {
   model?: string;
   responseCreate?: ResponseCreate;
   task: string;
+  toolRuntime?: ToolRuntime;
   transcript?: MinimalLoopTranscript;
 }
 
@@ -106,30 +87,13 @@ export interface MinimalLoopResult {
   rounds: number;
 }
 
-export const bashToolDefinition: FunctionToolDefinition = {
-  type: "function",
-  name: BASH_TOOL_NAME,
-  description: "Run one bash command in the current project directory and return stdout, stderr, and exit code.",
-  strict: true,
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      command: {
-        type: "string",
-        description: "The bash command to run.",
-      },
-    },
-    required: ["command"],
-  },
-};
-
 export async function runMinimalLoop(options: MinimalLoopOptions): Promise<MinimalLoopResult> {
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   const baseURL = normalizeBaseURL(options.baseURL ?? process.env.OPENAI_BASE_URL);
   const responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
   const model = options.model ?? process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
   const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+  const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
   const input: ResponseInputItem[] = [
     {
       role: "user",
@@ -153,7 +117,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       text: {
         verbosity: "low",
       },
-      tools: [bashToolDefinition],
+      tools: toolRuntime.toolDefinitions(),
     });
 
     input.push(...response.output);
@@ -167,7 +131,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     }
 
     for (const toolCall of toolCalls) {
-      const resultText = await executeToolCall(toolCall, options.cwd, round, options.transcript);
+      const resultText = await executeToolCall(toolCall, toolRuntime, round, options.transcript);
       input.push({
         type: "function_call_output",
         call_id: toolCall.call_id,
@@ -198,24 +162,17 @@ function isFunctionToolCall(item: ResponseOutputItem): item is ResponseFunctionT
 
 async function executeToolCall(
   toolCall: ResponseFunctionToolCall,
-  cwd: string,
+  toolRuntime: ToolRuntime,
   round: number,
   transcript: MinimalLoopTranscript | undefined,
 ): Promise<string> {
   transcript?.toolCall(round, toolCall.name, toolCall.arguments);
 
-  if (toolCall.name !== BASH_TOOL_NAME) {
-    return `status: blocked\nblocked_reason: unknown tool "${toolCall.name}"`;
-  }
-
-  const args = parseBashToolArguments(toolCall.arguments);
-
-  if (!args) {
-    return "status: blocked\nblocked_reason: bash arguments must be JSON with a non-empty string command field";
-  }
-
-  const result = await runBashCommand(args.command, { cwd });
-  const resultText = formatBashResultForModel(result);
+  const result = await toolRuntime.execute({
+    arguments: toolCall.arguments,
+    name: toolCall.name,
+  });
+  const resultText = formatToolResultForModel(result);
   transcript?.toolResult(round, resultText);
   return resultText;
 }
@@ -223,24 +180,4 @@ async function executeToolCall(
 function normalizeBaseURL(baseURL: string | undefined): string | undefined {
   const normalized = baseURL?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function parseBashToolArguments(rawArguments: string): BashToolArguments | undefined {
-  try {
-    const parsed: unknown = JSON.parse(rawArguments);
-
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "command" in parsed &&
-      typeof parsed.command === "string" &&
-      parsed.command.trim().length > 0
-    ) {
-      return { command: parsed.command };
-    }
-  } catch {
-    return undefined;
-  }
-
-  return undefined;
 }

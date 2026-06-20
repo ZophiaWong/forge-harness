@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the first runnable checkpoint, `c01 Minimal Real Loop`.
+This branch contains the documentation baseline plus the first two runnable checkpoints: `c01 Minimal Real Loop` and `c02 Tool Runtime`.
 
 ## Setup
 
@@ -37,6 +37,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 
 - [c00 Orientation](docs/tutorial/c00-orientation.md): first checkpoint for the course direction and docs-only baseline.
 - [c01 Minimal Real Loop](docs/tutorial/c01-minimal-real-loop.md): first runnable checkpoint with a real LLM tool-call round trip.
+- [c02 Tool Runtime](docs/tutorial/c02-tool-runtime.md): registry, dispatcher, and unified tool results for `bash`, `read`, and `ls`.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

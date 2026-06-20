@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createOpenAIResponseMock, OpenAIMock } = vi.hoisted(() => {
   const createOpenAIResponseMock = vi.fn();
-  const OpenAIMock = vi.fn().mockImplementation(() => ({
-    responses: {
-      create: createOpenAIResponseMock,
-    },
-  }));
+  const OpenAIMock = vi.fn().mockImplementation(function OpenAIMockConstructor() {
+    return {
+      responses: {
+        create: createOpenAIResponseMock,
+      },
+    };
+  });
 
   return { createOpenAIResponseMock, OpenAIMock };
 });
@@ -16,6 +18,7 @@ vi.mock("openai", () => ({
 }));
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
+import type { ToolRuntime } from "../../src/tools/types.js";
 
 function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[]): ResponseCreate {
   const calls: Parameters<ResponseCreate>[0][] = [];
@@ -94,6 +97,73 @@ describe("runMinimalLoop", () => {
     );
     expect(transcript.toolCall).toHaveBeenCalledWith(1, "bash", rawArguments);
     expect(transcript.finalAnswer).toHaveBeenCalledWith("done");
+  });
+
+  it("routes function calls through the injected tool runtime", async () => {
+    const toolRuntime: ToolRuntime = {
+      toolDefinitions: () => [
+        {
+          type: "function",
+          name: "read",
+          description: "Read a file.",
+          strict: true,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              path: {
+                type: "string",
+                description: "Path to read.",
+              },
+            },
+            required: ["path"],
+          },
+        },
+      ],
+      execute: vi.fn(async () => ({
+        content: "path: package.json\n1 | {}",
+        status: "completed" as const,
+        toolName: "read",
+      })),
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "package.json" }),
+            call_id: "call_read",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      responseCreate,
+      task: "inspect",
+      toolRuntime,
+    });
+
+    expect(callsFor(responseCreate)[0]?.tools.map((tool) => tool.name)).toEqual(["read"]);
+    expect(toolRuntime.execute).toHaveBeenCalledWith({
+      arguments: JSON.stringify({ path: "package.json" }),
+      name: "read",
+    });
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        call_id: "call_read",
+        output: "tool: read\nstatus: completed\npath: package.json\n1 | {}",
+        type: "function_call_output",
+      }),
+    );
   });
 
   it("creates the OpenAI client with a configured baseURL", async () => {
@@ -245,7 +315,7 @@ describe("runMinimalLoop", () => {
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({
         call_id: "call_bad",
-        output: expect.stringContaining("blocked_reason: bash arguments must be JSON"),
+        output: expect.stringContaining("failed_reason: bash arguments must be JSON"),
         type: "function_call_output",
       }),
     );
