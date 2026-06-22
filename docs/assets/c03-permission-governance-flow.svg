@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">c03 Permission Governance flow</title>
+  <desc id="desc">A c03 flow diagram. A model function call goes through PermissionPolicy. Allow executes the Tool Runtime. Ask waits for approval. Deny and rejected approvals return blocked ToolResult.</desc>
+  <defs>
+    <marker id="arrow" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-governance" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#7c3aed"/>
+    </marker>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .title { fill: #0f172a; font: 700 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #334155; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .governance-title { fill: #5b21b6; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .body { fill: #475569; font: 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #0f172a; font: 600 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .mono-small { fill: #334155; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .core { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 2.2; }
+      .governance { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 3; }
+      .runtime { fill: #f0fdfa; stroke: #0f766e; stroke-width: 2.2; }
+      .blocked { fill: #fff1f2; stroke: #be123c; stroke-width: 2.2; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; }
+      .governance-card { fill: #ffffff; stroke: #c4b5fd; stroke-width: 1.6; }
+      .runtime-card { fill: #ffffff; stroke: #99f6e4; stroke-width: 1.6; }
+      .blocked-card { fill: #ffffff; stroke: #fecdd3; stroke-width: 1.6; }
+      .line { fill: none; stroke: #334155; stroke-width: 2.4; marker-end: url(#arrow); }
+      .governance-line { fill: none; stroke: #7c3aed; stroke-width: 2.4; marker-end: url(#arrow-governance); }
+      .label { fill: #334155; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .governance-label { fill: #6d28d9; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="620"/>
+
+  <text class="title" x="64" y="56">c03 Permission Governance</text>
+  <text class="subtitle" x="64" y="84">pre-tool gate: function_call -> decision -> execute or blocked ToolResult</text>
+
+  <rect class="core" x="64" y="164" width="228" height="132" rx="14"/>
+  <text class="section" x="96" y="204">Core Loop</text>
+  <rect class="card" x="96" y="230" width="164" height="42" rx="8"/>
+  <text class="mono-small" x="178" y="256" text-anchor="middle">function_call</text>
+
+  <rect class="governance" x="384" y="118" width="332" height="224" rx="14"/>
+  <text class="governance-title" x="416" y="158">PermissionPolicy</text>
+  <text class="body" x="416" y="184">Classifies the requested action.</text>
+  <rect class="governance-card" x="416" y="214" width="268" height="44" rx="8"/>
+  <text class="mono-small" x="550" y="241" text-anchor="middle">risk: inspect / mutating / destructive</text>
+  <rect class="governance-card" x="416" y="276" width="268" height="44" rx="8"/>
+  <text class="mono-small" x="550" y="303" text-anchor="middle">decision: allow / ask / deny</text>
+
+  <rect class="runtime" x="828" y="96" width="260" height="132" rx="14"/>
+  <text class="section" x="860" y="136">Tool Runtime</text>
+  <rect class="runtime-card" x="860" y="162" width="196" height="42" rx="8"/>
+  <text class="mono-small" x="958" y="188" text-anchor="middle">execute(toolCall)</text>
+
+  <rect class="governance" x="828" y="276" width="260" height="132" rx="14"/>
+  <text class="governance-title" x="860" y="316">Approver</text>
+  <rect class="governance-card" x="860" y="342" width="196" height="42" rx="8"/>
+  <text class="mono-small" x="958" y="368" text-anchor="middle">user answers y / N</text>
+
+  <rect class="blocked" x="384" y="438" width="332" height="116" rx="14"/>
+  <text class="section" x="416" y="478">Blocked ToolResult</text>
+  <rect class="blocked-card" x="416" y="502" width="268" height="36" rx="8"/>
+  <text class="mono-small" x="550" y="525" text-anchor="middle">permission_denied: true</text>
+
+  <path class="line" d="M292 230 H371"/>
+  <text class="label" x="332" y="216" text-anchor="middle">check</text>
+
+  <path class="governance-line" d="M716 176 H815"/>
+  <text class="governance-label" x="766" y="162" text-anchor="middle">allow</text>
+
+  <path class="governance-line" d="M716 298 H815"/>
+  <text class="governance-label" x="766" y="284" text-anchor="middle">ask</text>
+
+  <path class="governance-line" d="M958 276 V241 C958 232 958 228 958 228"/>
+  <text class="governance-label" x="982" y="258">yes</text>
+
+  <path class="governance-line" d="M828 384 C760 438 736 482 724 496"/>
+  <text class="governance-label" x="780" y="430">no</text>
+
+  <path class="governance-line" d="M550 342 V425"/>
+  <text class="governance-label" x="574" y="390">deny</text>
+
+  <path class="line" d="M550 554 V586 C550 598 178 598 178 309"/>
+  <text class="label" x="360" y="602">format -> function_call_output</text>
+
+  <path class="line" d="M958 228 V586 C958 598 178 598 178 309"/>
+  <text class="label" x="820" y="602">ToolResult -> function_call_output</text>
+</svg>

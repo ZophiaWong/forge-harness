@@ -18,6 +18,7 @@ vi.mock("openai", () => ({
 }));
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
+import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import type { ToolRuntime } from "../../src/tools/types.js";
 
 function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[]): ResponseCreate {
@@ -43,6 +44,30 @@ function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[
 
 function callsFor(responseCreate: ResponseCreate): Parameters<ResponseCreate>[0][] {
   return (responseCreate as ResponseCreate & { calls: Parameters<ResponseCreate>[0][] }).calls;
+}
+
+function allowPolicy(reason = "test allows action"): PermissionPolicy {
+  return {
+    decide: vi.fn((): PermissionDecision => ({ action: "allow", reason, risk: "inspect" })),
+  };
+}
+
+function askPolicy(reason = "test asks before action"): PermissionPolicy {
+  return {
+    decide: vi.fn((): PermissionDecision => ({ action: "ask", reason, risk: "mutating" })),
+  };
+}
+
+function denyPolicy(reason = "test denies action"): PermissionPolicy {
+  return {
+    decide: vi.fn((): PermissionDecision => ({ action: "deny", reason, risk: "destructive" })),
+  };
+}
+
+function approver(approved: boolean, reason?: string): PermissionApprover {
+  return {
+    approve: vi.fn(async () => (reason ? { approved, reason } : { approved })),
+  };
 }
 
 describe("runMinimalLoop", () => {
@@ -81,6 +106,7 @@ describe("runMinimalLoop", () => {
     const result = await runMinimalLoop({
       apiKey: "test-key",
       cwd: process.cwd(),
+      permissionPolicy: allowPolicy(),
       responseCreate,
       task: "inspect",
       transcript,
@@ -97,6 +123,192 @@ describe("runMinimalLoop", () => {
     );
     expect(transcript.toolCall).toHaveBeenCalledWith(1, "bash", rawArguments);
     expect(transcript.finalAnswer).toHaveBeenCalledWith("done");
+  });
+
+  it("checks permission before executing an allowed tool call", async () => {
+    const rawArguments = JSON.stringify({ command: "pwd" });
+    const permissionPolicy = allowPolicy();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "stdout:\n/project",
+        status: "completed" as const,
+        toolName: "bash",
+      })),
+      toolDefinitions: () => [],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: rawArguments,
+            call_id: "call_allow",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      permissionPolicy,
+      responseCreate,
+      task: "inspect",
+      toolRuntime,
+    });
+
+    expect(permissionPolicy.decide).toHaveBeenCalledWith({
+      arguments: rawArguments,
+      name: "bash",
+    });
+    expect(toolRuntime.execute).toHaveBeenCalledWith({
+      arguments: rawArguments,
+      name: "bash",
+    });
+  });
+
+  it("feeds denied permission decisions back without executing the tool", async () => {
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(),
+      toolDefinitions: () => [],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ command: "rm -rf dist" }),
+            call_id: "call_deny",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "reported denial",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      permissionPolicy: denyPolicy("destructive command is blocked"),
+      responseCreate,
+      task: "remove dist",
+      toolRuntime,
+    });
+
+    expect(toolRuntime.execute).not.toHaveBeenCalled();
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        call_id: "call_deny",
+        output: expect.stringContaining("permission_denied: true"),
+        type: "function_call_output",
+      }),
+    );
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        output: expect.stringContaining("decision: deny"),
+      }),
+    );
+  });
+
+  it("executes an ask decision when the approver accepts", async () => {
+    const permissionApprover = approver(true);
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "stdout:\ncreated",
+        status: "completed" as const,
+        toolName: "bash",
+      })),
+      toolDefinitions: () => [],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ command: "touch approved.txt" }),
+            call_id: "call_ask_yes",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      approver: permissionApprover,
+      cwd: process.cwd(),
+      permissionPolicy: askPolicy(),
+      responseCreate,
+      task: "create file",
+      toolRuntime,
+    });
+
+    expect(permissionApprover.approve).toHaveBeenCalled();
+    expect(toolRuntime.execute).toHaveBeenCalled();
+  });
+
+  it("feeds rejected ask decisions back without executing the tool", async () => {
+    const permissionApprover = approver(false, "approval rejected by user");
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(),
+      toolDefinitions: () => [],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ command: "touch rejected.txt" }),
+            call_id: "call_ask_no",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "reported rejection",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      approver: permissionApprover,
+      cwd: process.cwd(),
+      permissionPolicy: askPolicy(),
+      responseCreate,
+      task: "create file",
+      toolRuntime,
+    });
+
+    expect(toolRuntime.execute).not.toHaveBeenCalled();
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        call_id: "call_ask_no",
+        output: expect.stringContaining("decision: ask"),
+        type: "function_call_output",
+      }),
+    );
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        output: expect.stringContaining("reason: approval rejected by user"),
+      }),
+    );
   });
 
   it("routes function calls through the injected tool runtime", async () => {
@@ -315,7 +527,7 @@ describe("runMinimalLoop", () => {
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({
         call_id: "call_bad",
-        output: expect.stringContaining("failed_reason: bash arguments must be JSON"),
+        output: expect.stringContaining("permission_denied: true"),
         type: "function_call_output",
       }),
     );

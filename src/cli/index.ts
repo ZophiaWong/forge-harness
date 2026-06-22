@@ -2,8 +2,9 @@
 
 import "dotenv/config";
 
+import { createCliApprover } from "./approval.js";
 import { parseTaskFromArgs, usageText } from "./args.js";
-import { formatFunctionCallTranscript } from "./transcript.js";
+import { formatFunctionCallTranscript, formatPermissionDecisionTranscript } from "./transcript.js";
 import { runMinimalLoop } from "../core/minimalLoop.js";
 
 const task = parseTaskFromArgs(process.argv.slice(2));
@@ -13,6 +14,7 @@ if (!task) {
   process.exitCode = 1;
 } else {
   await runMinimalLoop({
+    approver: createCliApprover(),
     cwd: process.cwd(),
     task,
     transcript: {
@@ -21,6 +23,9 @@ if (!task) {
       },
       toolCall(round, toolName, argumentsText) {
         console.log(formatFunctionCallTranscript(round, toolName, argumentsText));
+      },
+      permissionDecision(round, decision) {
+        console.log(formatPermissionDecisionTranscript(round, decision));
       },
       toolResult(round, resultText) {
         console.log(`[round ${round}] tool_result:\n${resultText}`);

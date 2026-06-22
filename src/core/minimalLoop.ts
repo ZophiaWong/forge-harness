@@ -1,8 +1,15 @@
 import OpenAI from "openai";
 
+import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
+import type {
+  ApprovalResult,
+  PermissionApprover,
+  PermissionDecision,
+  PermissionPolicy,
+} from "../governance/types.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import { formatToolResultForModel } from "../tools/result.js";
-import type { ToolDefinition, ToolRuntime } from "../tools/types.js";
+import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
@@ -65,6 +72,7 @@ export type ResponseCreate = (request: ResponseCreateRequest) => Promise<Minimal
 
 export interface MinimalLoopTranscript {
   finalAnswer(answer: string): void;
+  permissionDecision?(round: number, decision: PermissionDecision): void;
   roundStart(round: number, model: string): void;
   toolCall(round: number, toolName: string, argumentsText: string): void;
   toolResult(round: number, resultText: string): void;
@@ -72,10 +80,12 @@ export interface MinimalLoopTranscript {
 
 export interface MinimalLoopOptions {
   apiKey?: string;
+  approver?: PermissionApprover;
   baseURL?: string;
   cwd: string;
   maxToolRounds?: number;
   model?: string;
+  permissionPolicy?: PermissionPolicy;
   responseCreate?: ResponseCreate;
   task: string;
   toolRuntime?: ToolRuntime;
@@ -93,6 +103,8 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
   const model = options.model ?? process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
   const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+  const permissionPolicy = options.permissionPolicy ?? createDefaultPermissionPolicy();
+  const approver = options.approver ?? createRejectingApprover();
   const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
   const input: ResponseInputItem[] = [
     {
@@ -131,7 +143,14 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     }
 
     for (const toolCall of toolCalls) {
-      const resultText = await executeToolCall(toolCall, toolRuntime, round, options.transcript);
+      const resultText = await executeToolCall(
+        toolCall,
+        toolRuntime,
+        permissionPolicy,
+        approver,
+        round,
+        options.transcript,
+      );
       input.push({
         type: "function_call_output",
         call_id: toolCall.call_id,
@@ -163,18 +182,79 @@ function isFunctionToolCall(item: ResponseOutputItem): item is ResponseFunctionT
 async function executeToolCall(
   toolCall: ResponseFunctionToolCall,
   toolRuntime: ToolRuntime,
+  permissionPolicy: PermissionPolicy,
+  approver: PermissionApprover,
   round: number,
   transcript: MinimalLoopTranscript | undefined,
 ): Promise<string> {
   transcript?.toolCall(round, toolCall.name, toolCall.arguments);
 
-  const result = await toolRuntime.execute({
+  const request: ToolCallRequest = {
     arguments: toolCall.arguments,
     name: toolCall.name,
-  });
+  };
+  const decision = permissionPolicy.decide(request);
+  transcript?.permissionDecision?.(round, decision);
+
+  if (decision.action === "deny") {
+    const resultText = formatToolResultForModel(createPermissionBlockedResult(request, decision));
+    transcript?.toolResult(round, resultText);
+    return resultText;
+  }
+
+  if (decision.action === "ask") {
+    const approval = await approver.approve({ decision, toolCall: request });
+
+    if (!approval.approved) {
+      const resultText = formatToolResultForModel(createPermissionBlockedResult(request, decision, approval));
+      transcript?.toolResult(round, resultText);
+      return resultText;
+    }
+  }
+
+  const result = await toolRuntime.execute(request);
   const resultText = formatToolResultForModel(result);
   transcript?.toolResult(round, resultText);
   return resultText;
+}
+
+function createPermissionBlockedResult(
+  toolCall: ToolCallRequest,
+  decision: PermissionDecision,
+  approval?: ApprovalResult,
+): ToolResult {
+  const reason = approval?.reason ?? decision.reason;
+  const lines = [
+    "permission_denied: true",
+    `decision: ${decision.action}`,
+    `risk: ${decision.risk}`,
+    `reason: ${reason}`,
+  ];
+
+  if (approval?.reason && approval.reason !== decision.reason) {
+    lines.push(`policy_reason: ${decision.reason}`);
+  }
+
+  return {
+    content: lines.join("\n"),
+    metadata: {
+      permissionDecision: decision,
+      rejectionReason: approval?.reason,
+    },
+    status: "blocked",
+    toolName: toolCall.name,
+  };
+}
+
+function createRejectingApprover(): PermissionApprover {
+  return {
+    async approve() {
+      return {
+        approved: false,
+        reason: "approval requires an approver",
+      };
+    },
+  };
 }
 
 function normalizeBaseURL(baseURL: string | undefined): string | undefined {
