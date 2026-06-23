@@ -58,10 +58,10 @@ describe("createToolRuntime", () => {
 });
 
 describe("createDefaultToolRuntime", () => {
-  it("exposes bash, read, and ls as built-in tool definitions", () => {
+  it("exposes bash, read, ls, edit, and write as built-in tool definitions", () => {
     const runtime = createDefaultToolRuntime({ cwd: process.cwd() });
 
-    expect(runtime.toolDefinitions().map((tool) => tool.name)).toEqual(["bash", "read", "ls"]);
+    expect(runtime.toolDefinitions().map((tool) => tool.name)).toEqual(["bash", "read", "ls", "edit", "write"]);
   });
 
   it("keeps ls non-strict because its path argument is optional", () => {

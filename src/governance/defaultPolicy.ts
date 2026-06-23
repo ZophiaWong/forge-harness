@@ -6,6 +6,17 @@ interface BashArguments {
   command: string;
 }
 
+interface EditArguments {
+  newText: string;
+  oldText: string;
+  path: string;
+}
+
+interface WriteArguments {
+  content: string;
+  path: string;
+}
+
 export function createDefaultPermissionPolicy(): PermissionPolicy {
   return {
     decide(toolCall) {
@@ -17,6 +28,26 @@ export function createDefaultPermissionPolicy(): PermissionPolicy {
 export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDecision {
   if (toolCall.name === "read" || toolCall.name === "ls") {
     return allow("inspect-only tool");
+  }
+
+  if (toolCall.name === "edit") {
+    const args = parseEditArguments(toolCall.arguments);
+
+    if (!args) {
+      return deny("unknown", "edit arguments must be JSON with non-empty string path and oldText fields, and a string newText field");
+    }
+
+    return ask("mutating", "file edit may modify project files");
+  }
+
+  if (toolCall.name === "write") {
+    const args = parseWriteArguments(toolCall.arguments);
+
+    if (!args) {
+      return deny("unknown", "write arguments must be JSON with non-empty string path and string content fields");
+    }
+
+    return ask("mutating", "file write may modify project files");
   }
 
   if (toolCall.name !== "bash") {
@@ -82,6 +113,60 @@ function parseBashArguments(rawArguments: string): BashArguments | undefined {
       parsed.command.trim().length > 0
     ) {
       return { command: parsed.command };
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function parseEditArguments(rawArguments: string): EditArguments | undefined {
+  try {
+    const parsed: unknown = JSON.parse(rawArguments);
+
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "path" in parsed &&
+      typeof parsed.path === "string" &&
+      parsed.path.trim().length > 0 &&
+      "oldText" in parsed &&
+      typeof parsed.oldText === "string" &&
+      parsed.oldText.length > 0 &&
+      "newText" in parsed &&
+      typeof parsed.newText === "string"
+    ) {
+      return {
+        newText: parsed.newText,
+        oldText: parsed.oldText,
+        path: parsed.path,
+      };
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function parseWriteArguments(rawArguments: string): WriteArguments | undefined {
+  try {
+    const parsed: unknown = JSON.parse(rawArguments);
+
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "path" in parsed &&
+      typeof parsed.path === "string" &&
+      parsed.path.trim().length > 0 &&
+      "content" in parsed &&
+      typeof parsed.content === "string"
+    ) {
+      return {
+        content: parsed.content,
+        path: parsed.path,
+      };
     }
   } catch {
     return undefined;

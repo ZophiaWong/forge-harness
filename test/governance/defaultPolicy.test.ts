@@ -23,6 +23,39 @@ describe("createDefaultPermissionPolicy", () => {
     });
   });
 
+  it("asks before running file editing tools", () => {
+    expect(
+      decide("edit", {
+        newText: "new line",
+        oldText: "old line",
+        path: "sample.txt",
+      }),
+    ).toMatchObject({
+      action: "ask",
+      risk: "mutating",
+    });
+    expect(
+      decide("write", {
+        content: "hello",
+        path: "sample.txt",
+      }),
+    ).toMatchObject({
+      action: "ask",
+      risk: "mutating",
+    });
+  });
+
+  it("denies malformed file editing arguments", () => {
+    expect(decide("edit", { path: "sample.txt", oldText: "old" })).toMatchObject({
+      action: "deny",
+      risk: "unknown",
+    });
+    expect(decide("write", { path: "sample.txt" })).toMatchObject({
+      action: "deny",
+      risk: "unknown",
+    });
+  });
+
   it("allows simple bash inspect commands", () => {
     for (const command of ["pwd", "ls -la", "cat package.json", "sed -n '1,5p' package.json", "git status --short"]) {
       expect(decide("bash", { command })).toMatchObject({

@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the first three runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, and `c03 Permission Governance`.
+This branch contains the documentation baseline plus the first four runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, and `c04 Reviewable File Editing`.
 
 ## Setup
 
@@ -39,6 +39,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c01 Minimal Real Loop](docs/tutorial/c01-minimal-real-loop.md): first runnable checkpoint with a real LLM tool-call round trip.
 - [c02 Tool Runtime](docs/tutorial/c02-tool-runtime.md): registry, dispatcher, and unified tool results for `bash`, `read`, and `ls`.
 - [c03 Permission Governance](docs/tutorial/c03-permission-governance.md): pre-tool permission decisions for `allow`, `ask`, and `deny`.
+- [c04 Reviewable File Editing](docs/tutorial/c04-reviewable-file-editing.md): structured `edit` and `write` tools with diff-like results.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

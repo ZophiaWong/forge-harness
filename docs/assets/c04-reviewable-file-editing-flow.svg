@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">c04 Reviewable File Editing flow</title>
+  <desc id="desc">A c04 flow diagram. The model calls edit or write. Permission Governance asks for approval. The file tool applies the change and returns a diff-like ToolResult.</desc>
+  <defs>
+    <marker id="arrow" markerHeight="10" markerWidth="10" orient="auto" refX="9" refY="5">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #fbfaf7; }
+      .title { fill: #0f172a; font: 700 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #0f172a; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .body { fill: #475569; font: 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #334155; font: 600 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .core { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 2.2; }
+      .gate { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 2.6; }
+      .tool { fill: #ecfeff; stroke: #0891b2; stroke-width: 2.2; }
+      .result { fill: #f0fdf4; stroke: #15803d; stroke-width: 2.2; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; }
+      .line { fill: none; stroke: #334155; stroke-width: 2.4; marker-end: url(#arrow); }
+      .label { fill: #334155; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="520"/>
+
+  <text class="title" x="64" y="56">c04 Reviewable File Editing</text>
+  <text class="subtitle" x="64" y="84">structured file tools: edit/write -> approval -> file change -> diff-like ToolResult</text>
+
+  <rect class="core" x="64" y="168" width="210" height="132" rx="14"/>
+  <text class="section" x="96" y="208">Model request</text>
+  <rect class="card" x="96" y="232" width="146" height="42" rx="8"/>
+  <text class="mono" x="169" y="258" text-anchor="middle">edit / write</text>
+
+  <rect class="gate" x="348" y="138" width="250" height="192" rx="14"/>
+  <text class="section" x="380" y="178">Permission gate</text>
+  <text class="body" x="380" y="204">File changes are mutating.</text>
+  <rect class="card" x="380" y="232" width="186" height="42" rx="8"/>
+  <text class="mono" x="473" y="258" text-anchor="middle">decision: ask</text>
+  <text class="body" x="380" y="300">Approval decides execution.</text>
+
+  <rect class="tool" x="672" y="138" width="250" height="192" rx="14"/>
+  <text class="section" x="704" y="178">File tools</text>
+  <text class="body" x="704" y="204">Stay inside cwd.</text>
+  <rect class="card" x="704" y="232" width="186" height="42" rx="8"/>
+  <text class="mono" x="797" y="258" text-anchor="middle">apply change</text>
+  <text class="body" x="704" y="300">No shell fallback needed.</text>
+
+  <rect class="result" x="348" y="382" width="574" height="84" rx="14"/>
+  <text class="section" x="380" y="416">ToolResult</text>
+  <text class="mono" x="380" y="444">path + action + compact diff-like text</text>
+
+  <path class="line" d="M274 234 H335"/>
+  <text class="label" x="305" y="220" text-anchor="middle">check</text>
+
+  <path class="line" d="M598 234 H659"/>
+  <text class="label" x="629" y="220" text-anchor="middle">approved</text>
+
+  <path class="line" d="M797 330 V369"/>
+  <text class="label" x="828" y="354">result</text>
+
+  <path class="line" d="M348 424 C236 424 169 382 169 313"/>
+  <text class="label" x="218" y="440">function_call_output</text>
+</svg>

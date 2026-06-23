@@ -15,6 +15,22 @@ const approvalRequest = {
   },
 };
 
+const editApprovalRequest = {
+  decision: {
+    action: "ask" as const,
+    reason: "file edit may modify project files",
+    risk: "mutating" as const,
+  },
+  toolCall: {
+    arguments: JSON.stringify({
+      newText: "new line",
+      oldText: "old line",
+      path: "sample.txt",
+    }),
+    name: "edit",
+  },
+};
+
 function readableInput(text: string, isTTY = true): NodeJS.ReadStream {
   const input = Readable.from([text]) as NodeJS.ReadStream;
   Object.defineProperty(input, "isTTY", { value: isTTY });
@@ -50,6 +66,21 @@ describe("createCliApprover", () => {
     expect(text()).toContain("Approve bash command?");
     expect(text()).toContain("command: touch c03-permission-demo.txt");
     expect(text()).toContain("[y/N]:");
+  });
+
+  it("prints arguments for non-bash tool approval prompts", async () => {
+    const { output, text } = writableOutput();
+    const approver = createCliApprover({
+      input: readableInput("yes\n"),
+      output,
+    });
+
+    await expect(approver.approve(editApprovalRequest)).resolves.toEqual({
+      approved: true,
+    });
+    expect(text()).toContain("Approve edit tool call?");
+    expect(text()).toContain('arguments: {"newText":"new line","oldText":"old line","path":"sample.txt"}');
+    expect(text()).not.toContain("command:");
   });
 
   it("rejects by default when the user presses enter", async () => {

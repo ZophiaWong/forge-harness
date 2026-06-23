@@ -89,7 +89,7 @@ flowchart TB
 | [`c01` Minimal Real Loop](tutorial/c01-minimal-real-loop.md) | `L1` | LLM 只能回答，不能行动。 | 最小 model call + one tool path。 | CLI 跑通一次 tool call round trip。 |
 | [`c02` Tool Runtime](tutorial/c02-tool-runtime.md) | `L1` | 第二个工具会让 loop routing 膨胀。 | tool definition、registry、dispatcher、result protocol；内置 `bash`、`read`、`ls`。 | 新工具能注册进 runtime，不改 core loop。 |
 | [`c03` Permission Governance](tutorial/c03-permission-governance.md) | `L2` | Tool call 会产生 side effects。 | risk classification、permission decision、approval model。 | 高风险动作执行前经过决策。 |
-| `c04` Reviewable File Editing | `L1 + L2` | coding agent 需要改文件，但不能只靠 shell。 | exact edit、`edit` / `write` tools、diff-like result。 | 文件修改变成可 review 的 tool result。 |
+| [`c04` Reviewable File Editing](tutorial/c04-reviewable-file-editing.md) | `L1 + L2` | coding agent 需要改文件，但不能只靠 shell。 | exact edit、`edit` / `write` tools、diff-like result。 | 文件修改变成可 review 的 tool result。 |
 | `c05` Context Projection | `L3` | raw history、tool output 和搜索结果会挤满下一轮 input。 | `grep` / `find` search tools、`Observation`、`ContextProjection`。 | 模型下一轮只看到被投影后的上下文。 |
 | `c06` Session / Trace | `L4` | 运行结束后无法 inspect、resume 或 replay。 | `Session` metadata、JSONL `TraceEvent`。 | 每次 run 留下可检查 trace。 |
 | `c07` Runtime State Model | `L4` | Trace 记录过去，但 harness 还需要当前决策视图。 | `RuntimeState` projection。 | 当前任务、工具、错误和检查状态可读。 |

@@ -18,6 +18,7 @@ const SYSTEM_INSTRUCTIONS = [
   "You are running inside a minimal coding-agent loop.",
   "You may call tools to inspect the local project.",
   "Prefer ls for directory listings and read for reading text files.",
+  "Use edit for exact file text replacements and write for full-file create or overwrite operations.",
   "Use bash only when a shell command is needed.",
   "Use inspect-only commands unless the user explicitly asks for something else.",
   "Call at most one tool at a time.",

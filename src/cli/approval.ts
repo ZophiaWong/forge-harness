@@ -43,15 +43,22 @@ export function createCliApprover(options: CliApproverOptions = {}): PermissionA
 }
 
 function writeApprovalPrompt(output: NodeJS.WriteStream, request: ApprovalRequest): void {
-  output.write(`Approve ${request.toolCall.name} command?\n`);
+  if (request.toolCall.name === "bash") {
+    output.write("Approve bash command?\n");
 
-  const command = parseCommand(request.toolCall.arguments);
+    const command = parseCommand(request.toolCall.arguments);
 
-  if (command) {
-    output.write(`command: ${command}\n`);
-  } else {
-    output.write(`arguments: ${request.toolCall.arguments}\n`);
+    if (command) {
+      output.write(`command: ${command}\n`);
+    } else {
+      output.write(`arguments: ${request.toolCall.arguments}\n`);
+    }
+
+    return;
   }
+
+  output.write(`Approve ${request.toolCall.name} tool call?\n`);
+  output.write(`arguments: ${request.toolCall.arguments}\n`);
 }
 
 function parseCommand(rawArguments: string): string | undefined {
