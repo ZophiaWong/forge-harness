@@ -21,7 +21,7 @@ const result = await toolRuntime.execute({
 这段代码的 routing 已经干净了，缺的是 action boundary。比如模型请求：
 
 ```json
-{"command":"touch c03-permission-demo.txt"}
+{ "command": "touch c03-permission-demo.txt" }
 ```
 
 这不是危险命令，但它会修改工作区。`bashTool` 里的 deny list 可以挡掉 `sudo`、`rm -rf`、`git reset --hard` 这类明显破坏性命令，却不能回答另一个问题：普通写入动作要不要先问用户？
@@ -30,19 +30,11 @@ const result = await toolRuntime.execute({
 
 ## 解决方案
 
-先把 permission 这件事拆小一点。完整的 permission system 至少会碰到这些层：
+c03 不先搭完整 permission system。完整 map 放在文末，这里先看本章真正实现的部分：每次 tool execution 之前，loop 都要先做一次 permission check。
 
-| Layer | 它问的问题 | c03 怎么处理 |
-| --- | --- | --- |
-| `Action` | 模型到底想执行什么？ | 把 `{ name, arguments }` 当成 action request。 |
-| `Risk` | 这个动作是什么风险？ | 分类成 `inspect`、`mutating`、`destructive`、`unknown`。 |
-| `Decision` | harness 应该怎么处理？ | 返回 `allow`、`ask` 或 `deny`。 |
-| `Approval` | 需要问人时，谁来回答？ | CLI 里出现一次真实 `[y/N]` prompt。 |
-| `Enforcement` | 决定在哪里生效？ | 在 `ToolRuntime.execute()` 前生效。 |
-| `Boundary` | 允许后还有没有硬边界？ | 复用 tool-local guard，比如 `read`/`ls` 的 `cwd` 边界。 |
-| `Evidence` | 之后能不能查到原因？ | c03 只打印 transcript；持久 trace 留到 c06。 |
+`PermissionPolicy` 接收这次 `{ name, arguments }`，返回 `allow`、`ask` 或 `deny`。只有 `allow`，或者 `ask` 被用户批准后，tool call 才会进入 `ToolRuntime.execute()`。
 
-c03 只实现中间这段 runnable path：
+这条 gate 是本章真正跑起来的部分：
 
 ![c03 Permission Governance flow](../assets/c03-permission-governance-flow.svg)
 
@@ -59,7 +51,7 @@ model function_call
   -> function_call_output
 ```
 
-注意这里没有做 sandbox，也没有做 project-level policy file。c03 只加一层 pre-tool gate，让高风险动作不能静默穿过 loop。
+注意这里没有做 sandbox，也没有做 project-level policy file。c03 只负责一件事：高风险动作不能静默穿过 loop。
 
 ## 最小实现
 
@@ -106,7 +98,10 @@ if (destructiveReason) {
 }
 
 if (hasComplexShellShape(args.command)) {
-  return ask("unknown", "bash command uses shell composition that requires approval");
+  return ask(
+    "unknown",
+    "bash command uses shell composition that requires approval",
+  );
 }
 
 if (isSimpleInspectCommand(args.command)) {
@@ -126,7 +121,8 @@ return ask("mutating", "bash command may modify files or external state");
 `src/core/minimalLoop.ts` 现在多了两个可注入依赖：
 
 ```ts
-const permissionPolicy = options.permissionPolicy ?? createDefaultPermissionPolicy();
+const permissionPolicy =
+  options.permissionPolicy ?? createDefaultPermissionPolicy();
 const approver = options.approver ?? createRejectingApprover();
 ```
 
@@ -139,7 +135,9 @@ const decision = permissionPolicy.decide(request);
 transcript?.permissionDecision?.(round, decision);
 
 if (decision.action === "deny") {
-  const resultText = formatToolResultForModel(createPermissionBlockedResult(request, decision));
+  const resultText = formatToolResultForModel(
+    createPermissionBlockedResult(request, decision),
+  );
   transcript?.toolResult(round, resultText);
   return resultText;
 }
@@ -163,7 +161,7 @@ const answer = await readline.question("[y/N]: ");
 const approved = /^(?:y|yes)$/i.test(answer.trim());
 ```
 
-只有 `y` 或 `yes` 会批准。直接回车或其他输入都拒绝。如果当前不是交互式 terminal，approver 不会挂起等待输入，而是返回：
+只有 `y` 或 `yes` 会批准。直接回车或其他输入都拒绝。如果当前不是交互式 terminal，approver 不会挂起等待输入，会直接返回：
 
 ```text
 approval requires an interactive terminal
@@ -239,7 +237,7 @@ reason: approval rejected by user
 这里要看两点：
 
 - `permission: ask` 出现在 `tool_result` 前，说明 governance 在 tool execution 前发生。
-- `status: blocked` 回到了模型，说明拒绝不是 harness crash，而是 loop 可以继续处理的一次 tool result。
+- `status: blocked` 回到了模型，说明拒绝不会让 harness crash；loop 会把它当成一次 tool result 继续处理。
 
 维护者可以再跑完整检查：
 
@@ -262,3 +260,18 @@ c03 只实现 pre-tool execution gate。它还不是完整 permission system。
 这一章没有持久 audit。permission decision 只出现在 CLI transcript 和 tool result 里，真正的 `TraceEvent` 会在 c06 进入。
 
 最后，c03 仍然没有 `edit` / `write`。现在如果用户批准，模型可以通过 `bash` 改文件，但结果还不是 reviewable file edit。下一章 c04 会把文件修改变成可 review 的 tool result，而不是继续依赖任意 shell command。
+
+### 补充：permission system 的 layer map
+
+`Permission layer` 把 permission system 拆成几个责任面：模型请求了什么、风险是什么、要不要问人、在哪里拦住、之后能不能解释原因。c03 只实现 pre-tool gate，其他部分等后面的章节碰到具体问题后引出来。
+
+| Permission layer         | 它问的问题                                     | c03 做到哪里                                                                        | 后面补什么                                                                                        |
+| ------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `Tool action request`    | 模型具体想调用哪个 tool？参数是什么？          | 把 `{ name, arguments }` 当成一次 action request。                                  | 外部 tools 进入后，c16 会继续处理 MCP / plugin action。                                           |
+| `Risk classification`    | 这个 action 是读取、修改、破坏，还是无法判断？ | 分类成 `inspect`、`mutating`、`destructive`、`unknown`。                            | `edit` / `write` 进入后，c04 会让文件修改有更具体的风险形状。                                     |
+| `Permission decision`    | harness 这次应该放行、询问，还是直接拒绝？     | 返回 `allow`、`ask` 或 `deny`。                                                     | policy file 和 policy composition 留到外部工具压力出现后再做。                                    |
+| `Human approval`         | 需要问人时，谁来确认？默认答案是什么？         | CLI 里出现一次真实 `[y/N]` prompt，默认拒绝。                                       | approval cache 和 session-scoped approval 要等 session / trace 更稳定。                           |
+| `Enforcement point`      | permission decision 在哪里真正生效？           | 在 `ToolRuntime.execute()` 前拦住 `deny` 和被拒绝的 `ask`。                         | 更底层的 sandbox 不在 c03；worktree boundary 会在 c14 处理。                                      |
+| `Execution boundary`     | 放行后还有没有硬边界？                         | 复用 tool-local guard，比如 `read` / `ls` 的 `cwd` 边界和 `bashTool` 的 deny list。 | filesystem boundary、workspace trust boundary 会在后面单独讲。                                    |
+| `Policy source / scope`  | 规则从哪里来？作用范围有多大？                 | 使用 hardcoded default policy，没有项目级配置。                                     | `.forge/permissions.json`、user policy 和 project policy composition 留到外部工具压力出现后再做。 |
+| `Evidence / audit trail` | 之后能不能查到当时为什么允许或拒绝？           | c03 只打印 transcript，并把 reason 放进 blocked result。                            | 持久 `TraceEvent` 会在 c06 进入。                                                                 |
