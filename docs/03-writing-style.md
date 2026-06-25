@@ -112,6 +112,8 @@ if (toolCall.name === "read_file") {
 
 面向读者的 tutorial 里，验证应该聚焦最小 smoke run 和可观察结果。详细测试覆盖可以放在 PR、commit notes 或维护文档里；除非测试本身就是这一章要讲的机制，不要把 coverage 清单塞进教程正文。
 
+不要在 tutorial 正文里单独放一段 `npm run test`、`npm run typecheck`、`npm run build` 这样的维护者验证清单。它们属于 checkpoint verification，可以放在执行报告、PR notes 或 checkpoint notes 里。如果某个检查本身就是章节学习目标，才把它写进教程，并说明读者应该观察哪一行输出。
+
 全局环境配置放在 `README.md`。教程章节只链接到 shared setup，再给出本章自己的 command 和 observation。
 
 解释 transcript、command output 或其他 observation 时，要说清楚结论从哪里来。证据可以来自某一行 transcript、一次 command output、一个 file diff、一条 trace event、一个 test result，或代码里的某个分支。

@@ -47,6 +47,7 @@ When adding or rewriting `docs/tutorial/*.md`:
 - map concept steps to short annotated code snippets; do not paste full functions when a focused excerpt explains the mechanism better
 - keep tutorial verification focused on reader-visible smoke runs and observations
 - keep detailed test coverage outside reader tutorials unless the tests are part of the chapter's learning goal
+- do not add standalone maintainer verification checklists such as `npm run test`, `npm run typecheck`, and `npm run build` to reader-facing tutorial chapters unless those checks are the chapter's learning goal; keep those checklists in agent reports, PR notes, or checkpoint notes
 - run a final `$humanizer-zh` review pass
 - re-check code blocks, commands, filenames, identifiers, and API names after that pass
 
