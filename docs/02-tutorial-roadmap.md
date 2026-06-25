@@ -91,7 +91,7 @@ flowchart TB
 | [`c03` Permission Governance](tutorial/c03-permission-governance.md) | `L2` | Tool call 会产生 side effects。 | risk classification、permission decision、approval model。 | 高风险动作执行前经过决策。 |
 | [`c04` Reviewable File Editing](tutorial/c04-reviewable-file-editing.md) | `L1 + L2` | coding agent 需要改文件，但不能只靠 shell。 | exact edit、`edit` / `write` tools、diff-like result。 | 文件修改变成可 review 的 tool result。 |
 | [`c05` Context Projection](tutorial/c05-context-projection.md) | `L3` | raw history、tool output 和搜索结果会挤满下一轮 input。 | `grep` / `find` search tools、`Observation`、`ContextProjection`。 | 模型下一轮只看到被投影后的上下文。 |
-| `c06` Session / Trace | `L4` | 运行结束后无法 inspect、resume 或 replay。 | `Session` metadata、JSONL `TraceEvent`。 | 每次 run 留下可检查 trace。 |
+| [`c06` Session / Trace](tutorial/c06-session-trace.md) | `L4` | 运行结束后无法 inspect、resume 或 replay。 | `Session` metadata、JSONL `TraceEvent`。 | 每次 run 留下可检查 trace。 |
 | `c07` Runtime State Model | `L4` | Trace 记录过去，但 harness 还需要当前决策视图。 | `RuntimeState` projection。 | 当前任务、工具、错误和检查状态可读。 |
 | `c08` Verification / Recovery | `L4` | final answer 不等于任务完成。 | checks、failure summary、repair loop、retry limit。 | harness 完成前会验证，失败后能进入 repair。 |
 | `c09` Hooks | `L5 + L4` | 生命周期扩展点不该散落在 core loop。 | stable event points、hook runner。 | cross-cutting behavior 挂在 loop 外侧。 |

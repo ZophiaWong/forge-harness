@@ -9,6 +9,7 @@ import type {
   PermissionDecision,
   PermissionPolicy,
 } from "../governance/types.js";
+import { createNoopTraceRecorder, type TraceRecorder } from "../runtime/trace.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
@@ -92,6 +93,7 @@ export interface MinimalLoopOptions {
   responseCreate?: ResponseCreate;
   task: string;
   toolRuntime?: ToolRuntime;
+  traceRecorder?: TraceRecorder;
   transcript?: MinimalLoopTranscript;
 }
 
@@ -103,68 +105,120 @@ export interface MinimalLoopResult {
 export async function runMinimalLoop(options: MinimalLoopOptions): Promise<MinimalLoopResult> {
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   const baseURL = normalizeBaseURL(options.baseURL ?? process.env.OPENAI_BASE_URL);
-  const responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
   const model = options.model ?? process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
   const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
   const permissionPolicy = options.permissionPolicy ?? createDefaultPermissionPolicy();
   const approver = options.approver ?? createRejectingApprover();
   const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
   const contextProjection = options.contextProjection ?? createContextProjection();
+  const traceRecorder = options.traceRecorder ?? createNoopTraceRecorder();
   const input: ResponseInputItem[] = [
     {
       role: "user",
       content: options.task,
     },
   ];
+  let lastRound = 0;
 
-  for (let round = 1; round <= maxToolRounds; round += 1) {
-    options.transcript?.roundStart(round, model);
-
-    const response = await responseCreate({
-      include: ["reasoning.encrypted_content"],
-      input,
-      instructions: SYSTEM_INSTRUCTIONS,
+  try {
+    await traceRecorder.record({
+      cwd: options.cwd,
+      maxToolRounds,
       model,
-      parallel_tool_calls: false,
-      reasoning: {
-        effort: "low",
-      },
-      store: false,
-      text: {
-        verbosity: "low",
-      },
-      tools: toolRuntime.toolDefinitions(),
+      task: options.task,
+      type: "session_started",
     });
+    const responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
 
-    input.push(...response.output);
+    for (let round = 1; round <= maxToolRounds; round += 1) {
+      lastRound = round;
+      options.transcript?.roundStart(round, model);
+      const toolDefinitions = toolRuntime.toolDefinitions();
 
-    const toolCalls = response.output.filter(isFunctionToolCall);
-
-    if (toolCalls.length === 0) {
-      const finalAnswer = response.output_text.trim();
-      options.transcript?.finalAnswer(finalAnswer);
-      return { finalAnswer, rounds: round };
-    }
-
-    for (const toolCall of toolCalls) {
-      const resultText = await executeToolCall(
-        toolCall,
-        toolRuntime,
-        permissionPolicy,
-        approver,
-        contextProjection,
+      await traceRecorder.record({
+        inputItemCount: input.length,
+        model,
         round,
-        options.transcript,
-      );
-      input.push({
-        type: "function_call_output",
-        call_id: toolCall.call_id,
-        output: resultText,
+        toolNames: toolDefinitions.map((tool) => tool.name),
+        type: "model_request",
       });
-    }
-  }
 
-  throw new Error(`Minimal loop stopped after ${maxToolRounds} tool rounds without a final answer.`);
+      const response = await responseCreate({
+        include: ["reasoning.encrypted_content"],
+        input,
+        instructions: SYSTEM_INSTRUCTIONS,
+        model,
+        parallel_tool_calls: false,
+        reasoning: {
+          effort: "low",
+        },
+        store: false,
+        text: {
+          verbosity: "low",
+        },
+        tools: toolDefinitions,
+      });
+
+      input.push(...response.output);
+
+      const toolCalls = response.output.filter(isFunctionToolCall);
+
+      await traceRecorder.record({
+        functionCallCount: toolCalls.length,
+        outputText: response.output_text,
+        round,
+        type: "model_response",
+      });
+
+      if (toolCalls.length === 0) {
+        const finalAnswer = response.output_text.trim();
+        options.transcript?.finalAnswer(finalAnswer);
+        await traceRecorder.record({
+          answer: finalAnswer,
+          round,
+          type: "final_answer",
+        });
+        await traceRecorder.record({
+          rounds: round,
+          status: "completed",
+          type: "session_ended",
+        });
+        return { finalAnswer, rounds: round };
+      }
+
+      for (const toolCall of toolCalls) {
+        const resultText = await executeToolCall(
+          toolCall,
+          toolRuntime,
+          permissionPolicy,
+          approver,
+          contextProjection,
+          round,
+          options.transcript,
+          traceRecorder,
+        );
+        input.push({
+          type: "function_call_output",
+          call_id: toolCall.call_id,
+          output: resultText,
+        });
+      }
+    }
+
+    throw new Error(`Minimal loop stopped after ${maxToolRounds} tool rounds without a final answer.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await traceRecorder.record({
+      message,
+      type: "session_failed",
+    });
+    await traceRecorder.record({
+      rounds: lastRound,
+      status: "failed",
+      type: "session_ended",
+    });
+    throw error;
+  }
 }
 
 function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: string | undefined): ResponseCreate {
@@ -192,8 +246,16 @@ async function executeToolCall(
   contextProjection: ContextProjection,
   round: number,
   transcript: MinimalLoopTranscript | undefined,
+  traceRecorder: TraceRecorder,
 ): Promise<string> {
   transcript?.toolCall(round, toolCall.name, toolCall.arguments);
+  await traceRecorder.record({
+    argumentsText: toolCall.arguments,
+    callId: toolCall.call_id,
+    round,
+    toolName: toolCall.name,
+    type: "tool_call",
+  });
 
   const request: ToolCallRequest = {
     arguments: toolCall.arguments,
@@ -201,19 +263,55 @@ async function executeToolCall(
   };
   const decision = permissionPolicy.decide(request);
   transcript?.permissionDecision?.(round, decision);
+  await traceRecorder.record({
+    action: decision.action,
+    callId: toolCall.call_id,
+    reason: decision.reason,
+    risk: decision.risk,
+    round,
+    toolName: toolCall.name,
+    type: "permission_decision",
+  });
 
   if (decision.action === "deny") {
-    const resultText = projectToolResult(createPermissionBlockedResult(request, decision), contextProjection);
+    const result = createPermissionBlockedResult(request, decision);
+    const resultText = projectToolResult(result, contextProjection);
     transcript?.toolResult(round, resultText);
+    await traceRecorder.record({
+      callId: toolCall.call_id,
+      projectedOutput: resultText,
+      round,
+      status: result.status,
+      toolName: toolCall.name,
+      type: "tool_result",
+    });
     return resultText;
   }
 
   if (decision.action === "ask") {
     const approval = await approver.approve({ decision, toolCall: request });
+    const approvalEvent = {
+      approved: approval.approved,
+      callId: toolCall.call_id,
+      round,
+      toolName: toolCall.name,
+      type: "approval_result" as const,
+      ...(approval.reason ? { reason: approval.reason } : {}),
+    };
+    await traceRecorder.record(approvalEvent);
 
     if (!approval.approved) {
-      const resultText = projectToolResult(createPermissionBlockedResult(request, decision, approval), contextProjection);
+      const result = createPermissionBlockedResult(request, decision, approval);
+      const resultText = projectToolResult(result, contextProjection);
       transcript?.toolResult(round, resultText);
+      await traceRecorder.record({
+        callId: toolCall.call_id,
+        projectedOutput: resultText,
+        round,
+        status: result.status,
+        toolName: toolCall.name,
+        type: "tool_result",
+      });
       return resultText;
     }
   }
@@ -221,6 +319,14 @@ async function executeToolCall(
   const result = await toolRuntime.execute(request);
   const resultText = projectToolResult(result, contextProjection);
   transcript?.toolResult(round, resultText);
+  await traceRecorder.record({
+    callId: toolCall.call_id,
+    projectedOutput: resultText,
+    round,
+    status: result.status,
+    toolName: toolCall.name,
+    type: "tool_result",
+  });
   return resultText;
 }
 

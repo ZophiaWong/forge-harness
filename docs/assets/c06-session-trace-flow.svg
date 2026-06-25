@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">c06 Session Trace numbered code-data flow</title>
+  <desc id="desc">A four-step code-data-flow diagram for c06: 1. CLI creates session files; 2. Loop records events; 3. Recorder appends JSONL; 4. Reader inspects trace.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .step { fill: #ffffff; stroke: #334155; stroke-width: 2; }
+    .step1 { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .step2 { fill: #eef2ff; stroke: #4338ca; stroke-width: 2; }
+    .step3 { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+    .step4 { fill: #f8fafc; stroke: #475569; stroke-width: 2; }
+    .badge { fill: #0f172a; }
+    .badgeText { fill: #ffffff; font: 700 16px ui-sans-serif, system-ui, sans-serif; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 17px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: #334155; font: 14px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="560" />
+
+  <text class="title" x="56" y="54">c06: from CLI run to inspectable trace</text>
+  <text class="caption" x="56" y="82">The numbers match the implementation walkthrough in the tutorial.</text>
+
+  <rect class="step1" x="56" y="132" width="236" height="220" rx="8" />
+  <circle class="badge" cx="88" cy="166" r="18" />
+  <text class="badgeText" x="83" y="172">1</text>
+  <text class="label" x="116" y="172">CLI creates session files</text>
+  <text class="mono" x="84" y="216">createCliSessionTrace()</text>
+  <text class="mono" x="84" y="246">.forge/sessions/&lt;id&gt;/</text>
+  <text class="mono" x="104" y="278">session.json</text>
+  <text class="mono" x="104" y="306">trace.jsonl</text>
+
+  <rect class="step2" x="328" y="112" width="236" height="260" rx="8" />
+  <circle class="badge" cx="360" cy="146" r="18" />
+  <text class="badgeText" x="355" y="152">2</text>
+  <text class="label" x="388" y="152">Loop records events</text>
+  <text class="mono" x="358" y="198">session_started</text>
+  <text class="mono" x="358" y="226">model_request / response</text>
+  <text class="mono" x="358" y="254">tool_call</text>
+  <text class="mono" x="358" y="282">permission / approval</text>
+  <text class="mono" x="358" y="310">tool_result</text>
+  <text class="mono" x="358" y="338">final_answer / ended</text>
+
+  <rect class="step3" x="600" y="132" width="236" height="220" rx="8" />
+  <circle class="badge" cx="632" cy="166" r="18" />
+  <text class="badgeText" x="627" y="172">3</text>
+  <text class="label" x="660" y="164">Recorder appends</text>
+  <text class="label" x="660" y="188">JSONL</text>
+  <text class="mono" x="630" y="230">sessionId</text>
+  <text class="mono" x="630" y="260">sequence</text>
+  <text class="mono" x="630" y="290">timestamp</text>
+  <text class="mono" x="630" y="320">one object per line</text>
+
+  <rect class="step4" x="872" y="132" width="236" height="220" rx="8" />
+  <circle class="badge" cx="904" cy="166" r="18" />
+  <text class="badgeText" x="899" y="172">4</text>
+  <text class="label" x="932" y="164">Reader inspects</text>
+  <text class="label" x="932" y="188">trace</text>
+  <text class="mono" x="902" y="234">session.json</text>
+  <text class="mono" x="902" y="264">trace.jsonl</text>
+  <text class="mono" x="902" y="306">sed -n</text>
+
+  <path class="arrow" d="M292 242 H328" />
+  <path class="arrow" d="M564 242 H600" />
+  <path class="arrow" d="M836 242 H872" />
+
+  <text class="small" x="56" y="420">Happy path event shape:</text>
+  <text class="mono" x="56" y="452">session_started -> model_request/model_response -> tool_call/permission_decision/approval_result</text>
+  <text class="mono" x="56" y="480">-> tool_result(projectedOutput) -> final_answer/session_ended</text>
+  <text class="caption" x="56" y="520">Failure path: session_failed is recorded before session_ended(status=failed).</text>
+</svg>

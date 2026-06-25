@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formatFunctionCallTranscript, formatPermissionDecisionTranscript } from "../../src/cli/transcript.js";
+import {
+  formatFunctionCallTranscript,
+  formatPermissionDecisionTranscript,
+  formatSessionTranscript,
+} from "../../src/cli/transcript.js";
 
 describe("formatFunctionCallTranscript", () => {
   it("prints the model tool request as a function_call", () => {
@@ -19,5 +23,13 @@ describe("formatPermissionDecisionTranscript", () => {
         risk: "mutating",
       }),
     ).toBe("[round 2] permission: ask risk=mutating reason=bash command may modify files or external state");
+  });
+});
+
+describe("formatSessionTranscript", () => {
+  it("prints the session id and trace path", () => {
+    expect(formatSessionTranscript("20260625-160102-a1b2c3d4", ".forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl")).toBe(
+      "[session] id=20260625-160102-a1b2c3d4 trace=.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
+    );
   });
 });

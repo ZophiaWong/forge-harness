@@ -6,7 +6,7 @@ Instructions for coding agents working in this repository.
 
 Forge Harness is a tutorial-driven TypeScript project for building a coding agent harness from scratch.
 
-Current phase: `c04 Reviewable File Editing` is integrated. The repository now has the first four runnable TypeScript checkpoints.
+Current phase: `c06 Session / Trace` is integrated. The repository now has the first six runnable TypeScript checkpoints.
 
 Do not turn this repo into a full platform ahead of the course. Each chapter should add the smallest mechanism needed to solve the current problem.
 

@@ -11,3 +11,7 @@ export function formatFunctionCallTranscript(
 export function formatPermissionDecisionTranscript(round: number, decision: PermissionDecision): string {
   return `[round ${round}] permission: ${decision.action} risk=${decision.risk} reason=${decision.reason}`;
 }
+
+export function formatSessionTranscript(sessionId: string, tracePath: string): string {
+  return `[session] id=${sessionId} trace=${tracePath}`;
+}

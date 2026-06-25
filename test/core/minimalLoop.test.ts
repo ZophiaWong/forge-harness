@@ -19,6 +19,7 @@ vi.mock("openai", () => ({
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
+import type { TraceEventPayload, TraceRecorder } from "../../src/runtime/trace.js";
 import type { ToolRuntime } from "../../src/tools/types.js";
 
 function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[]): ResponseCreate {
@@ -67,6 +68,19 @@ function denyPolicy(reason = "test denies action"): PermissionPolicy {
 function approver(approved: boolean, reason?: string): PermissionApprover {
   return {
     approve: vi.fn(async () => (reason ? { approved, reason } : { approved })),
+  };
+}
+
+function createTraceRecorder(): { events: TraceEventPayload[]; recorder: TraceRecorder } {
+  const events: TraceEventPayload[] = [];
+
+  return {
+    events,
+    recorder: {
+      record: vi.fn(async (event) => {
+        events.push(event);
+      }),
+    },
   };
 }
 
@@ -131,6 +145,134 @@ describe("runMinimalLoop", () => {
     expect(transcript.finalAnswer).toHaveBeenCalledWith("done");
   });
 
+  it("records hybrid trace events for a completed tool run", async () => {
+    const rawArguments = JSON.stringify({ path: "package.json" });
+    const trace = createTraceRecorder();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "path: package.json\n1 | {}",
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [
+        {
+          type: "function",
+          name: "read",
+          description: "Read a file.",
+          strict: true,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              path: {
+                type: "string",
+              },
+            },
+            required: ["path"],
+          },
+        },
+      ],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: rawArguments,
+            call_id: "call_read",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      model: "test-model",
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "inspect",
+      toolRuntime,
+      traceRecorder: trace.recorder,
+    });
+
+    expect(trace.events).toEqual([
+      {
+        cwd: "/workspace/forge-harness",
+        maxToolRounds: 8,
+        model: "test-model",
+        task: "inspect",
+        type: "session_started",
+      },
+      {
+        inputItemCount: 1,
+        model: "test-model",
+        round: 1,
+        toolNames: ["read"],
+        type: "model_request",
+      },
+      {
+        functionCallCount: 1,
+        outputText: "",
+        round: 1,
+        type: "model_response",
+      },
+      {
+        argumentsText: rawArguments,
+        callId: "call_read",
+        round: 1,
+        toolName: "read",
+        type: "tool_call",
+      },
+      {
+        action: "allow",
+        callId: "call_read",
+        reason: "test allows action",
+        risk: "inspect",
+        round: 1,
+        toolName: "read",
+        type: "permission_decision",
+      },
+      {
+        callId: "call_read",
+        projectedOutput: "tool: read\nstatus: completed\nobservation: read completed\npath: package.json\n1 | {}",
+        round: 1,
+        status: "completed",
+        toolName: "read",
+        type: "tool_result",
+      },
+      {
+        inputItemCount: 3,
+        model: "test-model",
+        round: 2,
+        toolNames: ["read"],
+        type: "model_request",
+      },
+      {
+        functionCallCount: 0,
+        outputText: "done",
+        round: 2,
+        type: "model_response",
+      },
+      {
+        answer: "done",
+        round: 2,
+        type: "final_answer",
+      },
+      {
+        rounds: 2,
+        status: "completed",
+        type: "session_ended",
+      },
+    ]);
+  });
+
   it("checks permission before executing an allowed tool call", async () => {
     const rawArguments = JSON.stringify({ command: "pwd" });
     const permissionPolicy = allowPolicy();
@@ -180,6 +322,7 @@ describe("runMinimalLoop", () => {
   });
 
   it("feeds denied permission decisions back without executing the tool", async () => {
+    const trace = createTraceRecorder();
     const toolRuntime: ToolRuntime = {
       execute: vi.fn(),
       toolDefinitions: () => [],
@@ -209,9 +352,29 @@ describe("runMinimalLoop", () => {
       responseCreate,
       task: "remove dist",
       toolRuntime,
+      traceRecorder: trace.recorder,
     });
 
     expect(toolRuntime.execute).not.toHaveBeenCalled();
+    expect(trace.events).toContainEqual({
+      action: "deny",
+      callId: "call_deny",
+      reason: "destructive command is blocked",
+      risk: "destructive",
+      round: 1,
+      toolName: "bash",
+      type: "permission_decision",
+    });
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        callId: "call_deny",
+        projectedOutput: expect.stringContaining("permission_denied: true"),
+        round: 1,
+        status: "blocked",
+        toolName: "bash",
+        type: "tool_result",
+      }),
+    );
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({
         call_id: "call_deny",
@@ -270,6 +433,7 @@ describe("runMinimalLoop", () => {
 
   it("feeds rejected ask decisions back without executing the tool", async () => {
     const permissionApprover = approver(false, "approval rejected by user");
+    const trace = createTraceRecorder();
     const toolRuntime: ToolRuntime = {
       execute: vi.fn(),
       toolDefinitions: () => [],
@@ -300,9 +464,18 @@ describe("runMinimalLoop", () => {
       responseCreate,
       task: "create file",
       toolRuntime,
+      traceRecorder: trace.recorder,
     });
 
     expect(toolRuntime.execute).not.toHaveBeenCalled();
+    expect(trace.events).toContainEqual({
+      approved: false,
+      callId: "call_ask_no",
+      reason: "approval rejected by user",
+      round: 1,
+      toolName: "bash",
+      type: "approval_result",
+    });
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({
         call_id: "call_ask_no",
@@ -468,6 +641,15 @@ describe("runMinimalLoop", () => {
   });
 
   it("fails when tool calls exceed the configured round limit", async () => {
+    const trace = createTraceRecorder();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "stdout:\nstill-running",
+        status: "completed" as const,
+        toolName: "bash",
+      })),
+      toolDefinitions: () => [],
+    };
     const responseCreate = createResponseCreate(
       {
         output: [
@@ -498,10 +680,23 @@ describe("runMinimalLoop", () => {
         apiKey: "test-key",
         cwd: process.cwd(),
         maxToolRounds: 1,
+        permissionPolicy: allowPolicy(),
         responseCreate,
         task: "keep going",
+        toolRuntime,
+        traceRecorder: trace.recorder,
       }),
     ).rejects.toThrow("Minimal loop stopped after 1 tool rounds without a final answer.");
+
+    expect(trace.events).toContainEqual({
+      message: "Minimal loop stopped after 1 tool rounds without a final answer.",
+      type: "session_failed",
+    });
+    expect(trace.events).toContainEqual({
+      rounds: 1,
+      status: "failed",
+      type: "session_ended",
+    });
   });
 
   it("feeds blocked results back to the model for malformed tool arguments", async () => {
