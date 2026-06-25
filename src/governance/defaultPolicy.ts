@@ -26,7 +26,12 @@ export function createDefaultPermissionPolicy(): PermissionPolicy {
 }
 
 export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDecision {
-  if (toolCall.name === "read" || toolCall.name === "ls") {
+  if (
+    toolCall.name === "read" ||
+    toolCall.name === "ls" ||
+    toolCall.name === "grep" ||
+    toolCall.name === "find"
+  ) {
     return allow("inspect-only tool");
   }
 

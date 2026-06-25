@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 
+import { createToolObservation } from "../context/observation.js";
+import { createContextProjection, type ContextProjection } from "../context/projection.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import type {
   ApprovalResult,
@@ -8,7 +10,6 @@ import type {
   PermissionPolicy,
 } from "../governance/types.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
-import { formatToolResultForModel } from "../tools/result.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
@@ -17,7 +18,7 @@ export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 const SYSTEM_INSTRUCTIONS = [
   "You are running inside a minimal coding-agent loop.",
   "You may call tools to inspect the local project.",
-  "Prefer ls for directory listings and read for reading text files.",
+  "Prefer ls for directory listings, find for locating files, grep for searching text, and read for reading text files.",
   "Use edit for exact file text replacements and write for full-file create or overwrite operations.",
   "Use bash only when a shell command is needed.",
   "Use inspect-only commands unless the user explicitly asks for something else.",
@@ -83,6 +84,7 @@ export interface MinimalLoopOptions {
   apiKey?: string;
   approver?: PermissionApprover;
   baseURL?: string;
+  contextProjection?: ContextProjection;
   cwd: string;
   maxToolRounds?: number;
   model?: string;
@@ -107,6 +109,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const permissionPolicy = options.permissionPolicy ?? createDefaultPermissionPolicy();
   const approver = options.approver ?? createRejectingApprover();
   const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
+  const contextProjection = options.contextProjection ?? createContextProjection();
   const input: ResponseInputItem[] = [
     {
       role: "user",
@@ -149,6 +152,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
         toolRuntime,
         permissionPolicy,
         approver,
+        contextProjection,
         round,
         options.transcript,
       );
@@ -185,6 +189,7 @@ async function executeToolCall(
   toolRuntime: ToolRuntime,
   permissionPolicy: PermissionPolicy,
   approver: PermissionApprover,
+  contextProjection: ContextProjection,
   round: number,
   transcript: MinimalLoopTranscript | undefined,
 ): Promise<string> {
@@ -198,7 +203,7 @@ async function executeToolCall(
   transcript?.permissionDecision?.(round, decision);
 
   if (decision.action === "deny") {
-    const resultText = formatToolResultForModel(createPermissionBlockedResult(request, decision));
+    const resultText = projectToolResult(createPermissionBlockedResult(request, decision), contextProjection);
     transcript?.toolResult(round, resultText);
     return resultText;
   }
@@ -207,16 +212,20 @@ async function executeToolCall(
     const approval = await approver.approve({ decision, toolCall: request });
 
     if (!approval.approved) {
-      const resultText = formatToolResultForModel(createPermissionBlockedResult(request, decision, approval));
+      const resultText = projectToolResult(createPermissionBlockedResult(request, decision, approval), contextProjection);
       transcript?.toolResult(round, resultText);
       return resultText;
     }
   }
 
   const result = await toolRuntime.execute(request);
-  const resultText = formatToolResultForModel(result);
+  const resultText = projectToolResult(result, contextProjection);
   transcript?.toolResult(round, resultText);
   return resultText;
+}
+
+function projectToolResult(result: ToolResult, contextProjection: ContextProjection): string {
+  return contextProjection.projectObservation(createToolObservation(result));
 }
 
 function createPermissionBlockedResult(

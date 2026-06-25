@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { createDefaultToolRuntime } from "../../src/tools/defaultRuntime.js";
-import { formatToolResultForModel } from "../../src/tools/result.js";
 import { createToolRuntime } from "../../src/tools/runtime.js";
-import type { ToolDefinition, ToolHandler, ToolResult } from "../../src/tools/types.js";
+import type { ToolDefinition, ToolHandler } from "../../src/tools/types.js";
 
 const echoDefinition: ToolDefinition = {
   type: "function",
@@ -58,10 +57,18 @@ describe("createToolRuntime", () => {
 });
 
 describe("createDefaultToolRuntime", () => {
-  it("exposes bash, read, ls, edit, and write as built-in tool definitions", () => {
+  it("exposes bash, read, ls, grep, find, edit, and write as built-in tool definitions", () => {
     const runtime = createDefaultToolRuntime({ cwd: process.cwd() });
 
-    expect(runtime.toolDefinitions().map((tool) => tool.name)).toEqual(["bash", "read", "ls", "edit", "write"]);
+    expect(runtime.toolDefinitions().map((tool) => tool.name)).toEqual([
+      "bash",
+      "read",
+      "ls",
+      "grep",
+      "find",
+      "edit",
+      "write",
+    ]);
   });
 
   it("keeps ls non-strict because its path argument is optional", () => {
@@ -129,17 +136,5 @@ describe("createDefaultToolRuntime", () => {
       status: "failed",
       toolName: "read",
     });
-  });
-});
-
-describe("formatToolResultForModel", () => {
-  it("formats the unified result protocol for model feedback", () => {
-    const result: ToolResult = {
-      content: "hello",
-      status: "completed",
-      toolName: "read",
-    };
-
-    expect(formatToolResultForModel(result)).toBe("tool: read\nstatus: completed\nhello");
   });
 });

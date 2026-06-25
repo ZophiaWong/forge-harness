@@ -1,5 +1,7 @@
 import { createBashTool } from "./bashTool.js";
 import { createEditTool } from "./editTool.js";
+import { createFindTool } from "./findTool.js";
+import { createGrepTool } from "./grepTool.js";
 import { createLsTool } from "./lsTool.js";
 import { createReadTool } from "./readTool.js";
 import { createToolRuntime } from "./runtime.js";
@@ -15,6 +17,8 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
     createBashTool(options.cwd),
     createReadTool(options.cwd),
     createLsTool(options.cwd),
+    createGrepTool(options.cwd),
+    createFindTool(options.cwd),
     createEditTool(options.cwd),
     createWriteTool(options.cwd),
   ]);

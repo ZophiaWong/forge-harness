@@ -117,6 +117,12 @@ describe("runMinimalLoop", () => {
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({
         call_id: "call_1",
+        output: expect.stringContaining("observation: bash completed"),
+        type: "function_call_output",
+      }),
+    );
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
         output: expect.stringContaining("stdout:\nloop-ok"),
         type: "function_call_output",
       }),
@@ -372,7 +378,7 @@ describe("runMinimalLoop", () => {
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({
         call_id: "call_read",
-        output: "tool: read\nstatus: completed\npath: package.json\n1 | {}",
+        output: "tool: read\nstatus: completed\nobservation: read completed\npath: package.json\n1 | {}",
         type: "function_call_output",
       }),
     );

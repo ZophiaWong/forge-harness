@@ -12,12 +12,20 @@ function decide(name: string, args: unknown) {
 }
 
 describe("createDefaultPermissionPolicy", () => {
-  it("allows inspect-only file tools", () => {
+  it("allows inspect-only file and search tools", () => {
     expect(decide("read", { path: "package.json" })).toMatchObject({
       action: "allow",
       risk: "inspect",
     });
     expect(decide("ls", { path: "src" })).toMatchObject({
+      action: "allow",
+      risk: "inspect",
+    });
+    expect(decide("grep", { query: "Context Projection" })).toMatchObject({
+      action: "allow",
+      risk: "inspect",
+    });
+    expect(decide("find", { query: "c05" })).toMatchObject({
       action: "allow",
       risk: "inspect",
     });
