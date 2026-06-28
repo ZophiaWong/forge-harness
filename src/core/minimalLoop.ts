@@ -9,6 +9,7 @@ import type {
   PermissionDecision,
   PermissionPolicy,
 } from "../governance/types.js";
+import type { RuntimeState } from "../runtime/state.js";
 import { createNoopTraceRecorder, type TraceRecorder } from "../runtime/trace.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
@@ -75,8 +76,10 @@ export type ResponseCreate = (request: ResponseCreateRequest) => Promise<Minimal
 
 export interface MinimalLoopTranscript {
   finalAnswer(answer: string): void;
+  finalState?(state: RuntimeState): void;
   permissionDecision?(round: number, decision: PermissionDecision): void;
   roundStart(round: number, model: string): void;
+  roundState?(round: number, state: RuntimeState): void;
   toolCall(round: number, toolName: string, argumentsText: string): void;
   toolResult(round: number, resultText: string): void;
 }
@@ -91,6 +94,7 @@ export interface MinimalLoopOptions {
   model?: string;
   permissionPolicy?: PermissionPolicy;
   responseCreate?: ResponseCreate;
+  runtimeState?: () => RuntimeState;
   task: string;
   toolRuntime?: ToolRuntime;
   traceRecorder?: TraceRecorder;
@@ -183,6 +187,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           status: "completed",
           type: "session_ended",
         });
+        reportFinalState(options);
         return { finalAnswer, rounds: round };
       }
 
@@ -203,6 +208,8 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           output: resultText,
         });
       }
+
+      reportRoundState(options, round);
     }
 
     throw new Error(`Minimal loop stopped after ${maxToolRounds} tool rounds without a final answer.`);
@@ -218,6 +225,20 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       type: "session_ended",
     });
     throw error;
+  }
+}
+
+function reportRoundState(options: MinimalLoopOptions, round: number): void {
+  const runtimeState = options.runtimeState?.();
+  if (runtimeState) {
+    options.transcript?.roundState?.(round, runtimeState);
+  }
+}
+
+function reportFinalState(options: MinimalLoopOptions): void {
+  const runtimeState = options.runtimeState?.();
+  if (runtimeState) {
+    options.transcript?.finalState?.(runtimeState);
   }
 }
 

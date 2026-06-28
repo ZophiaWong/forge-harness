@@ -19,6 +19,7 @@ vi.mock("openai", () => ({
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
+import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
 import type { TraceEventPayload, TraceRecorder } from "../../src/runtime/trace.js";
 import type { ToolRuntime } from "../../src/tools/types.js";
 
@@ -271,6 +272,113 @@ describe("runMinimalLoop", () => {
         type: "session_ended",
       },
     ]);
+  });
+
+  it("reports runtime state after tool rounds and after final answer", async () => {
+    const trace = createTraceRecorder();
+    const statefulTrace = createRuntimeStateRecorder(trace.recorder);
+    const transcript = {
+      finalAnswer: vi.fn(),
+      finalState: vi.fn(),
+      roundStart: vi.fn(),
+      roundState: vi.fn(),
+      toolCall: vi.fn(),
+      toolResult: vi.fn(),
+    };
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "path: package.json\n1 | {}",
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "package.json" }),
+            call_id: "call_read",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      runtimeState: statefulTrace.getState,
+      task: "inspect",
+      toolRuntime,
+      traceRecorder: statefulTrace.recorder,
+      transcript,
+    });
+
+    expect(transcript.roundState).toHaveBeenCalledTimes(1);
+    expect(transcript.roundState).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        lastToolResult: expect.objectContaining({
+          status: "completed",
+          toolName: "read",
+        }),
+        status: "running",
+      }),
+    );
+    expect(transcript.finalState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finalAnswer: {
+          answer: "done",
+          round: 2,
+        },
+        rounds: 2,
+        status: "completed",
+      }),
+    );
+  });
+
+  it("does not report a round state when the model answers without tool calls", async () => {
+    const trace = createTraceRecorder();
+    const statefulTrace = createRuntimeStateRecorder(trace.recorder);
+    const transcript = {
+      finalAnswer: vi.fn(),
+      finalState: vi.fn(),
+      roundStart: vi.fn(),
+      roundState: vi.fn(),
+      toolCall: vi.fn(),
+      toolResult: vi.fn(),
+    };
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "done",
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      responseCreate,
+      runtimeState: statefulTrace.getState,
+      task: "answer directly",
+      traceRecorder: statefulTrace.recorder,
+      transcript,
+    });
+
+    expect(transcript.roundState).not.toHaveBeenCalled();
+    expect(transcript.finalState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rounds: 1,
+        status: "completed",
+      }),
+    );
   });
 
   it("checks permission before executing an allowed tool call", async () => {

@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   formatFunctionCallTranscript,
   formatPermissionDecisionTranscript,
+  formatRuntimeStateTranscript,
   formatSessionTranscript,
 } from "../../src/cli/transcript.js";
+import type { RuntimeState } from "../../src/runtime/state.js";
 
 describe("formatFunctionCallTranscript", () => {
   it("prints the model tool request as a function_call", () => {
@@ -31,5 +33,41 @@ describe("formatSessionTranscript", () => {
     expect(formatSessionTranscript("20260625-160102-a1b2c3d4", ".forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl")).toBe(
       "[session] id=20260625-160102-a1b2c3d4 trace=.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
     );
+  });
+});
+
+describe("formatRuntimeStateTranscript", () => {
+  it("prints a compact round state summary when a tool result exists", () => {
+    const state: RuntimeState = {
+      currentRound: 1,
+      ended: false,
+      lastToolResult: {
+        callId: "call_find",
+        projectedOutput: "tool: find\nstatus: completed",
+        round: 1,
+        status: "completed",
+        toolName: "find",
+      },
+      status: "running",
+    };
+
+    expect(formatRuntimeStateTranscript(state, 1)).toBe(
+      "[round 1] state: status=running lastTool=find lastToolStatus=completed",
+    );
+  });
+
+  it("prints a compact final state summary with rounds and problem kind when present", () => {
+    const state: RuntimeState = {
+      currentRound: 1,
+      ended: true,
+      lastProblem: {
+        kind: "session_failed",
+        message: "stopped without final answer",
+      },
+      rounds: 1,
+      status: "failed",
+    };
+
+    expect(formatRuntimeStateTranscript(state)).toBe("[state] status=failed rounds=1 problem=session_failed");
   });
 });
