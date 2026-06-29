@@ -1,5 +1,6 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ToolStatus } from "../tools/types.js";
+import type { VerificationStatus } from "./verification.js";
 
 export type SessionEndStatus = "completed" | "failed";
 
@@ -55,6 +56,27 @@ export type TraceEventPayload =
       toolName: string;
       status: ToolStatus;
       projectedOutput: string;
+    }
+  | {
+      type: "candidate_answer";
+      round: number;
+      answer: string;
+    }
+  | {
+      type: "verification_result";
+      round: number;
+      name: string;
+      status: VerificationStatus;
+      summary: string;
+      command?: string;
+      exitCode?: number | null;
+    }
+  | {
+      type: "recovery_attempt";
+      round: number;
+      attempt: number;
+      maxAttempts: number;
+      summary: string;
     }
   | {
       type: "final_answer";

@@ -196,6 +196,65 @@ describe("RuntimeState projection", () => {
       message: "Minimal loop stopped after 1 tool rounds without a final answer.",
     });
   });
+
+  it("projects candidate answers, verification results, and recovery attempts", () => {
+    const failedState = applyEvents([
+      {
+        answer: "first answer",
+        round: 1,
+        type: "candidate_answer",
+      },
+      {
+        command: "npm run build",
+        exitCode: 1,
+        name: "command",
+        round: 1,
+        status: "failed",
+        summary: "status: completed\ncommand: npm run build\nexit_code: 1",
+        type: "verification_result",
+      },
+      {
+        attempt: 1,
+        maxAttempts: 1,
+        round: 1,
+        summary: "status: completed\ncommand: npm run build\nexit_code: 1",
+        type: "recovery_attempt",
+      },
+    ]);
+
+    expect(failedState.candidateAnswer).toEqual({
+      answer: "first answer",
+      round: 1,
+    });
+    expect(failedState.lastVerificationResult).toEqual({
+      command: "npm run build",
+      exitCode: 1,
+      name: "command",
+      round: 1,
+      status: "failed",
+      summary: "status: completed\ncommand: npm run build\nexit_code: 1",
+    });
+    expect(failedState.lastProblem).toEqual({
+      kind: "verification_failed",
+      round: 1,
+      status: "failed",
+      summary: "status: completed\ncommand: npm run build\nexit_code: 1",
+    });
+    expect(failedState.recoveryAttempts).toBe(1);
+
+    const passedState = applyRuntimeStateEvent(failedState, {
+      command: "npm run build",
+      exitCode: 0,
+      name: "command",
+      round: 2,
+      status: "passed",
+      summary: "status: completed\ncommand: npm run build\nexit_code: 0",
+      type: "verification_result",
+    });
+
+    expect(passedState.lastVerificationResult?.status).toBe("passed");
+    expect(passedState.lastProblem).toBeUndefined();
+  });
 });
 
 describe("createRuntimeStateRecorder", () => {

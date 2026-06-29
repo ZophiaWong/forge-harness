@@ -63,7 +63,7 @@ sequenceDiagram
 | `src/tools/` | tool definition、dispatch、adapter、tool result。 | `c02`, `c04`, `c16` |
 | `src/governance/` | risk classification、permission decision、approval。 | `c03`, `c14`, `c16` |
 | `src/context/` | `Observation`、`ContextProjection`、prompt assembly、compaction。 | `c05`, `c11`, `c12` |
-| `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、workspace binding、replay。 | `c06`, `c07`, `c13`, `c14` |
+| `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、replay。 | `c06`, `c07`, `c08`, `c13`, `c14` |
 | `src/domain/` | shared runtime terms and protocols。 | 随实现逐步补齐 |
 | `src/extensions/` | hooks、skills、background runs、subagents、MCP、team protocols。 | `c09` 到 `c17` |
 

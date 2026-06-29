@@ -93,7 +93,7 @@ flowchart TB
 | [`c05` Context Projection](tutorial/c05-context-projection.md) | `L3` | raw history、tool output 和搜索结果会挤满下一轮 input。 | `grep` / `find` search tools、`Observation`、`ContextProjection`。 | 模型下一轮只看到被投影后的上下文。 |
 | [`c06` Session / Trace](tutorial/c06-session-trace.md) | `L4` | 运行结束后无法 inspect、resume 或 replay。 | `Session` metadata、JSONL `TraceEvent`。 | 每次 run 留下可检查 trace。 |
 | [`c07` Runtime State Model](tutorial/c07-runtime-state-model.md) | `L4` | Trace 记录过去，但 harness 还需要当前决策视图。 | `RuntimeState` projection。 | 当前任务、工具、错误和检查状态可读。 |
-| `c08` Verification / Recovery | `L4` | final answer 不等于任务完成。 | checks、failure summary、repair loop、retry limit。 | harness 完成前会验证，失败后能进入 repair。 |
+| [`c08` Verification / Recovery](tutorial/c08-verification-recovery.md) | `L4` | final answer 不等于任务完成。 | checks、failure summary、repair loop、retry limit。 | harness 完成前会验证，失败后能进入 repair。 |
 | `c09` Hooks | `L5 + L4` | 生命周期扩展点不该散落在 core loop。 | stable event points、hook runner。 | cross-cutting behavior 挂在 loop 外侧。 |
 | `c10` Task / Todo | `L5 + L4` | 复杂任务需要可见计划和 acceptance。 | task/todo state、status transition。 | 计划进入 trace、state 和 context projection。 |
 | `c11` System Prompt / Skills / Memory | `L3` | instruction 和项目知识不能每次手写进 prompt。 | prompt assembly、skills、memory notes。 | 上下文由 pipeline 组装。 |

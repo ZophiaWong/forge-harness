@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   formatFunctionCallTranscript,
   formatPermissionDecisionTranscript,
+  formatRecoveryTranscript,
   formatRuntimeStateTranscript,
   formatSessionTranscript,
+  formatVerificationTranscript,
 } from "../../src/cli/transcript.js";
 import type { RuntimeState } from "../../src/runtime/state.js";
+import type { VerificationResult } from "../../src/runtime/verification.js";
 
 describe("formatFunctionCallTranscript", () => {
   it("prints the model tool request as a function_call", () => {
@@ -33,6 +36,27 @@ describe("formatSessionTranscript", () => {
     expect(formatSessionTranscript("20260625-160102-a1b2c3d4", ".forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl")).toBe(
       "[session] id=20260625-160102-a1b2c3d4 trace=.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
     );
+  });
+});
+
+describe("formatVerificationTranscript", () => {
+  it("prints a compact verification result", () => {
+    const result: VerificationResult = {
+      command: "npm run build",
+      exitCode: 0,
+      name: "command",
+      recoverable: false,
+      status: "passed",
+      summary: "status: completed\ncommand: npm run build\nexit_code: 0",
+    };
+
+    expect(formatVerificationTranscript(result)).toBe('[verify] status=passed command="npm run build" exitCode=0');
+  });
+});
+
+describe("formatRecoveryTranscript", () => {
+  it("prints the recovery attempt count", () => {
+    expect(formatRecoveryTranscript(1, 1)).toBe("[recovery] attempt=1/1");
   });
 });
 
@@ -69,5 +93,27 @@ describe("formatRuntimeStateTranscript", () => {
     };
 
     expect(formatRuntimeStateTranscript(state)).toBe("[state] status=failed rounds=1 problem=session_failed");
+  });
+
+  it("prints verification and recovery fields when present", () => {
+    const state: RuntimeState = {
+      currentRound: 2,
+      ended: true,
+      lastVerificationResult: {
+        command: "npm run build",
+        exitCode: 0,
+        name: "command",
+        round: 2,
+        status: "passed",
+        summary: "status: completed\ncommand: npm run build\nexit_code: 0",
+      },
+      recoveryAttempts: 1,
+      rounds: 2,
+      status: "completed",
+    };
+
+    expect(formatRuntimeStateTranscript(state)).toBe(
+      "[state] status=completed rounds=2 verification=passed recoveryAttempts=1",
+    );
   });
 });

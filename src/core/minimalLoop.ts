@@ -11,11 +11,13 @@ import type {
 } from "../governance/types.js";
 import type { RuntimeState } from "../runtime/state.js";
 import { createNoopTraceRecorder, type TraceRecorder } from "../runtime/trace.js";
+import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
+export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 1;
 
 const SYSTEM_INSTRUCTIONS = [
   "You are running inside a minimal coding-agent loop.",
@@ -78,10 +80,12 @@ export interface MinimalLoopTranscript {
   finalAnswer(answer: string): void;
   finalState?(state: RuntimeState): void;
   permissionDecision?(round: number, decision: PermissionDecision): void;
+  recoveryAttempt?(round: number, attempt: number, maxAttempts: number, summary: string): void;
   roundStart(round: number, model: string): void;
   roundState?(round: number, state: RuntimeState): void;
   toolCall(round: number, toolName: string, argumentsText: string): void;
   toolResult(round: number, resultText: string): void;
+  verificationResult?(round: number, result: VerificationResult): void;
 }
 
 export interface MinimalLoopOptions {
@@ -90,6 +94,7 @@ export interface MinimalLoopOptions {
   baseURL?: string;
   contextProjection?: ContextProjection;
   cwd: string;
+  maxRecoveryAttempts?: number;
   maxToolRounds?: number;
   model?: string;
   permissionPolicy?: PermissionPolicy;
@@ -99,6 +104,7 @@ export interface MinimalLoopOptions {
   toolRuntime?: ToolRuntime;
   traceRecorder?: TraceRecorder;
   transcript?: MinimalLoopTranscript;
+  verifier?: Verifier;
 }
 
 export interface MinimalLoopResult {
@@ -110,6 +116,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   const baseURL = normalizeBaseURL(options.baseURL ?? process.env.OPENAI_BASE_URL);
   const model = options.model ?? process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
+  const maxRecoveryAttempts = options.maxRecoveryAttempts ?? DEFAULT_MAX_RECOVERY_ATTEMPTS;
   const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
   const permissionPolicy = options.permissionPolicy ?? createDefaultPermissionPolicy();
   const approver = options.approver ?? createRejectingApprover();
@@ -123,6 +130,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     },
   ];
   let lastRound = 0;
+  let recoveryAttempts = 0;
 
   try {
     await traceRecorder.record({
@@ -175,20 +183,77 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       });
 
       if (toolCalls.length === 0) {
-        const finalAnswer = response.output_text.trim();
-        options.transcript?.finalAnswer(finalAnswer);
+        const candidateAnswer = response.output_text.trim();
+
+        if (!options.verifier) {
+          options.transcript?.finalAnswer(candidateAnswer);
+          await traceRecorder.record({
+            answer: candidateAnswer,
+            round,
+            type: "final_answer",
+          });
+          await traceRecorder.record({
+            rounds: round,
+            status: "completed",
+            type: "session_ended",
+          });
+          reportFinalState(options);
+          return { finalAnswer: candidateAnswer, rounds: round };
+        }
+
         await traceRecorder.record({
-          answer: finalAnswer,
+          answer: candidateAnswer,
           round,
-          type: "final_answer",
+          type: "candidate_answer",
         });
+
+        const verification = await options.verifier.verify({
+          candidateAnswer,
+          cwd: options.cwd,
+          round,
+          task: options.task,
+        });
+        options.transcript?.verificationResult?.(round, verification);
+        await recordVerificationResult(traceRecorder, round, verification);
+
+        if (verification.status === "passed") {
+          options.transcript?.finalAnswer(candidateAnswer);
+          await traceRecorder.record({
+            answer: candidateAnswer,
+            round,
+            type: "final_answer",
+          });
+          await traceRecorder.record({
+            rounds: round,
+            status: "completed",
+            type: "session_ended",
+          });
+          reportFinalState(options);
+          return { finalAnswer: candidateAnswer, rounds: round };
+        }
+
+        if (!verification.recoverable) {
+          throw new Error(`Verification ${verification.status}.`);
+        }
+
+        if (recoveryAttempts >= maxRecoveryAttempts) {
+          throw new Error(formatRecoveryLimitError(maxRecoveryAttempts));
+        }
+
+        recoveryAttempts += 1;
         await traceRecorder.record({
-          rounds: round,
-          status: "completed",
-          type: "session_ended",
+          attempt: recoveryAttempts,
+          maxAttempts: maxRecoveryAttempts,
+          round,
+          summary: verification.summary,
+          type: "recovery_attempt",
         });
-        reportFinalState(options);
-        return { finalAnswer, rounds: round };
+        options.transcript?.recoveryAttempt?.(round, recoveryAttempts, maxRecoveryAttempts, verification.summary);
+        input.push({
+          role: "user",
+          content: formatRecoveryUserMessage(verification),
+        });
+        continue;
       }
 
       for (const toolCall of toolCalls) {
@@ -226,6 +291,37 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     });
     throw error;
   }
+}
+
+async function recordVerificationResult(
+  traceRecorder: TraceRecorder,
+  round: number,
+  result: VerificationResult,
+): Promise<void> {
+  await traceRecorder.record({
+    ...(result.command !== undefined ? { command: result.command } : {}),
+    ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+    name: result.name,
+    round,
+    status: result.status,
+    summary: result.summary,
+    type: "verification_result",
+  });
+}
+
+function formatRecoveryUserMessage(result: VerificationResult): string {
+  return [
+    "Verification failed for the previous candidate answer.",
+    "",
+    result.summary,
+    "",
+    "Continue fixing the task. Use tools if needed, then provide a new final answer.",
+  ].join("\n");
+}
+
+function formatRecoveryLimitError(maxRecoveryAttempts: number): string {
+  const suffix = maxRecoveryAttempts === 1 ? "attempt" : "attempts";
+  return `Verification failed after ${maxRecoveryAttempts} recovery ${suffix}.`;
 }
 
 function reportRoundState(options: MinimalLoopOptions, round: number): void {

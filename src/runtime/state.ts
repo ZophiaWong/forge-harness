@@ -1,6 +1,7 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { SessionEndStatus, TraceEventPayload, TraceRecorder } from "./trace.js";
+import type { VerificationStatus } from "./verification.js";
 
 export type RuntimeStatus = "idle" | "running" | "completed" | "failed";
 
@@ -54,6 +55,20 @@ export interface RuntimeFinalAnswerState {
   round: number;
 }
 
+export interface RuntimeCandidateAnswerState {
+  answer: string;
+  round: number;
+}
+
+export interface RuntimeVerificationResultState {
+  command?: string;
+  exitCode?: number | null;
+  name: string;
+  round: number;
+  status: VerificationStatus;
+  summary: string;
+}
+
 export type RuntimeProblem =
   | {
       kind: "tool_result";
@@ -65,9 +80,16 @@ export type RuntimeProblem =
   | {
       kind: "session_failed";
       message: string;
+    }
+  | {
+      kind: "verification_failed";
+      round: number;
+      status: Exclude<VerificationStatus, "passed">;
+      summary: string;
     };
 
 export interface RuntimeState {
+  candidateAnswer?: RuntimeCandidateAnswerState;
   currentRound: number;
   cwd?: string;
   ended: boolean;
@@ -79,8 +101,10 @@ export interface RuntimeState {
   lastProblem?: RuntimeProblem;
   lastToolCall?: RuntimeToolCallState;
   lastToolResult?: RuntimeToolResultState;
+  lastVerificationResult?: RuntimeVerificationResultState;
   maxToolRounds?: number;
   model?: string;
+  recoveryAttempts?: number;
   rounds?: number;
   status: RuntimeStatus;
   task?: string;
@@ -182,6 +206,35 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           toolName: event.toolName,
         },
       };
+    case "candidate_answer":
+      return {
+        ...state,
+        candidateAnswer: {
+          answer: event.answer,
+          round: event.round,
+        },
+        currentRound: event.round,
+      };
+    case "verification_result":
+      return {
+        ...state,
+        currentRound: event.round,
+        lastProblem: createVerificationProblem(event),
+        lastVerificationResult: {
+          ...(event.command !== undefined ? { command: event.command } : {}),
+          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+          name: event.name,
+          round: event.round,
+          status: event.status,
+          summary: event.summary,
+        },
+      };
+    case "recovery_attempt":
+      return {
+        ...state,
+        currentRound: event.round,
+        recoveryAttempts: event.attempt,
+      };
     case "final_answer":
       return {
         ...state,
@@ -223,6 +276,21 @@ export function createRuntimeStateRecorder(delegate: TraceRecorder): RuntimeStat
         await delegate.record(event);
       },
     },
+  };
+}
+
+function createVerificationProblem(
+  event: Extract<TraceEventPayload, { type: "verification_result" }>,
+): RuntimeProblem | undefined {
+  if (event.status === "passed") {
+    return undefined;
+  }
+
+  return {
+    kind: "verification_failed",
+    round: event.round,
+    status: event.status,
+    summary: event.summary,
   };
 }
 

@@ -21,6 +21,7 @@ import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
 import type { TraceEventPayload, TraceRecorder } from "../../src/runtime/trace.js";
+import type { VerificationResult, Verifier } from "../../src/runtime/verification.js";
 import type { ToolRuntime } from "../../src/tools/types.js";
 
 function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[]): ResponseCreate {
@@ -82,6 +83,32 @@ function createTraceRecorder(): { events: TraceEventPayload[]; recorder: TraceRe
         events.push(event);
       }),
     },
+  };
+}
+
+function verificationResult(overrides: Partial<VerificationResult>): VerificationResult {
+  return {
+    command: "npm run build",
+    exitCode: 0,
+    name: "command",
+    recoverable: false,
+    status: "passed",
+    summary: "status: completed\ncommand: npm run build\nexit_code: 0",
+    ...overrides,
+  };
+}
+
+function verifierWithResults(...results: VerificationResult[]): Verifier {
+  return {
+    verify: vi.fn(async () => {
+      const result = results.shift();
+
+      if (!result) {
+        throw new Error("unexpected verifier call");
+      }
+
+      return result;
+    }),
   };
 }
 
@@ -746,6 +773,188 @@ describe("runMinimalLoop", () => {
 
     expect(result).toEqual({ finalAnswer: "final response", rounds: 1 });
     expect(callsFor(responseCreate)).toHaveLength(1);
+  });
+
+  it("verifies a candidate answer before recording the final answer", async () => {
+    const trace = createTraceRecorder();
+    const verifier = verifierWithResults(verificationResult({}));
+    const transcript = {
+      finalAnswer: vi.fn(),
+      roundStart: vi.fn(),
+      toolCall: vi.fn(),
+      toolResult: vi.fn(),
+      verificationResult: vi.fn(),
+    };
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "done",
+    });
+
+    const result = await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      responseCreate,
+      task: "answer directly",
+      traceRecorder: trace.recorder,
+      transcript,
+      verifier,
+    });
+
+    expect(result).toEqual({ finalAnswer: "done", rounds: 1 });
+    expect(verifier.verify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateAnswer: "done",
+        cwd: "/workspace/forge-harness",
+        round: 1,
+        task: "answer directly",
+      }),
+    );
+    expect(transcript.verificationResult).toHaveBeenCalledWith(1, verificationResult({}));
+    expect(transcript.finalAnswer).toHaveBeenCalledWith("done");
+    expect(trace.events.map((event) => event.type)).toEqual([
+      "session_started",
+      "model_request",
+      "model_response",
+      "candidate_answer",
+      "verification_result",
+      "final_answer",
+      "session_ended",
+    ]);
+  });
+
+  it("feeds a recoverable verification failure back into the next model round", async () => {
+    const trace = createTraceRecorder();
+    const failed = verificationResult({
+      exitCode: 1,
+      recoverable: true,
+      status: "failed",
+      summary: "status: completed\ncommand: npm run build\nexit_code: 1\nstderr:\ncompile failed",
+    });
+    const passed = verificationResult({});
+    const verifier = verifierWithResults(failed, passed);
+    const transcript = {
+      finalAnswer: vi.fn(),
+      recoveryAttempt: vi.fn(),
+      roundStart: vi.fn(),
+      toolCall: vi.fn(),
+      toolResult: vi.fn(),
+      verificationResult: vi.fn(),
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [],
+        output_text: "first answer",
+      },
+      {
+        output: [],
+        output_text: "fixed answer",
+      },
+    );
+
+    const result = await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      responseCreate,
+      task: "fix the build",
+      traceRecorder: trace.recorder,
+      transcript,
+      verifier,
+    });
+
+    expect(result).toEqual({ finalAnswer: "fixed answer", rounds: 2 });
+    expect(callsFor(responseCreate)).toHaveLength(2);
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual({
+      role: "user",
+      content: expect.stringContaining("Verification failed for the previous candidate answer."),
+    });
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        content: expect.stringContaining("stderr:\ncompile failed"),
+      }),
+    );
+    expect(transcript.recoveryAttempt).toHaveBeenCalledWith(1, 1, 1, failed.summary);
+    expect(transcript.finalAnswer).toHaveBeenCalledWith("fixed answer");
+    expect(trace.events).toContainEqual({
+      attempt: 1,
+      maxAttempts: 1,
+      round: 1,
+      summary: failed.summary,
+      type: "recovery_attempt",
+    });
+  });
+
+  it("fails after the recovery retry limit is exhausted", async () => {
+    const trace = createTraceRecorder();
+    const failed = verificationResult({
+      exitCode: 1,
+      recoverable: true,
+      status: "failed",
+      summary: "status: completed\ncommand: npm run build\nexit_code: 1",
+    });
+    const verifier = verifierWithResults(failed, failed);
+    const responseCreate = createResponseCreate(
+      {
+        output: [],
+        output_text: "first answer",
+      },
+      {
+        output: [],
+        output_text: "second answer",
+      },
+    );
+
+    await expect(
+      runMinimalLoop({
+        apiKey: "test-key",
+        cwd: "/workspace/forge-harness",
+        responseCreate,
+        task: "fix the build",
+        traceRecorder: trace.recorder,
+        verifier,
+      }),
+    ).rejects.toThrow("Verification failed after 1 recovery attempt.");
+
+    expect(trace.events).toContainEqual({
+      message: "Verification failed after 1 recovery attempt.",
+      type: "session_failed",
+    });
+    expect(trace.events).toContainEqual({
+      rounds: 2,
+      status: "failed",
+      type: "session_ended",
+    });
+  });
+
+  it("fails immediately when verification is blocked", async () => {
+    const trace = createTraceRecorder();
+    const blocked = verificationResult({
+      exitCode: null,
+      recoverable: false,
+      status: "blocked",
+      summary: "status: blocked\ncommand: sudo whoami\nblocked_reason: sudo is blocked",
+    });
+    const verifier = verifierWithResults(blocked);
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "done",
+    });
+
+    await expect(
+      runMinimalLoop({
+        apiKey: "test-key",
+        cwd: "/workspace/forge-harness",
+        responseCreate,
+        task: "run blocked verification",
+        traceRecorder: trace.recorder,
+        verifier,
+      }),
+    ).rejects.toThrow("Verification blocked.");
+
+    expect(trace.events).not.toContainEqual(expect.objectContaining({ type: "recovery_attempt" }));
+    expect(trace.events).toContainEqual({
+      message: "Verification blocked.",
+      type: "session_failed",
+    });
   });
 
   it("fails when tool calls exceed the configured round limit", async () => {
