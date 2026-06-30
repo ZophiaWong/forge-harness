@@ -18,6 +18,7 @@ vi.mock("openai", () => ({
 }));
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
+import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
 import type { TraceEventPayload, TraceRecorder } from "../../src/runtime/trace.js";
@@ -227,7 +228,7 @@ describe("runMinimalLoop", () => {
       responseCreate,
       task: "inspect",
       toolRuntime,
-      traceRecorder: trace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
     });
 
     expect(trace.events).toEqual([
@@ -346,7 +347,7 @@ describe("runMinimalLoop", () => {
       runtimeState: statefulTrace.getState,
       task: "inspect",
       toolRuntime,
-      traceRecorder: statefulTrace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
       transcript,
     });
 
@@ -395,7 +396,7 @@ describe("runMinimalLoop", () => {
       responseCreate,
       runtimeState: statefulTrace.getState,
       task: "answer directly",
-      traceRecorder: statefulTrace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
       transcript,
     });
 
@@ -487,7 +488,7 @@ describe("runMinimalLoop", () => {
       responseCreate,
       task: "remove dist",
       toolRuntime,
-      traceRecorder: trace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
     });
 
     expect(toolRuntime.execute).not.toHaveBeenCalled();
@@ -599,7 +600,7 @@ describe("runMinimalLoop", () => {
       responseCreate,
       task: "create file",
       toolRuntime,
-      traceRecorder: trace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
     });
 
     expect(toolRuntime.execute).not.toHaveBeenCalled();
@@ -795,7 +796,7 @@ describe("runMinimalLoop", () => {
       cwd: "/workspace/forge-harness",
       responseCreate,
       task: "answer directly",
-      traceRecorder: trace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
       transcript,
       verifier,
     });
@@ -856,7 +857,7 @@ describe("runMinimalLoop", () => {
       cwd: "/workspace/forge-harness",
       responseCreate,
       task: "fix the build",
-      traceRecorder: trace.recorder,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
       transcript,
       verifier,
     });
@@ -909,7 +910,7 @@ describe("runMinimalLoop", () => {
         cwd: "/workspace/forge-harness",
         responseCreate,
         task: "fix the build",
-        traceRecorder: trace.recorder,
+        lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
         verifier,
       }),
     ).rejects.toThrow("Verification failed after 1 recovery attempt.");
@@ -945,7 +946,7 @@ describe("runMinimalLoop", () => {
         cwd: "/workspace/forge-harness",
         responseCreate,
         task: "run blocked verification",
-        traceRecorder: trace.recorder,
+        lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
         verifier,
       }),
     ).rejects.toThrow("Verification blocked.");
@@ -1001,7 +1002,7 @@ describe("runMinimalLoop", () => {
         responseCreate,
         task: "keep going",
         toolRuntime,
-        traceRecorder: trace.recorder,
+        lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
       }),
     ).rejects.toThrow("Minimal loop stopped after 1 tool rounds without a final answer.");
 

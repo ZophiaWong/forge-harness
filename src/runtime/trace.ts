@@ -3,6 +3,7 @@ import type { ToolStatus } from "../tools/types.js";
 import type { VerificationStatus } from "./verification.js";
 
 export type SessionEndStatus = "completed" | "failed";
+export type HookResultStatus = "completed" | "failed";
 
 export type TraceEventPayload =
   | {
@@ -91,6 +92,14 @@ export type TraceEventPayload =
       type: "session_ended";
       status: SessionEndStatus;
       rounds: number;
+    }
+  | {
+      type: "hook_result";
+      hookName: string;
+      sourceEventType: string;
+      status: HookResultStatus;
+      round?: number;
+      error?: string;
     };
 
 export type RecordedTraceEvent = TraceEventPayload & {

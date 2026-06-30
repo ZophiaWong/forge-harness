@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">c09 Lifecycle Hooks event fan-out flow</title>
+  <desc id="desc">A code-data-flow diagram for c09: core loop emits one lifecycle event, LifecycleEmitter records it to trace and state, then runs observe-only hooks, and hook_result returns to trace.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .core { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .emitter { fill: #eef2ff; stroke: #4338ca; stroke-width: 2; }
+    .sink { fill: #f8fafc; stroke: #475569; stroke-width: 2; }
+    .hook { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+    .badge { fill: #0f172a; }
+    .badgeText { fill: #ffffff; font: 700 16px ui-sans-serif, system-ui, sans-serif; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 17px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: #334155; font: 14px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .return { stroke: #c2410c; stroke-width: 2.5; fill: none; marker-end: url(#arrowOrange); stroke-dasharray: 7 6; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#c2410c" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="560" />
+
+  <text class="title" x="56" y="54">c09: one lifecycle event, several consumers</text>
+  <text class="caption" x="56" y="82">The core loop emits facts. Trace, state, and hooks consume those facts outside the loop.</text>
+
+  <rect class="core" x="56" y="160" width="230" height="190" rx="8" />
+  <circle class="badge" cx="88" cy="194" r="18" />
+  <text class="badgeText" x="83" y="200">1</text>
+  <text class="label" x="116" y="192">Core loop</text>
+  <text class="mono" x="86" y="238">emit(event)</text>
+  <text class="mono" x="86" y="268">verification_result</text>
+  <text class="mono" x="86" y="298">tool_result</text>
+  <text class="mono" x="86" y="328">session_ended</text>
+
+  <rect class="emitter" x="348" y="136" width="244" height="238" rx="8" />
+  <circle class="badge" cx="380" cy="170" r="18" />
+  <text class="badgeText" x="375" y="176">2</text>
+  <text class="label" x="408" y="168">LifecycleEmitter</text>
+  <text class="mono" x="378" y="214">record original event</text>
+  <text class="mono" x="378" y="246">run matching hooks</text>
+  <text class="mono" x="378" y="278">catch hook errors</text>
+  <text class="mono" x="378" y="310">record hook_result</text>
+  <text class="caption" x="378" y="342">hook_result is not hookable</text>
+
+  <rect class="sink" x="682" y="112" width="180" height="118" rx="8" />
+  <text class="label" x="714" y="150">Trace</text>
+  <text class="mono" x="712" y="184">trace.jsonl</text>
+  <text class="caption" x="712" y="210">history evidence</text>
+
+  <rect class="sink" x="682" y="252" width="180" height="118" rx="8" />
+  <text class="label" x="714" y="290">RuntimeState</text>
+  <text class="mono" x="712" y="324">current view</text>
+  <text class="caption" x="712" y="350">ignores hook_result</text>
+
+  <rect class="hook" x="906" y="182" width="180" height="158" rx="8" />
+  <text class="label" x="938" y="220">Hooks</text>
+  <text class="mono" x="936" y="254">event-log</text>
+  <text class="mono" x="936" y="284">metrics</text>
+  <text class="mono" x="936" y="314">notification</text>
+
+  <path class="arrow" d="M286 255 H348" />
+  <path class="arrow" d="M592 206 C622 166 642 156 682 158" />
+  <path class="arrow" d="M592 286 C624 318 642 322 682 318" />
+  <path class="arrow" d="M592 242 H906" />
+  <path class="return" d="M996 340 C996 438 756 448 590 340" />
+
+  <text class="small" x="56" y="430">Transcript demo:</text>
+  <text class="mono" x="56" y="462">[hook] event=verification_result round=1 status=passed</text>
+  <text class="mono" x="56" y="492">[hook] event=final_answer round=1</text>
+  <text class="caption" x="56" y="524">Hooks observe events. They do not block tools, edit prompts, or change recovery decisions in c09.</text>
+</svg>

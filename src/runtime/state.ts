@@ -260,6 +260,8 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
         rounds: event.rounds,
         status: toRuntimeStatus(event.status),
       };
+    case "hook_result":
+      return state;
   }
 }
 

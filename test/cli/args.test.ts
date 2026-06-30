@@ -20,6 +20,18 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("parses --hook-log without changing the task text", () => {
+    expect(parseCliArgs(["--hook-log", "--verify", "npm run build", "fix", "the", "build"])).toEqual({
+      hookLog: true,
+      task: "fix the build",
+      verifyCommand: "npm run build",
+    });
+    expect(parseCliArgs(["inspect", "--hook-log", "this", "project"])).toEqual({
+      hookLog: true,
+      task: "inspect this project",
+    });
+  });
+
   it("returns an error when --verify has no command", () => {
     expect(parseCliArgs(["inspect", "--verify"])).toEqual({
       error: "--verify requires a command.",
@@ -43,5 +55,8 @@ describe("usageText", () => {
   it("shows the build-first start command", () => {
     expect(usageText("forge-harness")).toContain('forge-harness "inspect this project"');
     expect(usageText("forge-harness")).toContain('forge-harness --verify "npm run build" "fix the build"');
+    expect(usageText("forge-harness")).toContain(
+      'forge-harness --hook-log --verify "npm run build" "fix the build"',
+    );
   });
 });

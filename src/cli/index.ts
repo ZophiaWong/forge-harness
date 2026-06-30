@@ -7,6 +7,7 @@ import { createCliApprover } from "./approval.js";
 import { parseCliArgs, usageText } from "./args.js";
 import {
   formatFunctionCallTranscript,
+  formatHookLogTranscript,
   formatPermissionDecisionTranscript,
   formatRecoveryTranscript,
   formatRuntimeStateTranscript,
@@ -14,6 +15,7 @@ import {
   formatVerificationTranscript,
 } from "./transcript.js";
 import { DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MODEL, runMinimalLoop } from "../core/minimalLoop.js";
+import { createLifecycleEmitter, type LifecycleHook } from "../extensions/lifecycle.js";
 import { createCliSessionTrace } from "../runtime/session.js";
 import { createRuntimeStateRecorder, type RuntimeState } from "../runtime/state.js";
 import { createCommandVerifier } from "../runtime/verification.js";
@@ -42,6 +44,21 @@ if (cliArgs.error) {
       task,
     });
     const runtimeStateTrace = createRuntimeStateRecorder(sessionTrace.recorder);
+    const hooks: LifecycleHook[] = cliArgs.hookLog
+      ? [
+          {
+            name: "event-log",
+            handle(event) {
+              console.log(formatHookLogTranscript(event));
+            },
+          },
+        ]
+      : [];
+    const lifecycleEmitter = createLifecycleEmitter({
+      hookResultRecorder: sessionTrace.recorder,
+      hooks,
+      recorder: runtimeStateTrace.recorder,
+    });
     getRuntimeState = runtimeStateTrace.getState;
     const displayTracePath = path.relative(cwd, sessionTrace.paths.tracePath);
     const verifier = cliArgs.verifyCommand
@@ -56,11 +73,11 @@ if (cliArgs.error) {
     await runMinimalLoop({
       approver: createCliApprover(),
       cwd,
+      lifecycleEmitter,
       maxToolRounds,
       model,
       runtimeState: runtimeStateTrace.getState,
       task,
-      traceRecorder: runtimeStateTrace.recorder,
       transcript: {
         roundStart(round, modelName) {
           console.log(`\n[round ${round}] model=${modelName}`);

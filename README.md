@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the first eight runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, and `c08 Verification / Recovery`.
+This branch contains the documentation baseline plus the first nine runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, and `c09 Hooks`.
 
 ## Setup
 
@@ -44,6 +44,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c06 Session / Trace](docs/tutorial/c06-session-trace.md): local session metadata and JSONL trace events for each run.
 - [c07 Runtime State Model](docs/tutorial/c07-runtime-state-model.md): in-memory `RuntimeState` projection for the current run.
 - [c08 Verification / Recovery](docs/tutorial/c08-verification-recovery.md): deterministic checks before final answer, with one recovery attempt on failure.
+- [c09 Hooks](docs/tutorial/c09-hooks.md): lifecycle event emitter and observe-only hooks for cross-cutting behavior.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

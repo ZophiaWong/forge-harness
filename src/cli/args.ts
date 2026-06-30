@@ -1,11 +1,13 @@
 export interface ParsedCliArgs {
   error?: string;
+  hookLog?: boolean;
   task?: string;
   verifyCommand?: string;
 }
 
 export function parseCliArgs(args: string[]): ParsedCliArgs {
   const taskParts: string[] = [];
+  let hookLog = false;
   let verifyCommand: string | undefined;
   let error: string | undefined;
 
@@ -25,11 +27,17 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
       continue;
     }
 
+    if (arg === "--hook-log") {
+      hookLog = true;
+      continue;
+    }
+
     taskParts.push(arg);
   }
 
   return {
     ...(error ? { error } : {}),
+    ...(hookLog ? { hookLog } : {}),
     ...joinTask(taskParts),
     ...(verifyCommand ? { verifyCommand } : {}),
   };
@@ -44,6 +52,7 @@ export function usageText(binaryName: string): string {
     "Usage:",
     `  ${binaryName} "inspect this project"`,
     `  ${binaryName} --verify "npm run build" "fix the build"`,
+    `  ${binaryName} --hook-log --verify "npm run build" "fix the build"`,
     "",
     "Example:",
     `  ${binaryName} "inspect this project scaffold and summarize what is implemented"`,

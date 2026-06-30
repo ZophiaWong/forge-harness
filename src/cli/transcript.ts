@@ -1,3 +1,4 @@
+import type { HookableTraceEvent } from "../extensions/lifecycle.js";
 import type { PermissionDecision } from "../governance/types.js";
 import type { RuntimeState } from "../runtime/state.js";
 import type { VerificationResult } from "../runtime/verification.js";
@@ -34,6 +35,20 @@ export function formatVerificationTranscript(result: VerificationResult): string
 
 export function formatRecoveryTranscript(attempt: number, maxAttempts: number): string {
   return `[recovery] attempt=${attempt}/${maxAttempts}`;
+}
+
+export function formatHookLogTranscript(event: HookableTraceEvent): string {
+  const parts = [`event=${event.type}`];
+
+  if ("round" in event && typeof event.round === "number") {
+    parts.push(`round=${event.round}`);
+  }
+
+  if ("status" in event) {
+    parts.push(`status=${event.status}`);
+  }
+
+  return `[hook] ${parts.join(" ")}`;
 }
 
 export function formatRuntimeStateTranscript(state: RuntimeState, round?: number): string {

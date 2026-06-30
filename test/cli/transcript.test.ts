@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatFunctionCallTranscript,
+  formatHookLogTranscript,
   formatPermissionDecisionTranscript,
   formatRecoveryTranscript,
   formatRuntimeStateTranscript,
@@ -57,6 +58,22 @@ describe("formatVerificationTranscript", () => {
 describe("formatRecoveryTranscript", () => {
   it("prints the recovery attempt count", () => {
     expect(formatRecoveryTranscript(1, 1)).toBe("[recovery] attempt=1/1");
+  });
+});
+
+describe("formatHookLogTranscript", () => {
+  it("prints compact hook event summaries without payload text", () => {
+    expect(
+      formatHookLogTranscript({
+        command: "npm run build",
+        exitCode: 0,
+        name: "command",
+        round: 1,
+        status: "passed",
+        summary: "very long verification output that should not be printed",
+        type: "verification_result",
+      }),
+    ).toBe("[hook] event=verification_result round=1 status=passed");
   });
 });
 

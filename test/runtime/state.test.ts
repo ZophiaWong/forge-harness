@@ -255,6 +255,34 @@ describe("RuntimeState projection", () => {
     expect(passedState.lastVerificationResult?.status).toBe("passed");
     expect(passedState.lastProblem).toBeUndefined();
   });
+
+  it("ignores hook results in the current runtime state", () => {
+    const baseState = applyEvents([
+      {
+        cwd: "/workspace/forge-harness",
+        maxToolRounds: 8,
+        model: "gpt-5.4-mini",
+        task: "inspect docs",
+        type: "session_started",
+      },
+      {
+        answer: "done",
+        round: 1,
+        type: "final_answer",
+      },
+    ]);
+
+    const state = applyRuntimeStateEvent(baseState, {
+      error: "hook exploded",
+      hookName: "event-log",
+      round: 1,
+      sourceEventType: "final_answer",
+      status: "failed",
+      type: "hook_result",
+    });
+
+    expect(state).toEqual(baseState);
+  });
 });
 
 describe("createRuntimeStateRecorder", () => {

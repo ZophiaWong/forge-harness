@@ -2,6 +2,7 @@ import OpenAI from "openai";
 
 import { createToolObservation } from "../context/observation.js";
 import { createContextProjection, type ContextProjection } from "../context/projection.js";
+import { createLifecycleEmitter, type LifecycleEmitter } from "../extensions/lifecycle.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import type {
   ApprovalResult,
@@ -10,7 +11,7 @@ import type {
   PermissionPolicy,
 } from "../governance/types.js";
 import type { RuntimeState } from "../runtime/state.js";
-import { createNoopTraceRecorder, type TraceRecorder } from "../runtime/trace.js";
+import { createNoopTraceRecorder } from "../runtime/trace.js";
 import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
@@ -94,6 +95,7 @@ export interface MinimalLoopOptions {
   baseURL?: string;
   contextProjection?: ContextProjection;
   cwd: string;
+  lifecycleEmitter?: LifecycleEmitter;
   maxRecoveryAttempts?: number;
   maxToolRounds?: number;
   model?: string;
@@ -102,7 +104,6 @@ export interface MinimalLoopOptions {
   runtimeState?: () => RuntimeState;
   task: string;
   toolRuntime?: ToolRuntime;
-  traceRecorder?: TraceRecorder;
   transcript?: MinimalLoopTranscript;
   verifier?: Verifier;
 }
@@ -122,7 +123,11 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const approver = options.approver ?? createRejectingApprover();
   const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
   const contextProjection = options.contextProjection ?? createContextProjection();
-  const traceRecorder = options.traceRecorder ?? createNoopTraceRecorder();
+  const lifecycleEmitter =
+    options.lifecycleEmitter ??
+    createLifecycleEmitter({
+      recorder: createNoopTraceRecorder(),
+    });
   const input: ResponseInputItem[] = [
     {
       role: "user",
@@ -133,7 +138,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   let recoveryAttempts = 0;
 
   try {
-    await traceRecorder.record({
+    await lifecycleEmitter.emit({
       cwd: options.cwd,
       maxToolRounds,
       model,
@@ -147,7 +152,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       options.transcript?.roundStart(round, model);
       const toolDefinitions = toolRuntime.toolDefinitions();
 
-      await traceRecorder.record({
+      await lifecycleEmitter.emit({
         inputItemCount: input.length,
         model,
         round,
@@ -175,7 +180,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
 
       const toolCalls = response.output.filter(isFunctionToolCall);
 
-      await traceRecorder.record({
+      await lifecycleEmitter.emit({
         functionCallCount: toolCalls.length,
         outputText: response.output_text,
         round,
@@ -187,12 +192,12 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
 
         if (!options.verifier) {
           options.transcript?.finalAnswer(candidateAnswer);
-          await traceRecorder.record({
+          await lifecycleEmitter.emit({
             answer: candidateAnswer,
             round,
             type: "final_answer",
           });
-          await traceRecorder.record({
+          await lifecycleEmitter.emit({
             rounds: round,
             status: "completed",
             type: "session_ended",
@@ -201,7 +206,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           return { finalAnswer: candidateAnswer, rounds: round };
         }
 
-        await traceRecorder.record({
+        await lifecycleEmitter.emit({
           answer: candidateAnswer,
           round,
           type: "candidate_answer",
@@ -214,16 +219,16 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           task: options.task,
         });
         options.transcript?.verificationResult?.(round, verification);
-        await recordVerificationResult(traceRecorder, round, verification);
+        await recordVerificationResult(lifecycleEmitter, round, verification);
 
         if (verification.status === "passed") {
           options.transcript?.finalAnswer(candidateAnswer);
-          await traceRecorder.record({
+          await lifecycleEmitter.emit({
             answer: candidateAnswer,
             round,
             type: "final_answer",
           });
-          await traceRecorder.record({
+          await lifecycleEmitter.emit({
             rounds: round,
             status: "completed",
             type: "session_ended",
@@ -241,7 +246,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
         }
 
         recoveryAttempts += 1;
-        await traceRecorder.record({
+        await lifecycleEmitter.emit({
           attempt: recoveryAttempts,
           maxAttempts: maxRecoveryAttempts,
           round,
@@ -265,7 +270,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           contextProjection,
           round,
           options.transcript,
-          traceRecorder,
+          lifecycleEmitter,
         );
         input.push({
           type: "function_call_output",
@@ -280,11 +285,11 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     throw new Error(`Minimal loop stopped after ${maxToolRounds} tool rounds without a final answer.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await traceRecorder.record({
+    await lifecycleEmitter.emit({
       message,
       type: "session_failed",
     });
-    await traceRecorder.record({
+    await lifecycleEmitter.emit({
       rounds: lastRound,
       status: "failed",
       type: "session_ended",
@@ -294,11 +299,11 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
 }
 
 async function recordVerificationResult(
-  traceRecorder: TraceRecorder,
+  lifecycleEmitter: LifecycleEmitter,
   round: number,
   result: VerificationResult,
 ): Promise<void> {
-  await traceRecorder.record({
+  await lifecycleEmitter.emit({
     ...(result.command !== undefined ? { command: result.command } : {}),
     ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
     name: result.name,
@@ -363,10 +368,10 @@ async function executeToolCall(
   contextProjection: ContextProjection,
   round: number,
   transcript: MinimalLoopTranscript | undefined,
-  traceRecorder: TraceRecorder,
+  lifecycleEmitter: LifecycleEmitter,
 ): Promise<string> {
   transcript?.toolCall(round, toolCall.name, toolCall.arguments);
-  await traceRecorder.record({
+  await lifecycleEmitter.emit({
     argumentsText: toolCall.arguments,
     callId: toolCall.call_id,
     round,
@@ -380,7 +385,7 @@ async function executeToolCall(
   };
   const decision = permissionPolicy.decide(request);
   transcript?.permissionDecision?.(round, decision);
-  await traceRecorder.record({
+  await lifecycleEmitter.emit({
     action: decision.action,
     callId: toolCall.call_id,
     reason: decision.reason,
@@ -394,7 +399,7 @@ async function executeToolCall(
     const result = createPermissionBlockedResult(request, decision);
     const resultText = projectToolResult(result, contextProjection);
     transcript?.toolResult(round, resultText);
-    await traceRecorder.record({
+    await lifecycleEmitter.emit({
       callId: toolCall.call_id,
       projectedOutput: resultText,
       round,
@@ -415,13 +420,13 @@ async function executeToolCall(
       type: "approval_result" as const,
       ...(approval.reason ? { reason: approval.reason } : {}),
     };
-    await traceRecorder.record(approvalEvent);
+    await lifecycleEmitter.emit(approvalEvent);
 
     if (!approval.approved) {
       const result = createPermissionBlockedResult(request, decision, approval);
       const resultText = projectToolResult(result, contextProjection);
       transcript?.toolResult(round, resultText);
-      await traceRecorder.record({
+      await lifecycleEmitter.emit({
         callId: toolCall.call_id,
         projectedOutput: resultText,
         round,
@@ -436,7 +441,7 @@ async function executeToolCall(
   const result = await toolRuntime.execute(request);
   const resultText = projectToolResult(result, contextProjection);
   transcript?.toolResult(round, resultText);
-  await traceRecorder.record({
+  await lifecycleEmitter.emit({
     callId: toolCall.call_id,
     projectedOutput: resultText,
     round,
