@@ -133,4 +133,35 @@ describe("formatRuntimeStateTranscript", () => {
       "[state] status=completed rounds=2 verification=passed recoveryAttempts=1",
     );
   });
+
+  it("prints compact task state counters when a todo snapshot exists", () => {
+    const state: RuntimeState = {
+      currentRound: 2,
+      ended: false,
+      lastToolResult: {
+        callId: "call_todo",
+        projectedOutput: "tool: todo\nstatus: completed",
+        round: 2,
+        status: "completed",
+        toolName: "todo",
+      },
+      status: "running",
+      taskState: {
+        acceptance: ["npm run build exits with code 0"],
+        items: [
+          { id: "inspect", status: "completed", title: "Inspect the current failure" },
+          { id: "patch", status: "in_progress", title: "Patch the source file" },
+          { id: "verify", status: "pending", title: "Run the build check" },
+          { id: "blocked", status: "blocked", title: "Wait for approval" },
+        ],
+        summary: "Fix the build with a focused patch.",
+        updatedAtRound: 2,
+        updatedByCallId: "call_todo",
+      },
+    };
+
+    expect(formatRuntimeStateTranscript(state, 2)).toBe(
+      "[round 2] state: status=running lastTool=todo lastToolStatus=completed todos=3/4 blocked=1",
+    );
+  });
 });

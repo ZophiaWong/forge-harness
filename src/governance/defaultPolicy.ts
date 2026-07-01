@@ -35,6 +35,14 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
     return allow("inspect-only tool");
   }
 
+  if (toolCall.name === "todo") {
+    return {
+      action: "allow",
+      reason: "runtime task state update",
+      risk: "mutating",
+    };
+  }
+
   if (toolCall.name === "edit") {
     const args = parseEditArguments(toolCall.arguments);
 

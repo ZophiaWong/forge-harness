@@ -1,5 +1,6 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ToolStatus } from "../tools/types.js";
+import type { TaskState } from "./task.js";
 import type { VerificationStatus } from "./verification.js";
 
 export type SessionEndStatus = "completed" | "failed";
@@ -57,6 +58,12 @@ export type TraceEventPayload =
       toolName: string;
       status: ToolStatus;
       projectedOutput: string;
+    }
+  | {
+      type: "task_state_updated";
+      round: number;
+      callId: string;
+      taskState: TaskState;
     }
   | {
       type: "candidate_answer";

@@ -1,5 +1,6 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ToolStatus } from "../tools/types.js";
+import type { RuntimeTaskState } from "./task.js";
 import type { SessionEndStatus, TraceEventPayload, TraceRecorder } from "./trace.js";
 import type { VerificationStatus } from "./verification.js";
 
@@ -107,6 +108,7 @@ export interface RuntimeState {
   recoveryAttempts?: number;
   rounds?: number;
   status: RuntimeStatus;
+  taskState?: RuntimeTaskState;
   task?: string;
 }
 
@@ -204,6 +206,18 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           round: event.round,
           status: event.status,
           toolName: event.toolName,
+        },
+      };
+    case "task_state_updated":
+      return {
+        ...state,
+        currentRound: event.round,
+        taskState: {
+          acceptance: [...event.taskState.acceptance],
+          items: event.taskState.items.map((item) => ({ ...item })),
+          summary: event.taskState.summary,
+          updatedAtRound: event.round,
+          updatedByCallId: event.callId,
         },
       };
     case "candidate_answer":

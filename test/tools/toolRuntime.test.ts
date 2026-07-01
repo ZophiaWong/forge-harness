@@ -57,7 +57,7 @@ describe("createToolRuntime", () => {
 });
 
 describe("createDefaultToolRuntime", () => {
-  it("exposes bash, read, ls, grep, find, edit, and write as built-in tool definitions", () => {
+  it("exposes bash, read, ls, grep, find, edit, write, and todo as built-in tool definitions", () => {
     const runtime = createDefaultToolRuntime({ cwd: process.cwd() });
 
     expect(runtime.toolDefinitions().map((tool) => tool.name)).toEqual([
@@ -68,6 +68,7 @@ describe("createDefaultToolRuntime", () => {
       "find",
       "edit",
       "write",
+      "todo",
     ]);
   });
 

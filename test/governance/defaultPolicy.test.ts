@@ -53,6 +53,20 @@ describe("createDefaultPermissionPolicy", () => {
     });
   });
 
+  it("allows the todo tool as a harness-local runtime state update", () => {
+    expect(
+      decide("todo", {
+        acceptance: ["npm run build exits with code 0"],
+        items: [{ id: "inspect", status: "in_progress", title: "Inspect the task" }],
+        summary: "Track the current task.",
+      }),
+    ).toEqual({
+      action: "allow",
+      reason: "runtime task state update",
+      risk: "mutating",
+    });
+  });
+
   it("denies malformed file editing arguments", () => {
     expect(decide("edit", { path: "sample.txt", oldText: "old" })).toMatchObject({
       action: "deny",

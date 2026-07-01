@@ -95,7 +95,7 @@ flowchart TB
 | [`c07` Runtime State Model](tutorial/c07-runtime-state-model.md) | `L4` | Trace 记录过去，但 harness 还需要当前决策视图。 | `RuntimeState` projection。 | 当前任务、工具、错误和检查状态可读。 |
 | [`c08` Verification / Recovery](tutorial/c08-verification-recovery.md) | `L4` | final answer 不等于任务完成。 | checks、failure summary、repair loop、retry limit。 | harness 完成前会验证，失败后能进入 repair。 |
 | [`c09` Hooks](tutorial/c09-hooks.md) | `L5 + L4` | 生命周期扩展点不该散落在 core loop。 | stable event points、hook runner。 | cross-cutting behavior 挂在 loop 外侧。 |
-| `c10` Task / Todo | `L5 + L4` | 复杂任务需要可见计划和 acceptance。 | task/todo state、status transition。 | 计划进入 trace、state 和 context projection。 |
+| [`c10` Task / Todo](tutorial/c10-task-todo.md) | `L5 + L4` | 复杂任务需要可见计划和 acceptance。 | `todo` tool、task snapshot、`task_state_updated`。 | 计划进入 trace、state 和 context projection。 |
 | `c11` System Prompt / Skills / Memory | `L3` | instruction 和项目知识不能每次手写进 prompt。 | prompt assembly、skills、memory notes。 | 上下文由 pipeline 组装。 |
 | `c12` Context Compaction | `L3 + L4` | 长 session 会超过 context budget。 | compaction policy、summary handoff。 | 长任务能保留状态、证据和未解决问题。 |
 | `c13` Background / Cron | `L5 + L4` | 有些任务需要后台运行或稍后继续。 | background run、scheduled session。 | harness 能创建非阻塞或定时工作。 |

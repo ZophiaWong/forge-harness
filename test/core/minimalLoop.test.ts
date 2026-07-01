@@ -302,6 +302,163 @@ describe("runMinimalLoop", () => {
     ]);
   });
 
+  it("emits task state updates from completed todo tool results and feeds the projected todo result back", async () => {
+    const rawArguments = JSON.stringify({
+      acceptance: ["npm run build exits with code 0"],
+      items: [
+        { id: "inspect", status: "completed", title: "Inspect the current failure" },
+        { id: "patch", status: "in_progress", title: "Patch the source file" },
+      ],
+      summary: "Fix the build with a focused patch.",
+    });
+    const taskState = {
+      acceptance: ["npm run build exits with code 0"],
+      items: [
+        { id: "inspect", status: "completed", title: "Inspect the current failure" },
+        { id: "patch", status: "in_progress", title: "Patch the source file" },
+      ],
+      summary: "Fix the build with a focused patch.",
+    };
+    const trace = createTraceRecorder();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: [
+          "summary: Fix the build with a focused patch.",
+          "todos:",
+          "- completed inspect: Inspect the current failure",
+          "- in_progress patch: Patch the source file",
+          "acceptance:",
+          "- npm run build exits with code 0",
+        ].join("\n"),
+        metadata: {
+          observationSummary: "task plan updated: 2 items, 1 in_progress, 1 completed, 0 blocked",
+          taskState,
+        },
+        status: "completed" as const,
+        toolName: "todo",
+      })),
+      toolDefinitions: () => [
+        {
+          type: "function",
+          name: "todo",
+          description: "Update task state.",
+          strict: true,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+            required: [],
+          },
+        },
+      ],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: rawArguments,
+            call_id: "call_todo",
+            name: "todo",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "fix the build",
+      toolRuntime,
+    });
+
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        call_id: "call_todo",
+        output: expect.stringContaining("tool: todo\nstatus: completed\nobservation: task plan updated"),
+        type: "function_call_output",
+      }),
+    );
+    expect(trace.events).toContainEqual({
+      callId: "call_todo",
+      round: 1,
+      taskState,
+      type: "task_state_updated",
+    });
+    expect(trace.events.map((event) => event.type)).toEqual([
+      "session_started",
+      "model_request",
+      "model_response",
+      "tool_call",
+      "permission_decision",
+      "tool_result",
+      "task_state_updated",
+      "model_request",
+      "model_response",
+      "final_answer",
+      "session_ended",
+    ]);
+  });
+
+  it("does not emit task state updates for failed todo tool results", async () => {
+    const trace = createTraceRecorder();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "failed_reason: duplicate todo id \"inspect\"",
+        metadata: {
+          observationSummary: "todo failed",
+        },
+        status: "failed" as const,
+        toolName: "todo",
+      })),
+      toolDefinitions: () => [],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({}),
+            call_id: "call_todo",
+            name: "todo",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "reported failure",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "fix the build",
+      toolRuntime,
+    });
+
+    expect(trace.events.map((event) => event.type)).not.toContain("task_state_updated");
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(
+      expect.objectContaining({
+        call_id: "call_todo",
+        output: expect.stringContaining("observation: todo failed"),
+        type: "function_call_output",
+      }),
+    );
+  });
+
   it("reports runtime state after tool rounds and after final answer", async () => {
     const trace = createTraceRecorder();
     const statefulTrace = createRuntimeStateRecorder(trace.recorder);

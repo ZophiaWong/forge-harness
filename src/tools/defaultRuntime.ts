@@ -5,6 +5,7 @@ import { createGrepTool } from "./grepTool.js";
 import { createLsTool } from "./lsTool.js";
 import { createReadTool } from "./readTool.js";
 import { createToolRuntime } from "./runtime.js";
+import { createTodoTool } from "./todoTool.js";
 import type { ToolRuntime } from "./types.js";
 import { createWriteTool } from "./writeTool.js";
 
@@ -21,5 +22,6 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
     createFindTool(options.cwd),
     createEditTool(options.cwd),
     createWriteTool(options.cwd),
+    createTodoTool(),
   ]);
 }

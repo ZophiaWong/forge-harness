@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">c10 Task Todo state flow</title>
+  <desc id="desc">A code-data-flow diagram for c10: the model calls the todo tool with a full snapshot, the tool returns projected output to the model, and the core loop emits task_state_updated for trace and RuntimeState.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .model { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .tool { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+    .loop { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .sink { fill: #f8fafc; stroke: #475569; stroke-width: 2; }
+    .badge { fill: #0f172a; }
+    .badgeText { fill: #ffffff; font: 700 16px ui-sans-serif, system-ui, sans-serif; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 17px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: #334155; font: 14px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .stateArrow { stroke: #047857; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); stroke-dasharray: 7 6; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#047857" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="560" />
+
+  <text class="title" x="56" y="54">c10: task state leaves the model's private notes</text>
+  <text class="caption" x="56" y="82">The todo tool returns model-facing output, and task_state_updated records the typed snapshot.</text>
+
+  <rect class="model" x="56" y="142" width="222" height="178" rx="8" />
+  <circle class="badge" cx="88" cy="176" r="18" />
+  <text class="badgeText" x="83" y="182">1</text>
+  <text class="label" x="116" y="174">Model</text>
+  <text class="mono" x="86" y="218">todo({</text>
+  <text class="mono" x="106" y="246">summary,</text>
+  <text class="mono" x="106" y="274">items,</text>
+  <text class="mono" x="106" y="302">acceptance</text>
+
+  <rect class="tool" x="350" y="122" width="248" height="218" rx="8" />
+  <circle class="badge" cx="382" cy="156" r="18" />
+  <text class="badgeText" x="377" y="162">2</text>
+  <text class="label" x="410" y="154">Todo tool</text>
+  <text class="mono" x="380" y="198">validate snapshot</text>
+  <text class="mono" x="380" y="228">replace run state</text>
+  <text class="mono" x="380" y="258">return ToolResult</text>
+  <text class="caption" x="380" y="292">metadata carries TaskState</text>
+
+  <rect class="loop" x="674" y="122" width="246" height="218" rx="8" />
+  <circle class="badge" cx="706" cy="156" r="18" />
+  <text class="badgeText" x="701" y="162">3</text>
+  <text class="label" x="734" y="154">Core loop</text>
+  <text class="mono" x="704" y="198">project tool_result</text>
+  <text class="mono" x="704" y="228">push function output</text>
+  <text class="mono" x="704" y="258">emit task_state_updated</text>
+  <text class="caption" x="704" y="292">no automatic prompt injection</text>
+
+  <rect class="sink" x="166" y="396" width="220" height="106" rx="8" />
+  <text class="label" x="198" y="434">Next model input</text>
+  <text class="mono" x="198" y="468">tool: todo</text>
+  <text class="caption" x="198" y="494">projected observation</text>
+
+  <rect class="sink" x="478" y="396" width="220" height="106" rx="8" />
+  <text class="label" x="510" y="434">Trace</text>
+  <text class="mono" x="510" y="468">task_state_updated</text>
+  <text class="caption" x="510" y="494">typed evidence</text>
+
+  <rect class="sink" x="790" y="396" width="220" height="106" rx="8" />
+  <text class="label" x="822" y="434">RuntimeState</text>
+  <text class="mono" x="822" y="468">taskState</text>
+  <text class="caption" x="822" y="494">current snapshot</text>
+
+  <path class="arrow" d="M278 230 H350" />
+  <path class="arrow" d="M598 230 H674" />
+  <path class="arrow" d="M760 340 C704 390 516 378 372 412" />
+  <path class="stateArrow" d="M808 340 C760 390 682 392 620 410" />
+  <path class="stateArrow" d="M842 340 C880 374 898 388 900 396" />
+
+  <text class="small" x="56" y="360">Visible transcript:</text>
+  <text class="mono" x="56" y="382">[round 2] state: status=running lastTool=todo lastToolStatus=completed todos=1/3 blocked=0</text>
+</svg>

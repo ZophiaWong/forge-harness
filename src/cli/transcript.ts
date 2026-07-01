@@ -1,5 +1,6 @@
 import type { HookableTraceEvent } from "../extensions/lifecycle.js";
 import type { PermissionDecision } from "../governance/types.js";
+import { countTaskItems } from "../runtime/task.js";
 import type { RuntimeState } from "../runtime/state.js";
 import type { VerificationResult } from "../runtime/verification.js";
 
@@ -73,6 +74,13 @@ export function formatRuntimeStateTranscript(state: RuntimeState, round?: number
 
   if (state.recoveryAttempts !== undefined) {
     parts.push(`recoveryAttempts=${state.recoveryAttempts}`);
+  }
+
+  if (state.taskState) {
+    const counts = countTaskItems(state.taskState);
+    const openItems = counts.pending + counts.in_progress + counts.blocked;
+    parts.push(`todos=${openItems}/${state.taskState.items.length}`);
+    parts.push(`blocked=${counts.blocked}`);
   }
 
   if (state.lastProblem) {

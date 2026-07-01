@@ -256,6 +256,43 @@ describe("RuntimeState projection", () => {
     expect(passedState.lastProblem).toBeUndefined();
   });
 
+  it("projects task state updates into the current runtime state", () => {
+    const taskState = {
+      acceptance: ["npm run build exits with code 0"],
+      items: [
+        {
+          id: "inspect",
+          status: "completed" as const,
+          title: "Inspect the current failure",
+        },
+        {
+          id: "patch",
+          status: "in_progress" as const,
+          title: "Patch the source file",
+        },
+        {
+          id: "verify",
+          status: "pending" as const,
+          title: "Run the build check",
+        },
+      ],
+      summary: "Fix the build with a focused patch.",
+    };
+    const state = applyRuntimeStateEvent(createInitialRuntimeState(), {
+      callId: "call_todo",
+      round: 2,
+      taskState,
+      type: "task_state_updated",
+    });
+
+    expect(state.currentRound).toBe(2);
+    expect(state.taskState).toEqual({
+      ...taskState,
+      updatedAtRound: 2,
+      updatedByCallId: "call_todo",
+    });
+  });
+
   it("ignores hook results in the current runtime state", () => {
     const baseState = applyEvents([
       {

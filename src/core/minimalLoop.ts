@@ -11,6 +11,7 @@ import type {
   PermissionPolicy,
 } from "../governance/types.js";
 import type { RuntimeState } from "../runtime/state.js";
+import { isTaskState } from "../runtime/task.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
 import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
@@ -27,6 +28,7 @@ const SYSTEM_INSTRUCTIONS = [
   "Use edit for exact file text replacements and write for full-file create or overwrite operations.",
   "Use bash only when a shell command is needed.",
   "Use inspect-only commands unless the user explicitly asks for something else.",
+  "For multi-step tasks, use todo to track the current plan, progress, and acceptance criteria; update it when the work state changes.",
   "Call at most one tool at a time.",
   "After receiving a tool result, decide whether another command is needed.",
   "When no more tool calls are needed, answer the user directly and briefly.",
@@ -449,11 +451,32 @@ async function executeToolCall(
     toolName: toolCall.name,
     type: "tool_result",
   });
+  await recordTaskStateUpdateFromToolResult(lifecycleEmitter, round, toolCall.call_id, result);
   return resultText;
 }
 
 function projectToolResult(result: ToolResult, contextProjection: ContextProjection): string {
   return contextProjection.projectObservation(createToolObservation(result));
+}
+
+async function recordTaskStateUpdateFromToolResult(
+  lifecycleEmitter: LifecycleEmitter,
+  round: number,
+  callId: string,
+  result: ToolResult,
+): Promise<void> {
+  const taskState = result.metadata?.taskState;
+
+  if (result.status !== "completed" || result.toolName !== "todo" || !isTaskState(taskState)) {
+    return;
+  }
+
+  await lifecycleEmitter.emit({
+    callId,
+    round,
+    taskState,
+    type: "task_state_updated",
+  });
 }
 
 function createPermissionBlockedResult(
