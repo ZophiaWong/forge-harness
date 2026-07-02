@@ -149,6 +149,8 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           toolNames: event.toolNames,
         },
       };
+    case "prompt_assembled":
+      return state;
     case "model_response":
       return {
         ...state,

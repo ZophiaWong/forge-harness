@@ -9,6 +9,7 @@ import {
   formatFunctionCallTranscript,
   formatHookLogTranscript,
   formatPermissionDecisionTranscript,
+  formatPromptAssemblyTranscript,
   formatRecoveryTranscript,
   formatRuntimeStateTranscript,
   formatSessionTranscript,
@@ -81,6 +82,9 @@ if (cliArgs.error) {
       transcript: {
         roundStart(round, modelName) {
           console.log(`\n[round ${round}] model=${modelName}`);
+        },
+        promptAssembly(round, summary) {
+          console.log(formatPromptAssemblyTranscript(round, summary));
         },
         roundState(round, state) {
           console.log(formatRuntimeStateTranscript(state, round));

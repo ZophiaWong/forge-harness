@@ -34,7 +34,12 @@ Thumbs.db
 # Local agent/tooling state
 .agents/
 .codex/
-.forge/
+.forge/*
+!.forge/memory.md
+!.forge/skills/
+!.forge/skills/**/
+!.forge/skills/**/SKILL.md
+.forge/sessions/
 .superpowers/
 
 # Temporary files

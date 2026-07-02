@@ -18,6 +18,7 @@ vi.mock("openai", () => ({
 }));
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
+import type { PromptAssets } from "../../src/context/promptAssembly.js";
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
@@ -239,6 +240,13 @@ describe("runMinimalLoop", () => {
         task: "inspect",
         type: "session_started",
       },
+      expect.objectContaining({
+        catalogSkillIds: [],
+        round: 1,
+        sectionNames: ["base_instructions", "tool_rules"],
+        selectedSkillIds: [],
+        type: "prompt_assembled",
+      }),
       {
         inputItemCount: 1,
         model: "test-model",
@@ -276,6 +284,13 @@ describe("runMinimalLoop", () => {
         toolName: "read",
         type: "tool_result",
       },
+      expect.objectContaining({
+        catalogSkillIds: [],
+        round: 2,
+        sectionNames: ["base_instructions", "tool_rules"],
+        selectedSkillIds: [],
+        type: "prompt_assembled",
+      }),
       {
         inputItemCount: 3,
         model: "test-model",
@@ -395,17 +410,87 @@ describe("runMinimalLoop", () => {
     });
     expect(trace.events.map((event) => event.type)).toEqual([
       "session_started",
+      "prompt_assembled",
       "model_request",
       "model_response",
       "tool_call",
       "permission_decision",
       "tool_result",
       "task_state_updated",
+      "prompt_assembled",
       "model_request",
       "model_response",
       "final_answer",
       "session_ended",
     ]);
+  });
+
+  it("emits prompt assembly evidence and sends a slash-stripped task to the model", async () => {
+    const trace = createTraceRecorder();
+    const promptAssets: PromptAssets = {
+      projectMemory: "Memory marker.",
+      skills: [
+        {
+          body: "Chapter handoff body.",
+          description: "Use when planning chapter transitions.",
+          id: "chapter-handoff",
+        },
+        {
+          body: "Verification reporting body.",
+          description: "Use when reporting verification.",
+          id: "verification-reporting",
+        },
+      ],
+    };
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "done",
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: "/workspace/forge-harness",
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      promptAssets,
+      responseCreate,
+      task: "/chapter-handoff Discuss c11",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    expect(callsFor(responseCreate)[0]?.input).toEqual([
+      {
+        content: "Discuss c11",
+        role: "user",
+      },
+    ]);
+    expect(callsFor(responseCreate)[0]?.instructions).toContain("Memory marker.");
+    expect(callsFor(responseCreate)[0]?.instructions).toContain("Chapter handoff body.");
+    expect(callsFor(responseCreate)[0]?.instructions).not.toContain("Verification reporting body.");
+    expect(trace.events.map((event) => event.type)).toEqual([
+      "session_started",
+      "prompt_assembled",
+      "model_request",
+      "model_response",
+      "final_answer",
+      "session_ended",
+    ]);
+    expect(trace.events).toContainEqual({
+      catalogSkillIds: ["chapter-handoff", "verification-reporting"],
+      instructionCharCount: callsFor(responseCreate)[0]?.instructions.length,
+      round: 1,
+      sectionNames: [
+        "base_instructions",
+        "tool_rules",
+        "project_memory",
+        "skill_catalog",
+        "selected_skills",
+      ],
+      selectedSkillIds: ["chapter-handoff"],
+      type: "prompt_assembled",
+    });
   });
 
   it("does not emit task state updates for failed todo tool results", async () => {
@@ -971,6 +1056,7 @@ describe("runMinimalLoop", () => {
     expect(transcript.finalAnswer).toHaveBeenCalledWith("done");
     expect(trace.events.map((event) => event.type)).toEqual([
       "session_started",
+      "prompt_assembled",
       "model_request",
       "model_response",
       "candidate_answer",

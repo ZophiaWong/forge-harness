@@ -1,4 +1,5 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
+import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { TaskState } from "./task.js";
 import type { VerificationStatus } from "./verification.js";
@@ -20,6 +21,14 @@ export type TraceEventPayload =
       model: string;
       inputItemCount: number;
       toolNames: string[];
+    }
+  | {
+      type: "prompt_assembled";
+      round: number;
+      sectionNames: PromptSectionName[];
+      instructionCharCount: number;
+      catalogSkillIds: string[];
+      selectedSkillIds: string[];
     }
   | {
       type: "model_response";

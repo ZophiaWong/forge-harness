@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the first ten runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, and `c10 Task / Todo`.
+This branch contains the documentation baseline plus the first eleven runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, and `c11 System Prompt / Skills / Memory`.
 
 ## Setup
 
@@ -46,6 +46,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c08 Verification / Recovery](docs/tutorial/c08-verification-recovery.md): deterministic checks before final answer, with one recovery attempt on failure.
 - [c09 Hooks](docs/tutorial/c09-hooks.md): lifecycle event emitter and observe-only hooks for cross-cutting behavior.
 - [c10 Task / Todo](docs/tutorial/c10-task-todo.md): in-run task state, todo snapshots, and visible acceptance criteria.
+- [c11 System Prompt / Skills / Memory](docs/tutorial/c11-system-prompt-skills-memory.md): prompt assembly from base rules, project memory, skill catalog, and slash-selected skills.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

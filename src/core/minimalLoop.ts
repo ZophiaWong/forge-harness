@@ -1,6 +1,12 @@
 import OpenAI from "openai";
 
 import { createToolObservation } from "../context/observation.js";
+import {
+  assemblePrompt,
+  loadRepoPromptAssets,
+  type PromptAssets,
+  type PromptAssemblySummary,
+} from "../context/promptAssembly.js";
 import { createContextProjection, type ContextProjection } from "../context/projection.js";
 import { createLifecycleEmitter, type LifecycleEmitter } from "../extensions/lifecycle.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
@@ -20,19 +26,6 @@ import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from ".
 export const DEFAULT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 1;
-
-const SYSTEM_INSTRUCTIONS = [
-  "You are running inside a minimal coding-agent loop.",
-  "You may call tools to inspect the local project.",
-  "Prefer ls for directory listings, find for locating files, grep for searching text, and read for reading text files.",
-  "Use edit for exact file text replacements and write for full-file create or overwrite operations.",
-  "Use bash only when a shell command is needed.",
-  "Use inspect-only commands unless the user explicitly asks for something else.",
-  "For multi-step tasks, use todo to track the current plan, progress, and acceptance criteria; update it when the work state changes.",
-  "Call at most one tool at a time.",
-  "After receiving a tool result, decide whether another command is needed.",
-  "When no more tool calls are needed, answer the user directly and briefly.",
-].join("\n");
 
 export interface UserInputItem {
   role: "user";
@@ -83,6 +76,7 @@ export interface MinimalLoopTranscript {
   finalAnswer(answer: string): void;
   finalState?(state: RuntimeState): void;
   permissionDecision?(round: number, decision: PermissionDecision): void;
+  promptAssembly?(round: number, summary: PromptAssemblySummary): void;
   recoveryAttempt?(round: number, attempt: number, maxAttempts: number, summary: string): void;
   roundStart(round: number, model: string): void;
   roundState?(round: number, state: RuntimeState): void;
@@ -102,6 +96,7 @@ export interface MinimalLoopOptions {
   maxToolRounds?: number;
   model?: string;
   permissionPolicy?: PermissionPolicy;
+  promptAssets?: PromptAssets;
   responseCreate?: ResponseCreate;
   runtimeState?: () => RuntimeState;
   task: string;
@@ -125,6 +120,11 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const approver = options.approver ?? createRejectingApprover();
   const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
   const contextProjection = options.contextProjection ?? createContextProjection();
+  const promptAssets = options.promptAssets ?? (await loadRepoPromptAssets(options.cwd));
+  const promptAssembly = assemblePrompt({
+    assets: promptAssets,
+    task: options.task,
+  });
   const lifecycleEmitter =
     options.lifecycleEmitter ??
     createLifecycleEmitter({
@@ -133,7 +133,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const input: ResponseInputItem[] = [
     {
       role: "user",
-      content: options.task,
+      content: promptAssembly.task,
     },
   ];
   let lastRound = 0;
@@ -154,6 +154,15 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       options.transcript?.roundStart(round, model);
       const toolDefinitions = toolRuntime.toolDefinitions();
 
+      options.transcript?.promptAssembly?.(round, promptAssembly.summary);
+      await lifecycleEmitter.emit({
+        catalogSkillIds: promptAssembly.summary.catalogSkillIds,
+        instructionCharCount: promptAssembly.summary.instructionCharCount,
+        round,
+        sectionNames: promptAssembly.summary.sectionNames,
+        selectedSkillIds: promptAssembly.summary.selectedSkillIds,
+        type: "prompt_assembled",
+      });
       await lifecycleEmitter.emit({
         inputItemCount: input.length,
         model,
@@ -165,7 +174,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       const response = await responseCreate({
         include: ["reasoning.encrypted_content"],
         input,
-        instructions: SYSTEM_INSTRUCTIONS,
+        instructions: promptAssembly.instructions,
         model,
         parallel_tool_calls: false,
         reasoning: {

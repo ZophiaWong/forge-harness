@@ -1,5 +1,6 @@
 import type { HookableTraceEvent } from "../extensions/lifecycle.js";
 import type { PermissionDecision } from "../governance/types.js";
+import type { PromptAssemblySummary } from "../context/promptAssembly.js";
 import { countTaskItems } from "../runtime/task.js";
 import type { RuntimeState } from "../runtime/state.js";
 import type { VerificationResult } from "../runtime/verification.js";
@@ -14,6 +15,19 @@ export function formatFunctionCallTranscript(
 
 export function formatPermissionDecisionTranscript(round: number, decision: PermissionDecision): string {
   return `[round ${round}] permission: ${decision.action} risk=${decision.risk} reason=${decision.reason}`;
+}
+
+export function formatPromptAssemblyTranscript(round: number, summary: PromptAssemblySummary): string {
+  const selectedSkills =
+    summary.selectedSkillIds.length > 0 ? summary.selectedSkillIds.join(",") : "none";
+
+  return [
+    `[round ${round}] prompt:`,
+    `sections=${summary.sectionNames.join(",")}`,
+    `catalogSkills=${summary.catalogSkillIds.length}`,
+    `selectedSkills=${selectedSkills}`,
+    `chars=${summary.instructionCharCount}`,
+  ].join(" ");
 }
 
 export function formatSessionTranscript(sessionId: string, tracePath: string): string {

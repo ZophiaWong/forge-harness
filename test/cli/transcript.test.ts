@@ -4,6 +4,7 @@ import {
   formatFunctionCallTranscript,
   formatHookLogTranscript,
   formatPermissionDecisionTranscript,
+  formatPromptAssemblyTranscript,
   formatRecoveryTranscript,
   formatRuntimeStateTranscript,
   formatSessionTranscript,
@@ -29,6 +30,27 @@ describe("formatPermissionDecisionTranscript", () => {
         risk: "mutating",
       }),
     ).toBe("[round 2] permission: ask risk=mutating reason=bash command may modify files or external state");
+  });
+});
+
+describe("formatPromptAssemblyTranscript", () => {
+  it("prints compact prompt assembly evidence", () => {
+    expect(
+      formatPromptAssemblyTranscript(1, {
+        catalogSkillIds: ["chapter-handoff", "tutorial-writing", "verification-reporting"],
+        instructionCharCount: 1234,
+        sectionNames: [
+          "base_instructions",
+          "tool_rules",
+          "project_memory",
+          "skill_catalog",
+          "selected_skills",
+        ],
+        selectedSkillIds: ["chapter-handoff", "verification-reporting"],
+      }),
+    ).toBe(
+      "[round 1] prompt: sections=base_instructions,tool_rules,project_memory,skill_catalog,selected_skills catalogSkills=3 selectedSkills=chapter-handoff,verification-reporting chars=1234",
+    );
   });
 });
 
