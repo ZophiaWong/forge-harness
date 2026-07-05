@@ -34,6 +34,14 @@ Thumbs.db
 # Local agent/tooling state
 .agents/
 .codex/
+!.codex/
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/checkpointing-chapters/
+!.codex/skills/checkpointing-chapters/**
+!.codex/skills/researching-coding-agents/
+!.codex/skills/researching-coding-agents/**
 .forge/*
 !.forge/memory.md
 !.forge/skills/

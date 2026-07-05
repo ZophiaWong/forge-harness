@@ -1,0 +1,4 @@
+interface:
+  display_name: "Checkpointing Chapters"
+  short_description: "Guard Forge tutorial checkpoint git work"
+  default_prompt: "Use $checkpointing-chapters to prepare this Forge Harness checkpoint and ask whether to publish the tutorial branch and merge to main."

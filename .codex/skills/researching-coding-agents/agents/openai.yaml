@@ -1,0 +1,4 @@
+interface:
+  display_name: "Researching Coding Agents"
+  short_description: "Research coding-agent designs before planning"
+  default_prompt: "Use $researching-coding-agents to research how other coding agents handle this feature before proposing a Forge Harness design."
