@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatContextCompactionTranscript,
   formatFunctionCallTranscript,
   formatHookLogTranscript,
   formatPermissionDecisionTranscript,
@@ -10,6 +11,7 @@ import {
   formatSessionTranscript,
   formatVerificationTranscript,
 } from "../../src/cli/transcript.js";
+import type { RuntimeContextCompactionState } from "../../src/runtime/state.js";
 import type { RuntimeState } from "../../src/runtime/state.js";
 import type { VerificationResult } from "../../src/runtime/verification.js";
 
@@ -50,6 +52,28 @@ describe("formatPromptAssemblyTranscript", () => {
       }),
     ).toBe(
       "[round 1] prompt: sections=base_instructions,tool_rules,project_memory,skill_catalog,selected_skills catalogSkills=3 selectedSkills=chapter-handoff,verification-reporting chars=1234",
+    );
+  });
+});
+
+describe("formatContextCompactionTranscript", () => {
+  it("prints compact context compaction evidence without the summary body", () => {
+    const compaction: RuntimeContextCompactionState = {
+      afterCharCount: 9_200,
+      beforeCharCount: 25_200,
+      compactedRoundCount: 2,
+      keptRecentRoundCount: 2,
+      missingHeadings: ["Evidence"],
+      reason: "input chars 25200 exceeded soft budget 24000",
+      round: 4,
+      sourceItemCount: 6,
+      sourceRoundCount: 2,
+      summaryCharCount: 42,
+      trigger: "auto",
+    };
+
+    expect(formatContextCompactionTranscript(compaction)).toBe(
+      "[round 4] compact: trigger=auto beforeChars=25200 afterChars=9200 sourceRounds=2 keptRounds=2 sourceItems=6 summaryChars=42 missingHeadings=Evidence reason=input chars 25200 exceeded soft budget 24000",
     );
   });
 });
@@ -153,6 +177,32 @@ describe("formatRuntimeStateTranscript", () => {
 
     expect(formatRuntimeStateTranscript(state)).toBe(
       "[state] status=completed rounds=2 verification=passed recoveryAttempts=1",
+    );
+  });
+
+  it("prints compaction count and trigger when compaction happened", () => {
+    const state: RuntimeState = {
+      compactionCount: 1,
+      currentRound: 4,
+      ended: false,
+      lastCompaction: {
+        afterCharCount: 9_200,
+        beforeCharCount: 25_200,
+        compactedRoundCount: 2,
+        keptRecentRoundCount: 2,
+        missingHeadings: [],
+        reason: "input chars 25200 exceeded soft budget 24000",
+        round: 4,
+        sourceItemCount: 6,
+        sourceRoundCount: 2,
+        summaryCharCount: 42,
+        trigger: "auto",
+      },
+      status: "running",
+    };
+
+    expect(formatRuntimeStateTranscript(state, 4)).toBe(
+      "[round 4] state: status=running compacted=1 lastCompact=auto",
     );
   });
 

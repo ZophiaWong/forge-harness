@@ -1,4 +1,5 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
+import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { RuntimeTaskState } from "./task.js";
 import type { SessionEndStatus, TraceEventPayload, TraceRecorder } from "./trace.js";
@@ -70,6 +71,20 @@ export interface RuntimeVerificationResultState {
   summary: string;
 }
 
+export interface RuntimeContextCompactionState {
+  afterCharCount: number;
+  beforeCharCount: number;
+  compactedRoundCount: number;
+  keptRecentRoundCount: number;
+  missingHeadings: RequiredCompactionHeading[];
+  reason: string;
+  round: number;
+  sourceItemCount: number;
+  sourceRoundCount: number;
+  summaryCharCount: number;
+  trigger: ContextCompactionTrigger;
+}
+
 export type RuntimeProblem =
   | {
       kind: "tool_result";
@@ -77,6 +92,15 @@ export type RuntimeProblem =
       round: number;
       status: Extract<ToolStatus, "failed" | "timed_out">;
       toolName: string;
+    }
+  | {
+      afterCharCount?: number;
+      beforeCharCount: number;
+      hardCharBudget: number;
+      kind: "context_compaction_failed";
+      reason: string;
+      round: number;
+      trigger: ContextCompactionTrigger;
     }
   | {
       kind: "session_failed";
@@ -91,11 +115,13 @@ export type RuntimeProblem =
 
 export interface RuntimeState {
   candidateAnswer?: RuntimeCandidateAnswerState;
+  compactionCount?: number;
   currentRound: number;
   cwd?: string;
   ended: boolean;
   finalAnswer?: RuntimeFinalAnswerState;
   lastApprovalResult?: RuntimeApprovalResultState;
+  lastCompaction?: RuntimeContextCompactionState;
   lastModelRequest?: RuntimeModelRequestState;
   lastModelResponse?: RuntimeModelResponseState;
   lastPermissionDecision?: RuntimePermissionDecisionState;
@@ -151,6 +177,39 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
       };
     case "prompt_assembled":
       return state;
+    case "context_compacted":
+      return {
+        ...state,
+        compactionCount: (state.compactionCount ?? 0) + 1,
+        currentRound: event.round,
+        lastCompaction: {
+          afterCharCount: event.afterCharCount,
+          beforeCharCount: event.beforeCharCount,
+          compactedRoundCount: event.compactedRoundCount,
+          keptRecentRoundCount: event.keptRecentRoundCount,
+          missingHeadings: [...event.missingHeadings],
+          reason: event.reason,
+          round: event.round,
+          sourceItemCount: event.sourceItemCount,
+          sourceRoundCount: event.sourceRoundCount,
+          summaryCharCount: event.summaryCharCount,
+          trigger: event.trigger,
+        },
+      };
+    case "context_compaction_failed":
+      return {
+        ...state,
+        currentRound: event.round,
+        lastProblem: {
+          ...(event.afterCharCount !== undefined ? { afterCharCount: event.afterCharCount } : {}),
+          beforeCharCount: event.beforeCharCount,
+          hardCharBudget: event.hardCharBudget,
+          kind: "context_compaction_failed",
+          reason: event.reason,
+          round: event.round,
+          trigger: event.trigger,
+        },
+      };
     case "model_response":
       return {
         ...state,

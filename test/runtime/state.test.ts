@@ -293,6 +293,91 @@ describe("RuntimeState projection", () => {
     });
   });
 
+  it("projects context compaction metadata without storing the summary body", () => {
+    const state = applyEvents([
+      {
+        afterCharCount: 9_200,
+        beforeCharCount: 25_200,
+        compactedRoundCount: 2,
+        keptRecentRoundCount: 2,
+        missingHeadings: ["Evidence"],
+        omittedSourceCharCount: 120,
+        reason: "input chars 25200 exceeded soft budget 24000",
+        round: 4,
+        sourceItemCount: 6,
+        sourceRoundCount: 2,
+        summary: "# Compacted Context\n\n## Task\nKeep going.",
+        summaryCharCount: 42,
+        trigger: "auto",
+        type: "context_compacted",
+      },
+      {
+        afterCharCount: 18_000,
+        beforeCharCount: 38_500,
+        compactedRoundCount: 1,
+        keptRecentRoundCount: 2,
+        missingHeadings: [],
+        omittedSourceCharCount: 0,
+        reason: "input chars 38500 exceeded hard budget 36000 after appending tool output",
+        round: 5,
+        sourceItemCount: 4,
+        sourceRoundCount: 1,
+        summary: "# Compacted Context\n\n## Task\nContinue after reactive compact.",
+        summaryCharCount: 64,
+        trigger: "reactive",
+        type: "context_compacted",
+      },
+    ]);
+
+    expect(state.compactionCount).toBe(2);
+    expect(state.lastCompaction).toEqual({
+      afterCharCount: 18_000,
+      beforeCharCount: 38_500,
+      compactedRoundCount: 1,
+      keptRecentRoundCount: 2,
+      missingHeadings: [],
+      reason: "input chars 38500 exceeded hard budget 36000 after appending tool output",
+      round: 5,
+      sourceItemCount: 4,
+      sourceRoundCount: 1,
+      summaryCharCount: 64,
+      trigger: "reactive",
+    });
+    expect(JSON.stringify(state.lastCompaction)).not.toContain("Continue after reactive compact");
+  });
+
+  it("projects context compaction failures as the current runtime problem", () => {
+    const state = applyEvents([
+      {
+        cwd: "/workspace/forge-harness",
+        maxToolRounds: 8,
+        model: "gpt-5.4-mini",
+        task: "inspect docs",
+        type: "session_started",
+      },
+      {
+        afterCharCount: 37_500,
+        beforeCharCount: 48_000,
+        hardCharBudget: 36_000,
+        reason: "reactive compaction still exceeded hard budget",
+        round: 3,
+        trigger: "reactive",
+        type: "context_compaction_failed",
+      },
+    ]);
+
+    expect(state.lastProblem).toEqual({
+      afterCharCount: 37_500,
+      beforeCharCount: 48_000,
+      hardCharBudget: 36_000,
+      kind: "context_compaction_failed",
+      reason: "reactive compaction still exceeded hard budget",
+      round: 3,
+      trigger: "reactive",
+    });
+    expect(state.status).toBe("running");
+  });
+
   it("ignores hook results in the current runtime state", () => {
     const baseState = applyEvents([
       {

@@ -493,6 +493,248 @@ describe("runMinimalLoop", () => {
     });
   });
 
+  it("auto-compacts older input history before the next model request", async () => {
+    const trace = createTraceRecorder();
+    const toolOutputs = ["round 1 output ".repeat(20), "round 2 output ".repeat(20), "round 3 output ".repeat(20)];
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: toolOutputs.shift() ?? "unexpected",
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [
+        {
+          type: "function",
+          name: "read",
+          description: "Read a file.",
+          strict: true,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+            required: [],
+          },
+        },
+      ],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "docs/tutorial/c09-hooks.md" }),
+            call_id: "call_1",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "docs/tutorial/c10-task-todo.md" }),
+            call_id: "call_2",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "docs/tutorial/c11-system-prompt-skills-memory.md" }),
+            call_id: "call_3",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: [
+          "# Compacted Context",
+          "",
+          "## Task",
+          "Read long chapters.",
+          "",
+          "## Progress",
+          "Read c09.",
+          "",
+          "## Evidence",
+          "round 1 output was summarized.",
+          "",
+          "## Open Questions",
+          "None.",
+          "",
+          "## Next Step",
+          "Continue with recent reads.",
+        ].join("\n"),
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      contextCompaction: {
+        hardCharBudget: 100_000,
+        softCharBudget: 300,
+      },
+      cwd: "/workspace/forge-harness",
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "Read long chapters.",
+      toolRuntime,
+    });
+
+    expect(callsFor(responseCreate)).toHaveLength(5);
+    expect(callsFor(responseCreate)[3]).toEqual(
+      expect.objectContaining({
+        model: "gpt-5.4-mini",
+        tools: [],
+      }),
+    );
+    expect(callsFor(responseCreate)[3]?.instructions).toContain("You are compacting an agent session history.");
+    expect(callsFor(responseCreate)[4]?.input).toContainEqual({
+      content: expect.stringContaining("# Compacted Context"),
+      role: "user",
+    });
+    expect(JSON.stringify(callsFor(responseCreate)[4]?.input)).not.toContain("call_1");
+    expect(JSON.stringify(callsFor(responseCreate)[4]?.input)).not.toContain("docs/tutorial/c09-hooks.md");
+    expect(JSON.stringify(callsFor(responseCreate)[4]?.input)).toContain("round 2 output");
+    expect(JSON.stringify(callsFor(responseCreate)[4]?.input)).toContain("round 3 output");
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        missingHeadings: [],
+        round: 4,
+        summary: expect.stringContaining("# Compacted Context"),
+        trigger: "auto",
+        type: "context_compacted",
+      }),
+    );
+    expect(trace.events.filter((event) => event.type === "model_request")).toHaveLength(4);
+  });
+
+  it("fails explicitly when reactive compaction still exceeds the hard budget", async () => {
+    const trace = createTraceRecorder();
+    const toolOutputs = ["round 1 small", "round 2 small", "round 3 huge ".repeat(200)];
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: toolOutputs.shift() ?? "unexpected",
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [
+        {
+          type: "function",
+          name: "read",
+          description: "Read a file.",
+          strict: true,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+            required: [],
+          },
+        },
+      ],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "docs/tutorial/c09-hooks.md" }),
+            call_id: "call_1",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "docs/tutorial/c10-task-todo.md" }),
+            call_id: "call_2",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ path: "docs/tutorial/c11-system-prompt-skills-memory.md" }),
+            call_id: "call_3",
+            name: "read",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: [
+          "# Compacted Context",
+          "",
+          "## Task",
+          "Read long chapters.",
+          "",
+          "## Progress",
+          "Recent output is still large.",
+          "",
+          "## Evidence",
+          "The oldest round was summarized.",
+          "",
+          "## Open Questions",
+          "None.",
+          "",
+          "## Next Step",
+          "Stop because context is still too large.",
+        ].join("\n"),
+      },
+    );
+
+    await expect(
+      runMinimalLoop({
+        apiKey: "test-key",
+        contextCompaction: {
+          hardCharBudget: 700,
+          softCharBudget: 10_000,
+        },
+        cwd: "/workspace/forge-harness",
+        lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+        permissionPolicy: allowPolicy(),
+        responseCreate,
+        task: "Read long chapters.",
+        toolRuntime,
+      }),
+    ).rejects.toThrow("Context compaction failed");
+
+    expect(callsFor(responseCreate)).toHaveLength(4);
+    expect(callsFor(responseCreate)[3]?.tools).toEqual([]);
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        trigger: "reactive",
+        type: "context_compacted",
+      }),
+    );
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        hardCharBudget: 700,
+        trigger: "reactive",
+        type: "context_compaction_failed",
+      }),
+    );
+    expect(trace.events.filter((event) => event.type === "model_request")).toHaveLength(3);
+  });
+
   it("does not emit task state updates for failed todo tool results", async () => {
     const trace = createTraceRecorder();
     const toolRuntime: ToolRuntime = {

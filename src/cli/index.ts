@@ -6,6 +6,7 @@ import path from "node:path";
 import { createCliApprover } from "./approval.js";
 import { parseCliArgs, usageText } from "./args.js";
 import {
+  formatContextCompactionTranscript,
   formatFunctionCallTranscript,
   formatHookLogTranscript,
   formatPermissionDecisionTranscript,
@@ -85,6 +86,9 @@ if (cliArgs.error) {
         },
         promptAssembly(round, summary) {
           console.log(formatPromptAssemblyTranscript(round, summary));
+        },
+        contextCompaction(compaction) {
+          console.log(formatContextCompactionTranscript(compaction));
         },
         roundState(round, state) {
           console.log(formatRuntimeStateTranscript(state, round));

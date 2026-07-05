@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
+  <title id="title">Context compaction mechanisms</title>
+  <desc id="desc">A mechanism map showing tool result compact, micro compact, snip compact, auto compact, reactive compact, manual compact, and subagent handoff.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .stage { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .trigger { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .boundary { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+    .future { fill: #f8fafc; stroke: #64748b; stroke-width: 2; stroke-dasharray: 8 6; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 17px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: #334155; font: 14px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .dash { stroke: #64748b; stroke-width: 2.5; fill: none; marker-end: url(#arrow); stroke-dasharray: 7 6; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="620" />
+  <text class="title" x="56" y="54">Compaction is a stack, not one switch</text>
+  <text class="caption" x="56" y="82">Different mechanisms act at different moments: before a tool result enters context, before a model request, or across isolated sessions.</text>
+
+  <rect class="stage" x="70" y="142" width="220" height="112" rx="8" />
+  <text class="label" x="100" y="178">Tool result compact</text>
+  <text class="small" x="100" y="210">turn raw output into</text>
+  <text class="mono" x="100" y="236">summary + bounded body</text>
+
+  <rect class="stage" x="364" y="142" width="220" height="112" rx="8" />
+  <text class="label" x="394" y="178">Micro compact</text>
+  <text class="small" x="394" y="210">remove local noise,</text>
+  <text class="mono" x="394" y="236">trim repeated chunks</text>
+
+  <rect class="boundary" x="658" y="142" width="220" height="112" rx="8" />
+  <text class="label" x="688" y="178">Snip compact</text>
+  <text class="small" x="688" y="210">replace old turns with</text>
+  <text class="mono" x="688" y="236">handoff summary</text>
+
+  <rect class="trigger" x="174" y="344" width="220" height="112" rx="8" />
+  <text class="label" x="204" y="380">Auto compact</text>
+  <text class="small" x="204" y="412">soft budget trigger</text>
+  <text class="mono" x="204" y="438">before model request</text>
+
+  <rect class="trigger" x="472" y="344" width="220" height="112" rx="8" />
+  <text class="label" x="502" y="380">Reactive compact</text>
+  <text class="small" x="502" y="412">hard budget trigger</text>
+  <text class="mono" x="502" y="438">after sudden growth</text>
+
+  <rect class="future" x="770" y="344" width="220" height="112" rx="8" />
+  <text class="label" x="800" y="380">Manual compact</text>
+  <text class="small" x="800" y="412">user asks to shrink</text>
+  <text class="mono" x="800" y="438">/compact later</text>
+
+  <rect class="future" x="344" y="512" width="424" height="70" rx="8" />
+  <text class="label" x="374" y="548">Subagent / session handoff</text>
+  <text class="caption" x="374" y="572">run large work in isolated context, then return a summary to the parent session</text>
+
+  <path class="arrow" d="M290 198 H364" />
+  <path class="arrow" d="M584 198 H658" />
+  <path class="arrow" d="M768 254 C730 306 676 334 616 350" />
+  <path class="arrow" d="M768 254 C790 306 826 334 866 346" />
+  <path class="dash" d="M880 456 C832 498 760 516 686 524" />
+  <path class="dash" d="M582 456 C574 482 564 498 556 512" />
+  <path class="dash" d="M284 456 C330 500 398 516 466 524" />
+
+  <text class="caption" x="70" y="298">c12 implements the solid path. Dashed boxes are represented in the vocabulary and explained as later coordination mechanisms.</text>
+</svg>

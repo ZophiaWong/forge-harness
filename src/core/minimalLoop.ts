@@ -1,5 +1,15 @@
 import OpenAI from "openai";
 
+import {
+  buildCompactionSource,
+  createInputHistoryManager,
+  DEFAULT_COMPACTION_OPTIONS,
+  estimateInputCharCount,
+  inspectCompactionSummary,
+  type CompactableInputItem,
+  type ContextCompactionOptions,
+  type ContextCompactionTrigger,
+} from "../context/compaction.js";
 import { createToolObservation } from "../context/observation.js";
 import {
   assemblePrompt,
@@ -73,6 +83,19 @@ export interface MinimalResponse {
 export type ResponseCreate = (request: ResponseCreateRequest) => Promise<MinimalResponse>;
 
 export interface MinimalLoopTranscript {
+  contextCompaction?(compaction: {
+    afterCharCount: number;
+    beforeCharCount: number;
+    compactedRoundCount: number;
+    keptRecentRoundCount: number;
+    missingHeadings: Array<"Task" | "Progress" | "Evidence" | "Open Questions" | "Next Step">;
+    reason: string;
+    round: number;
+    sourceItemCount: number;
+    sourceRoundCount: number;
+    summaryCharCount: number;
+    trigger: ContextCompactionTrigger;
+  }): void;
   finalAnswer(answer: string): void;
   finalState?(state: RuntimeState): void;
   permissionDecision?(round: number, decision: PermissionDecision): void;
@@ -90,6 +113,7 @@ export interface MinimalLoopOptions {
   approver?: PermissionApprover;
   baseURL?: string;
   contextProjection?: ContextProjection;
+  contextCompaction?: false | Partial<ContextCompactionOptions>;
   cwd: string;
   lifecycleEmitter?: LifecycleEmitter;
   maxRecoveryAttempts?: number;
@@ -110,6 +134,20 @@ export interface MinimalLoopResult {
   rounds: number;
 }
 
+const COMPACTION_INSTRUCTIONS = [
+  "You are compacting an agent session history.",
+  "Write a concise handoff summary that preserves task intent, progress, evidence, open questions, and the next step.",
+  "Use these fixed Markdown headings when possible:",
+  "## Task",
+  "## Progress",
+  "## Evidence",
+  "## Open Questions",
+  "## Next Step",
+  "The supplied source contains only older history selected for compaction. Recent raw rounds are kept separately in the next model input.",
+  "Do not say recent-round evidence is missing just because it is not included in the compaction source.",
+  "Do not invent facts. Do not call tools. Summarize only the supplied history and state.",
+].join("\n");
+
 export async function runMinimalLoop(options: MinimalLoopOptions): Promise<MinimalLoopResult> {
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   const baseURL = normalizeBaseURL(options.baseURL ?? process.env.OPENAI_BASE_URL);
@@ -120,6 +158,13 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const approver = options.approver ?? createRejectingApprover();
   const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
   const contextProjection = options.contextProjection ?? createContextProjection();
+  const contextCompaction =
+    options.contextCompaction === false
+      ? undefined
+      : {
+          ...DEFAULT_COMPACTION_OPTIONS,
+          ...options.contextCompaction,
+        };
   const promptAssets = options.promptAssets ?? (await loadRepoPromptAssets(options.cwd));
   const promptAssembly = assemblePrompt({
     assets: promptAssets,
@@ -130,12 +175,13 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     createLifecycleEmitter({
       recorder: createNoopTraceRecorder(),
     });
-  const input: ResponseInputItem[] = [
-    {
+  const inputHistory = createInputHistoryManager({
+    pinnedTask: {
       role: "user",
       content: promptAssembly.task,
     },
-  ];
+    recentRoundsToKeep: contextCompaction?.recentRoundsToKeep ?? DEFAULT_COMPACTION_OPTIONS.recentRoundsToKeep,
+  });
   let lastRound = 0;
   let recoveryAttempts = 0;
 
@@ -153,6 +199,17 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       lastRound = round;
       options.transcript?.roundStart(round, model);
       const toolDefinitions = toolRuntime.toolDefinitions();
+      await maybeAutoCompactInputHistory({
+        contextCompaction,
+        inputHistory,
+        lifecycleEmitter,
+        model,
+        options,
+        responseCreate,
+        round,
+        task: promptAssembly.task,
+      });
+      const input = inputHistory.modelInput() as ResponseInputItem[];
 
       options.transcript?.promptAssembly?.(round, promptAssembly.summary);
       await lifecycleEmitter.emit({
@@ -187,7 +244,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
         tools: toolDefinitions,
       });
 
-      input.push(...response.output);
+      inputHistory.appendRoundItems(round, response.output as CompactableInputItem[]);
 
       const toolCalls = response.output.filter(isFunctionToolCall);
 
@@ -265,9 +322,19 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           type: "recovery_attempt",
         });
         options.transcript?.recoveryAttempt?.(round, recoveryAttempts, maxRecoveryAttempts, verification.summary);
-        input.push({
+        inputHistory.appendRoundItems(round, [{
           role: "user",
           content: formatRecoveryUserMessage(verification),
+        }]);
+        await maybeReactiveCompactInputHistory({
+          contextCompaction,
+          inputHistory,
+          lifecycleEmitter,
+          model,
+          options,
+          responseCreate,
+          round,
+          task: promptAssembly.task,
         });
         continue;
       }
@@ -283,10 +350,20 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           options.transcript,
           lifecycleEmitter,
         );
-        input.push({
+        inputHistory.appendRoundItems(round, [{
           type: "function_call_output",
           call_id: toolCall.call_id,
           output: resultText,
+        }]);
+        await maybeReactiveCompactInputHistory({
+          contextCompaction,
+          inputHistory,
+          lifecycleEmitter,
+          model,
+          options,
+          responseCreate,
+          round,
+          task: promptAssembly.task,
         });
       }
 
@@ -307,6 +384,207 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     });
     throw error;
   }
+}
+
+interface MaybeCompactOptions {
+  contextCompaction: ContextCompactionOptions | undefined;
+  inputHistory: ReturnType<typeof createInputHistoryManager>;
+  lifecycleEmitter: LifecycleEmitter;
+  model: string;
+  options: MinimalLoopOptions;
+  responseCreate: ResponseCreate;
+  round: number;
+  task: string;
+}
+
+async function maybeAutoCompactInputHistory(options: MaybeCompactOptions): Promise<void> {
+  if (!options.contextCompaction) {
+    return;
+  }
+
+  const beforeCharCount = estimateInputCharCount(options.inputHistory.modelInput());
+
+  if (beforeCharCount <= options.contextCompaction.softCharBudget) {
+    return;
+  }
+
+  if (options.inputHistory.compactableHistory().length === 0) {
+    return;
+  }
+
+  await compactInputHistory({
+    ...options,
+    beforeCharCount,
+    reason: `input chars ${beforeCharCount} exceeded soft budget ${options.contextCompaction.softCharBudget}`,
+    trigger: "auto",
+  });
+}
+
+async function maybeReactiveCompactInputHistory(options: MaybeCompactOptions): Promise<void> {
+  if (!options.contextCompaction) {
+    return;
+  }
+
+  const beforeCharCount = estimateInputCharCount(options.inputHistory.modelInput());
+
+  if (beforeCharCount <= options.contextCompaction.hardCharBudget) {
+    return;
+  }
+
+  if (options.inputHistory.compactableHistory().length === 0) {
+    await recordCompactionFailure({
+      afterCharCount: beforeCharCount,
+      beforeCharCount,
+      hardCharBudget: options.contextCompaction.hardCharBudget,
+      lifecycleEmitter: options.lifecycleEmitter,
+      reason: `input chars ${beforeCharCount} exceeded hard budget ${options.contextCompaction.hardCharBudget}, but no older history was compactable`,
+      round: options.round,
+      trigger: "reactive",
+    });
+    throw new Error("Context compaction failed: no older history was compactable.");
+  }
+
+  const compacted = await compactInputHistory({
+    ...options,
+    beforeCharCount,
+    reason: `input chars ${beforeCharCount} exceeded hard budget ${options.contextCompaction.hardCharBudget} after appending new context`,
+    trigger: "reactive",
+  });
+
+  if (compacted.afterCharCount > options.contextCompaction.hardCharBudget) {
+    await recordCompactionFailure({
+      afterCharCount: compacted.afterCharCount,
+      beforeCharCount,
+      hardCharBudget: options.contextCompaction.hardCharBudget,
+      lifecycleEmitter: options.lifecycleEmitter,
+      reason: `reactive compaction still exceeded hard budget ${options.contextCompaction.hardCharBudget}`,
+      round: options.round,
+      trigger: "reactive",
+    });
+    throw new Error("Context compaction failed: reactive compaction still exceeded hard budget.");
+  }
+}
+
+interface CompactInputHistoryOptions extends MaybeCompactOptions {
+  beforeCharCount: number;
+  reason: string;
+  trigger: ContextCompactionTrigger;
+}
+
+async function compactInputHistory(
+  options: CompactInputHistoryOptions,
+): Promise<{ afterCharCount: number }> {
+  if (!options.contextCompaction) {
+    return {
+      afterCharCount: options.beforeCharCount,
+    };
+  }
+
+  const source = buildCompactionSource({
+    history: options.inputHistory.compactableHistory(),
+    recentHistory: options.inputHistory.recentHistory(),
+    sourceItemCharLimit: options.contextCompaction.sourceItemCharLimit,
+    state: options.options.runtimeState?.(),
+    task: options.task,
+  });
+  const response = await options.responseCreate({
+    include: ["reasoning.encrypted_content"],
+    input: [
+      {
+        role: "user",
+        content: source.text,
+      },
+    ],
+    instructions: COMPACTION_INSTRUCTIONS,
+    model: options.model,
+    parallel_tool_calls: false,
+    reasoning: {
+      effort: "low",
+    },
+    store: false,
+    text: {
+      verbosity: "low",
+    },
+    tools: [],
+  });
+  const inspection = inspectCompactionSummary(response.output_text);
+
+  if (inspection.status === "invalid") {
+    await recordCompactionFailure({
+      beforeCharCount: options.beforeCharCount,
+      hardCharBudget: options.contextCompaction.hardCharBudget,
+      lifecycleEmitter: options.lifecycleEmitter,
+      reason: inspection.reason,
+      round: options.round,
+      trigger: options.trigger,
+    });
+    throw new Error(`Context compaction failed: ${inspection.reason}.`);
+  }
+
+  const applyResult = options.inputHistory.applyCompaction({
+    missingHeadings: inspection.missingHeadings,
+    sourceRoundCount: source.sourceRoundCount,
+    summary: inspection.summary,
+    trigger: options.trigger,
+  });
+  const afterCharCount = estimateInputCharCount(options.inputHistory.modelInput());
+  const event = {
+    afterCharCount,
+    beforeCharCount: options.beforeCharCount,
+    compactedRoundCount: applyResult.compactedRoundCount,
+    keptRecentRoundCount: applyResult.keptRecentRoundCount,
+    missingHeadings: inspection.missingHeadings,
+    omittedSourceCharCount: source.omittedCharCount,
+    reason: options.reason,
+    round: options.round,
+    sourceItemCount: source.sourceItemCount,
+    sourceRoundCount: source.sourceRoundCount,
+    summary: inspection.summary,
+    summaryCharCount: inspection.summary.length,
+    trigger: options.trigger,
+    type: "context_compacted" as const,
+  };
+
+  await options.lifecycleEmitter.emit(event);
+  options.options.transcript?.contextCompaction?.({
+    afterCharCount: event.afterCharCount,
+    beforeCharCount: event.beforeCharCount,
+    compactedRoundCount: event.compactedRoundCount,
+    keptRecentRoundCount: event.keptRecentRoundCount,
+    missingHeadings: event.missingHeadings,
+    reason: event.reason,
+    round: event.round,
+    sourceItemCount: event.sourceItemCount,
+    sourceRoundCount: event.sourceRoundCount,
+    summaryCharCount: event.summaryCharCount,
+    trigger: event.trigger,
+  });
+
+  return {
+    afterCharCount,
+  };
+}
+
+interface RecordCompactionFailureOptions {
+  afterCharCount?: number;
+  beforeCharCount: number;
+  hardCharBudget: number;
+  lifecycleEmitter: LifecycleEmitter;
+  reason: string;
+  round: number;
+  trigger: ContextCompactionTrigger;
+}
+
+async function recordCompactionFailure(options: RecordCompactionFailureOptions): Promise<void> {
+  await options.lifecycleEmitter.emit({
+    ...(options.afterCharCount !== undefined ? { afterCharCount: options.afterCharCount } : {}),
+    beforeCharCount: options.beforeCharCount,
+    hardCharBudget: options.hardCharBudget,
+    reason: options.reason,
+    round: options.round,
+    trigger: options.trigger,
+    type: "context_compaction_failed",
+  });
 }
 
 async function recordVerificationResult(

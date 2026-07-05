@@ -1,4 +1,5 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
+import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { TaskState } from "./task.js";
@@ -29,6 +30,31 @@ export type TraceEventPayload =
       instructionCharCount: number;
       catalogSkillIds: string[];
       selectedSkillIds: string[];
+    }
+  | {
+      type: "context_compacted";
+      round: number;
+      trigger: ContextCompactionTrigger;
+      reason: string;
+      beforeCharCount: number;
+      afterCharCount: number;
+      sourceItemCount: number;
+      sourceRoundCount: number;
+      compactedRoundCount: number;
+      keptRecentRoundCount: number;
+      summaryCharCount: number;
+      omittedSourceCharCount: number;
+      missingHeadings: RequiredCompactionHeading[];
+      summary: string;
+    }
+  | {
+      type: "context_compaction_failed";
+      round: number;
+      trigger: ContextCompactionTrigger;
+      reason: string;
+      beforeCharCount: number;
+      afterCharCount?: number;
+      hardCharBudget: number;
     }
   | {
       type: "model_response";

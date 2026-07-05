@@ -2,7 +2,7 @@ import type { HookableTraceEvent } from "../extensions/lifecycle.js";
 import type { PermissionDecision } from "../governance/types.js";
 import type { PromptAssemblySummary } from "../context/promptAssembly.js";
 import { countTaskItems } from "../runtime/task.js";
-import type { RuntimeState } from "../runtime/state.js";
+import type { RuntimeContextCompactionState, RuntimeState } from "../runtime/state.js";
 import type { VerificationResult } from "../runtime/verification.js";
 
 export function formatFunctionCallTranscript(
@@ -27,6 +27,24 @@ export function formatPromptAssemblyTranscript(round: number, summary: PromptAss
     `catalogSkills=${summary.catalogSkillIds.length}`,
     `selectedSkills=${selectedSkills}`,
     `chars=${summary.instructionCharCount}`,
+  ].join(" ");
+}
+
+export function formatContextCompactionTranscript(compaction: RuntimeContextCompactionState): string {
+  const missingHeadings =
+    compaction.missingHeadings.length > 0 ? compaction.missingHeadings.join(",") : "none";
+
+  return [
+    `[round ${compaction.round}] compact:`,
+    `trigger=${compaction.trigger}`,
+    `beforeChars=${compaction.beforeCharCount}`,
+    `afterChars=${compaction.afterCharCount}`,
+    `sourceRounds=${compaction.sourceRoundCount}`,
+    `keptRounds=${compaction.keptRecentRoundCount}`,
+    `sourceItems=${compaction.sourceItemCount}`,
+    `summaryChars=${compaction.summaryCharCount}`,
+    `missingHeadings=${missingHeadings}`,
+    `reason=${compaction.reason}`,
   ].join(" ");
 }
 
@@ -88,6 +106,14 @@ export function formatRuntimeStateTranscript(state: RuntimeState, round?: number
 
   if (state.recoveryAttempts !== undefined) {
     parts.push(`recoveryAttempts=${state.recoveryAttempts}`);
+  }
+
+  if (state.compactionCount !== undefined) {
+    parts.push(`compacted=${state.compactionCount}`);
+  }
+
+  if (state.lastCompaction) {
+    parts.push(`lastCompact=${state.lastCompaction.trigger}`);
   }
 
   if (state.taskState) {

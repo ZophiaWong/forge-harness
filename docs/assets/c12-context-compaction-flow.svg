@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">c12 Context Compaction flow</title>
+  <desc id="desc">A flow diagram for c12: older raw history is shaped into compaction source, summarized by an LLM compaction call, and replaced by a summary while recent rounds stay raw.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .history { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+    .shape { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .llm { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+    .result { fill: #f8fafc; stroke: #475569; stroke-width: 2; }
+    .pin { fill: #fefce8; stroke: #a16207; stroke-width: 2; }
+    .badge { fill: #0f172a; }
+    .badgeText { fill: #ffffff; font: 700 16px ui-sans-serif, system-ui, sans-serif; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 17px ui-sans-serif, system-ui, sans-serif; }
+    .small { fill: #334155; font: 14px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .dash { stroke: #64748b; stroke-width: 2.5; fill: none; marker-end: url(#arrow); stroke-dasharray: 7 6; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="560" />
+  <text class="title" x="56" y="54">c12: conversation history becomes a handoff</text>
+  <text class="caption" x="56" y="82">Pinned prompt assets stay outside compaction; old raw rounds are summarized, while recent rounds remain readable.</text>
+
+  <rect class="pin" x="58" y="128" width="218" height="96" rx="8" />
+  <text class="label" x="88" y="164">Pinned context</text>
+  <text class="mono" x="88" y="194">instructions / memory</text>
+  <text class="caption" x="88" y="216">re-injected by c11</text>
+
+  <rect class="history" x="58" y="286" width="218" height="162" rx="8" />
+  <circle class="badge" cx="90" cy="320" r="18" />
+  <text class="badgeText" x="85" y="326">1</text>
+  <text class="label" x="118" y="318">Raw history</text>
+  <text class="mono" x="88" y="360">round 1 tool output</text>
+  <text class="mono" x="88" y="390">round 2 tool output</text>
+  <text class="mono" x="88" y="420">round 3 tool output</text>
+
+  <rect class="shape" x="352" y="266" width="238" height="202" rx="8" />
+  <circle class="badge" cx="384" cy="300" r="18" />
+  <text class="badgeText" x="379" y="306">2</text>
+  <text class="label" x="412" y="298">Source shaping</text>
+  <text class="mono" x="382" y="340">keep task/state anchor</text>
+  <text class="mono" x="382" y="370">trim large items</text>
+  <text class="mono" x="382" y="400">record omitted chars</text>
+  <text class="caption" x="382" y="430">deterministic pre-pass</text>
+
+  <rect class="llm" x="666" y="266" width="238" height="202" rx="8" />
+  <circle class="badge" cx="698" cy="300" r="18" />
+  <text class="badgeText" x="693" y="306">3</text>
+  <text class="label" x="726" y="298">LLM compact</text>
+  <text class="mono" x="696" y="340">no tools</text>
+  <text class="mono" x="696" y="370">same model</text>
+  <text class="mono" x="696" y="400">fixed headings</text>
+  <text class="caption" x="696" y="430">summary handoff</text>
+
+  <rect class="result" x="356" y="116" width="490" height="104" rx="8" />
+  <text class="label" x="386" y="152">Next model input</text>
+  <text class="mono" x="386" y="184">task + compacted summary + last 2 raw rounds</text>
+  <text class="caption" x="386" y="208">trace stores the exact summary that replaced old history</text>
+
+  <path class="arrow" d="M276 366 H352" />
+  <path class="arrow" d="M590 366 H666" />
+  <path class="arrow" d="M785 266 C790 230 782 214 744 200" />
+  <path class="dash" d="M276 176 H356" />
+  <path class="dash" d="M276 318 C320 246 410 222 500 220" />
+
+  <text class="small" x="58" y="500">Transcript:</text>
+  <text class="mono" x="138" y="500">[round 4] compact: trigger=auto beforeChars=... afterChars=... sourceRounds=1 keptRounds=2</text>
+</svg>
