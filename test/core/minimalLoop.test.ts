@@ -1177,6 +1177,168 @@ describe("runMinimalLoop", () => {
     );
   });
 
+  it("injects completed background task notifications before the next model request", async () => {
+    const trace = createTraceRecorder();
+    const backgroundArguments = JSON.stringify({
+      command: "sleep 0.05 && printf background-ok",
+      runInBackground: true,
+    });
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: backgroundArguments,
+            call_id: "call_bg",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({ command: "sleep 0.2 && printf foreground-wait" }),
+            call_id: "call_wait",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "done",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "run a background command",
+    });
+
+    const requestInputs = callsFor(responseCreate).map((call) => JSON.stringify(call.input));
+    expect(requestInputs.slice(1).some((input) => input.includes("<task_notification>"))).toBe(true);
+    expect(requestInputs.slice(1).some((input) => input.includes("background_task_id: bg_001"))).toBe(true);
+    expect(requestInputs.slice(1).some((input) => input.includes("background-ok"))).toBe(true);
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        command: "sleep 0.05 && printf background-ok",
+        kind: "bash",
+        round: 1,
+        taskId: "bg_001",
+        type: "background_task_started",
+      }),
+    );
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        status: "completed",
+        taskId: "bg_001",
+        type: "background_task_notification",
+      }),
+    );
+  });
+
+  it("uses background notifications to gate candidate finals before verification", async () => {
+    const trace = createTraceRecorder();
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              command: "sleep 5 && printf late",
+              runInBackground: true,
+            }),
+            call_id: "call_bg",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "premature final",
+      },
+      {
+        output: [],
+        output_text: "final after warning",
+      },
+    );
+
+    const result = await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      maxToolRounds: 3,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "run a background command",
+    });
+
+    expect(result).toEqual({ finalAnswer: "final after warning", rounds: 3 });
+    expect(JSON.stringify(callsFor(responseCreate)[2]?.input)).toContain("<task_notification>");
+    expect(JSON.stringify(callsFor(responseCreate)[2]?.input)).toContain("status: running");
+    expect(trace.events).not.toContainEqual({
+      answer: "premature final",
+      round: 2,
+      type: "candidate_answer",
+    });
+
+    const canceledIndex = trace.events.findIndex(
+      (event) =>
+        event.type === "background_task_finished" &&
+        event.taskId === "bg_001" &&
+        event.status === "canceled",
+    );
+    const sessionEndedIndex = trace.events.findIndex((event) => event.type === "session_ended");
+
+    expect(canceledIndex).toBeGreaterThan(-1);
+    expect(sessionEndedIndex).toBeGreaterThan(canceledIndex);
+  });
+
+  it("does not add background support to an injected custom tool runtime", async () => {
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(),
+      toolDefinitions: () => [
+        {
+          type: "function",
+          name: "bash",
+          description: "Custom bash without background support.",
+          strict: true,
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              command: {
+                type: "string",
+              },
+            },
+            required: ["command"],
+          },
+        },
+      ],
+    };
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "done",
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      responseCreate,
+      task: "answer directly",
+      toolRuntime,
+    });
+
+    expect(callsFor(responseCreate)[0]?.tools[0]?.parameters.properties).not.toHaveProperty("runInBackground");
+  });
+
   it("creates the OpenAI client with a configured baseURL", async () => {
     createOpenAIResponseMock.mockResolvedValueOnce({
       output: [],

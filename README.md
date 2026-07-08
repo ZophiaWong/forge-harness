@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the first twelve runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, and `c12 Context Compaction`.
+This branch contains the documentation baseline plus the first thirteen runnable checkpoints: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, and `c13a Background Tool Tasks`.
 
 ## Setup
 
@@ -48,6 +48,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c10 Task / Todo](docs/tutorial/c10-task-todo.md): in-run task state, todo snapshots, and visible acceptance criteria.
 - [c11 System Prompt / Skills / Memory](docs/tutorial/c11-system-prompt-skills-memory.md): prompt assembly from base rules, project memory, skill catalog, and slash-selected skills.
 - [c12 Context Compaction](docs/tutorial/c12-context-compaction.md): LLM summary handoff for older conversation history, with trace evidence.
+- [c13a Background Tool Tasks](docs/tutorial/c13a-background-tool-tasks.md): session-scoped background bash tasks with notification return flow.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

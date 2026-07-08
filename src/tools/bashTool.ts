@@ -2,11 +2,13 @@ import { spawn } from "node:child_process";
 
 import { DEFAULT_TEXT_OUTPUT_CHAR_LIMIT, truncateText } from "./text.js";
 import type { RegisteredTool, ToolDefinition } from "./types.js";
+import type { BackgroundTaskManager } from "../runtime/backgroundTasks.js";
 
 export const DEFAULT_BASH_TIMEOUT_MS = 20_000;
+export const DEFAULT_BACKGROUND_BASH_TIMEOUT_MS = 120_000;
 export const DEFAULT_OUTPUT_CHAR_LIMIT = DEFAULT_TEXT_OUTPUT_CHAR_LIMIT;
 
-export type BashExecutionStatus = "completed" | "blocked" | "timed_out";
+export type BashExecutionStatus = "completed" | "blocked" | "timed_out" | "canceled";
 
 export interface BashExecutionResult {
   command: string;
@@ -18,6 +20,11 @@ export interface BashExecutionResult {
   blockedReason?: string;
 }
 
+export interface BashCommandHandle {
+  cancel(): void;
+  promise: Promise<BashExecutionResult>;
+}
+
 export interface BashExecutionOptions {
   cwd: string;
   outputCharLimit?: number;
@@ -26,6 +33,11 @@ export interface BashExecutionOptions {
 
 interface BashToolArguments {
   command: string;
+  runInBackground: boolean;
+}
+
+export interface BashToolOptions {
+  backgroundTasks?: BackgroundTaskManager;
 }
 
 interface DangerousCommandPattern {
@@ -73,27 +85,11 @@ const DANGEROUS_COMMAND_PATTERNS: DangerousCommandPattern[] = [
 const SECRET_ENV_NAME_PATTERN =
   /(?:^|_)(?:API_KEY|AUTH|CREDENTIAL|CREDENTIALS|PASSWORD|PRIVATE_KEY|SECRET|SESSION|TOKEN)(?:_|$)/i;
 
-export const bashToolDefinition: ToolDefinition = {
-  type: "function",
-  name: BASH_TOOL_NAME,
-  description: "Run one bash command in the current project directory and return stdout, stderr, and exit code.",
-  strict: true,
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      command: {
-        type: "string",
-        description: "The bash command to run.",
-      },
-    },
-    required: ["command"],
-  },
-};
+export const bashToolDefinition: ToolDefinition = createBashToolDefinition({ backgroundEnabled: false });
 
-export function createBashTool(cwd: string): RegisteredTool {
+export function createBashTool(cwd: string, options: BashToolOptions = {}): RegisteredTool {
   return {
-    definition: bashToolDefinition,
+    definition: createBashToolDefinition({ backgroundEnabled: options.backgroundTasks !== undefined }),
     async handler({ rawArguments }) {
       const args = parseBashToolArguments(rawArguments);
 
@@ -101,6 +97,55 @@ export function createBashTool(cwd: string): RegisteredTool {
         return {
           content: "failed_reason: bash arguments must be JSON with a non-empty string command field",
           status: "failed",
+          toolName: BASH_TOOL_NAME,
+        };
+      }
+
+      if (args.runInBackground) {
+        if (!options.backgroundTasks) {
+          return {
+            content: "failed_reason: bash.runInBackground is not supported by this tool runtime",
+            status: "failed",
+            toolName: BASH_TOOL_NAME,
+          };
+        }
+
+        const blockedReason = findDangerousCommandReason(args.command);
+
+        if (blockedReason) {
+          return {
+            content: formatBashResultForModel({
+              blockedReason,
+              command: args.command,
+              durationMs: 0,
+              exitCode: null,
+              status: "blocked",
+              stderr: blockedReason,
+              stdout: "",
+            }),
+            metadata: {
+              command: args.command,
+              observationSummary: "bash blocked",
+            },
+            status: "blocked",
+            toolName: BASH_TOOL_NAME,
+          };
+        }
+
+        const task = options.backgroundTasks.startBash({
+          command: args.command,
+          cwd,
+          timeoutMs: DEFAULT_BACKGROUND_BASH_TIMEOUT_MS,
+        });
+
+        return {
+          content: formatBackgroundStartResult(task),
+          metadata: {
+            backgroundTask: task,
+            command: args.command,
+            observationSummary: "bash background task started",
+          },
+          status: "completed",
           toolName: BASH_TOOL_NAME,
         };
       }
@@ -113,9 +158,40 @@ export function createBashTool(cwd: string): RegisteredTool {
           command: result.command,
           exitCode: result.exitCode,
         },
-        status: result.status,
+        status: result.status === "canceled" ? "failed" : result.status,
         toolName: BASH_TOOL_NAME,
       };
+    },
+  };
+}
+
+function createBashToolDefinition(options: { backgroundEnabled: boolean }): ToolDefinition {
+  return {
+    type: "function",
+    name: BASH_TOOL_NAME,
+    description: options.backgroundEnabled
+      ? "Run one bash command in the current project directory. Use runInBackground only for explicitly requested long-running background work."
+      : "Run one bash command in the current project directory and return stdout, stderr, and exit code.",
+    strict: !options.backgroundEnabled,
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        command: {
+          type: "string",
+          description: "The bash command to run.",
+        },
+        ...(options.backgroundEnabled
+          ? {
+              runInBackground: {
+                type: "boolean",
+                description:
+                  "Set to true only when the command should keep running while the foreground loop continues.",
+              },
+            }
+          : {}),
+      },
+      required: ["command"],
     },
   };
 }
@@ -164,25 +240,35 @@ export async function runBashCommand(
   command: string,
   options: BashExecutionOptions,
 ): Promise<BashExecutionResult> {
+  return startBashCommand(command, options).promise;
+}
+
+export function startBashCommand(command: string, options: BashExecutionOptions): BashCommandHandle {
   const startedAt = Date.now();
   const blockedReason = findDangerousCommandReason(command);
 
   if (blockedReason) {
     return {
-      command,
-      durationMs: Date.now() - startedAt,
-      exitCode: null,
-      status: "blocked",
-      stderr: blockedReason,
-      stdout: "",
-      blockedReason,
+      cancel() {
+        return undefined;
+      },
+      promise: Promise.resolve({
+        blockedReason,
+        command,
+        durationMs: Date.now() - startedAt,
+        exitCode: null,
+        status: "blocked",
+        stderr: blockedReason,
+        stdout: "",
+      }),
     };
   }
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_BASH_TIMEOUT_MS;
   const outputCharLimit = options.outputCharLimit ?? DEFAULT_OUTPUT_CHAR_LIMIT;
 
-  return new Promise((resolve) => {
+  let cancel: () => void = () => undefined;
+  const promise = new Promise<BashExecutionResult>((resolve) => {
     const child = spawn("bash", ["-lc", command], {
       cwd: options.cwd,
       detached: true,
@@ -194,16 +280,12 @@ export async function runBashCommand(
     let stdoutOmittedChars = 0;
     let stderr = "";
     let stderrOmittedChars = 0;
-    let timedOut = false;
+    let settled = false;
+    let terminalStatus: Extract<BashExecutionStatus, "timed_out" | "canceled"> | undefined;
     let killTimer: NodeJS.Timeout | undefined;
 
     const timer = setTimeout(() => {
-      timedOut = true;
-      killProcessGroup(child.pid, "SIGTERM");
-      killTimer = setTimeout(() => {
-        killProcessGroup(child.pid, "SIGKILL");
-      }, 1_000);
-      killTimer.unref();
+      requestTermination("timed_out");
     }, timeoutMs);
     timer.unref();
 
@@ -213,6 +295,33 @@ export async function runBashCommand(
       if (killTimer) {
         clearTimeout(killTimer);
       }
+    };
+
+    const finish = (result: BashExecutionResult): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimers();
+      resolve(result);
+    };
+
+    const requestTermination = (status: Extract<BashExecutionStatus, "timed_out" | "canceled">): void => {
+      if (settled || terminalStatus) {
+        return;
+      }
+
+      terminalStatus = status;
+      killProcessGroup(child.pid, "SIGTERM");
+      killTimer = setTimeout(() => {
+        killProcessGroup(child.pid, "SIGKILL");
+      }, 1_000);
+      killTimer.unref();
+    };
+
+    cancel = () => {
+      requestTermination("canceled");
     };
 
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -228,33 +337,29 @@ export async function runBashCommand(
     });
 
     child.on("error", (error) => {
-      clearTimers();
-      resolve({
+      finish({
         command,
         durationMs: Date.now() - startedAt,
         exitCode: null,
-        status: timedOut ? "timed_out" : "completed",
-        stderr: finalizeOutput(error.message, stderrOmittedChars),
+        status: terminalStatus ?? "completed",
+        stderr: finalizeTerminatedStderr(error.message, stderrOmittedChars, terminalStatus, timeoutMs),
         stdout: finalizeOutput(stdout, stdoutOmittedChars),
       });
     });
 
     child.on("close", (code) => {
-      clearTimers();
-      const finalStderr = timedOut
-        ? `${finalizeOutput(stderr, stderrOmittedChars)}\n[timed out after ${timeoutMs}ms]`.trim()
-        : finalizeOutput(stderr, stderrOmittedChars);
-
-      resolve({
+      finish({
         command,
         durationMs: Date.now() - startedAt,
         exitCode: code,
-        status: timedOut ? "timed_out" : "completed",
-        stderr: finalStderr,
+        status: terminalStatus ?? "completed",
+        stderr: finalizeTerminatedStderr(stderr, stderrOmittedChars, terminalStatus, timeoutMs),
         stdout: finalizeOutput(stdout, stdoutOmittedChars),
       });
     });
   });
+
+  return { cancel, promise };
 }
 
 function parseBashToolArguments(rawArguments: string): BashToolArguments | undefined {
@@ -268,7 +373,10 @@ function parseBashToolArguments(rawArguments: string): BashToolArguments | undef
       typeof parsed.command === "string" &&
       parsed.command.trim().length > 0
     ) {
-      return { command: parsed.command };
+      return {
+        command: parsed.command,
+        runInBackground: "runInBackground" in parsed && parsed.runInBackground === true,
+      };
     }
   } catch {
     return undefined;
@@ -300,6 +408,35 @@ function finalizeOutput(output: string, omittedChars: number): string {
   }
 
   return `${output}\n[truncated ${omittedChars} chars]`;
+}
+
+function finalizeTerminatedStderr(
+  stderr: string,
+  omittedChars: number,
+  status: Extract<BashExecutionStatus, "timed_out" | "canceled"> | undefined,
+  timeoutMs: number,
+): string {
+  const output = finalizeOutput(stderr, omittedChars);
+
+  if (status === "timed_out") {
+    return `${output}\n[timed out after ${timeoutMs}ms]`.trim();
+  }
+
+  if (status === "canceled") {
+    return `${output}\n[canceled]`.trim();
+  }
+
+  return output;
+}
+
+function formatBackgroundStartResult(task: { command: string; id: string; kind: string }): string {
+  return [
+    "status: background_started",
+    `background_task_id: ${task.id}`,
+    `kind: ${task.kind}`,
+    `command: ${task.command}`,
+    "result: task is still running; a task notification will be injected when it completes",
+  ].join("\n");
 }
 
 function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {

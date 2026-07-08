@@ -2,6 +2,7 @@ import type { PermissionDecisionAction, PermissionRisk } from "../governance/typ
 import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ToolStatus } from "../tools/types.js";
+import type { BackgroundTaskKind, BackgroundTaskStatus } from "./backgroundTasks.js";
 import type { TaskState } from "./task.js";
 import type { VerificationStatus } from "./verification.js";
 
@@ -99,6 +100,30 @@ export type TraceEventPayload =
       round: number;
       callId: string;
       taskState: TaskState;
+    }
+  | {
+      type: "background_task_started";
+      round: number;
+      taskId: string;
+      kind: BackgroundTaskKind;
+      command: string;
+    }
+  | {
+      type: "background_task_finished";
+      round: number;
+      taskId: string;
+      kind: BackgroundTaskKind;
+      command: string;
+      status: BackgroundTaskStatus;
+      exitCode?: number | null;
+    }
+  | {
+      type: "background_task_notification";
+      round: number;
+      taskId: string;
+      kind: BackgroundTaskKind;
+      command: string;
+      status: BackgroundTaskStatus;
     }
   | {
       type: "candidate_answer";

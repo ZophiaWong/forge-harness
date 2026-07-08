@@ -281,6 +281,13 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           updatedByCallId: event.callId,
         },
       };
+    case "background_task_started":
+    case "background_task_finished":
+    case "background_task_notification":
+      return {
+        ...state,
+        currentRound: event.round,
+      };
     case "candidate_answer":
       return {
         ...state,

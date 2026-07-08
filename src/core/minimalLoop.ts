@@ -26,9 +26,17 @@ import type {
   PermissionDecision,
   PermissionPolicy,
 } from "../governance/types.js";
+import {
+  createBackgroundTaskManager,
+  formatBackgroundTaskNotification,
+  type BackgroundTaskKind,
+  type BackgroundTaskManager,
+  type BackgroundTaskNotification,
+} from "../runtime/backgroundTasks.js";
 import type { RuntimeState } from "../runtime/state.js";
 import { isTaskState } from "../runtime/task.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
+import type { SessionEndStatus } from "../runtime/trace.js";
 import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
@@ -156,7 +164,28 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
   const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
   const permissionPolicy = options.permissionPolicy ?? createDefaultPermissionPolicy();
   const approver = options.approver ?? createRejectingApprover();
-  const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd });
+  let lastRound = 0;
+  const lifecycleEmitter =
+    options.lifecycleEmitter ??
+    createLifecycleEmitter({
+      recorder: createNoopTraceRecorder(),
+    });
+  const backgroundTasks = options.toolRuntime
+    ? undefined
+    : createBackgroundTaskManager({
+        onTaskFinished: async (task) => {
+          await lifecycleEmitter.emit({
+            command: task.command,
+            exitCode: task.exitCode,
+            kind: task.kind,
+            round: lastRound,
+            status: task.status,
+            taskId: task.id,
+            type: "background_task_finished",
+          });
+        },
+      });
+  const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd, backgroundTasks });
   const contextProjection = options.contextProjection ?? createContextProjection();
   const contextCompaction =
     options.contextCompaction === false
@@ -170,11 +199,6 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     assets: promptAssets,
     task: options.task,
   });
-  const lifecycleEmitter =
-    options.lifecycleEmitter ??
-    createLifecycleEmitter({
-      recorder: createNoopTraceRecorder(),
-    });
   const inputHistory = createInputHistoryManager({
     pinnedTask: {
       role: "user",
@@ -182,7 +206,6 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     },
     recentRoundsToKeep: contextCompaction?.recentRoundsToKeep ?? DEFAULT_COMPACTION_OPTIONS.recentRoundsToKeep,
   });
-  let lastRound = 0;
   let recoveryAttempts = 0;
 
   try {
@@ -199,6 +222,13 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       lastRound = round;
       options.transcript?.roundStart(round, model);
       const toolDefinitions = toolRuntime.toolDefinitions();
+      await appendBackgroundTaskNotifications({
+        backgroundTasks,
+        inputHistory,
+        lifecycleEmitter,
+        round,
+        running: false,
+      });
       await maybeAutoCompactInputHistory({
         contextCompaction,
         inputHistory,
@@ -257,6 +287,27 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
 
       if (toolCalls.length === 0) {
         const candidateAnswer = response.output_text.trim();
+        const backgroundGateInjected = await appendBackgroundTaskNotifications({
+          backgroundTasks,
+          inputHistory,
+          lifecycleEmitter,
+          round,
+          running: true,
+        });
+
+        if (backgroundGateInjected > 0) {
+          await maybeReactiveCompactInputHistory({
+            contextCompaction,
+            inputHistory,
+            lifecycleEmitter,
+            model,
+            options,
+            responseCreate,
+            round,
+            task: promptAssembly.task,
+          });
+          continue;
+        }
 
         if (!options.verifier) {
           options.transcript?.finalAnswer(candidateAnswer);
@@ -265,11 +316,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
             round,
             type: "final_answer",
           });
-          await lifecycleEmitter.emit({
-            rounds: round,
-            status: "completed",
-            type: "session_ended",
-          });
+          await finishSession(lifecycleEmitter, backgroundTasks, round, "completed");
           reportFinalState(options);
           return { finalAnswer: candidateAnswer, rounds: round };
         }
@@ -296,11 +343,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
             round,
             type: "final_answer",
           });
-          await lifecycleEmitter.emit({
-            rounds: round,
-            status: "completed",
-            type: "session_ended",
-          });
+          await finishSession(lifecycleEmitter, backgroundTasks, round, "completed");
           reportFinalState(options);
           return { finalAnswer: candidateAnswer, rounds: round };
         }
@@ -377,11 +420,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       message,
       type: "session_failed",
     });
-    await lifecycleEmitter.emit({
-      rounds: lastRound,
-      status: "failed",
-      type: "session_ended",
-    });
+    await finishSession(lifecycleEmitter, backgroundTasks, lastRound, "failed");
     throw error;
   }
 }
@@ -632,6 +671,78 @@ function reportFinalState(options: MinimalLoopOptions): void {
   }
 }
 
+interface AppendBackgroundTaskNotificationsOptions {
+  backgroundTasks: BackgroundTaskManager | undefined;
+  inputHistory: ReturnType<typeof createInputHistoryManager>;
+  lifecycleEmitter: LifecycleEmitter;
+  round: number;
+  running: boolean;
+}
+
+async function appendBackgroundTaskNotifications(
+  options: AppendBackgroundTaskNotificationsOptions,
+): Promise<number> {
+  if (!options.backgroundTasks) {
+    return 0;
+  }
+
+  const notifications = [
+    ...options.backgroundTasks.drainNotifications(),
+    ...(options.running ? options.backgroundTasks.drainRunningNotifications() : []),
+  ];
+
+  for (const notification of notifications) {
+    options.inputHistory.appendRoundItems(options.round, [
+      {
+        role: "user",
+        content: formatBackgroundTaskNotification(notification),
+      } as CompactableInputItem,
+    ]);
+    await recordBackgroundTaskNotification(options.lifecycleEmitter, options.round, notification);
+  }
+
+  return notifications.length;
+}
+
+async function recordBackgroundTaskNotification(
+  lifecycleEmitter: LifecycleEmitter,
+  round: number,
+  notification: BackgroundTaskNotification,
+): Promise<void> {
+  await lifecycleEmitter.emit({
+    command: notification.command,
+    kind: notification.kind,
+    round,
+    status: notification.status,
+    taskId: notification.id,
+    type: "background_task_notification",
+  });
+}
+
+async function finishSession(
+  lifecycleEmitter: LifecycleEmitter,
+  backgroundTasks: BackgroundTaskManager | undefined,
+  rounds: number,
+  status: SessionEndStatus,
+): Promise<void> {
+  await cleanupBackgroundTasks(backgroundTasks);
+  await lifecycleEmitter.emit({
+    rounds,
+    status,
+    type: "session_ended",
+  });
+}
+
+async function cleanupBackgroundTasks(backgroundTasks: BackgroundTaskManager | undefined): Promise<void> {
+  if (!backgroundTasks) {
+    return;
+  }
+
+  await backgroundTasks.flushEvents();
+  await backgroundTasks.cancelRunning();
+  await backgroundTasks.flushEvents();
+}
+
 function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: string | undefined): ResponseCreate {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is required.");
@@ -739,6 +850,7 @@ async function executeToolCall(
     type: "tool_result",
   });
   await recordTaskStateUpdateFromToolResult(lifecycleEmitter, round, toolCall.call_id, result);
+  await recordBackgroundTaskStartedFromToolResult(lifecycleEmitter, round, result);
   return resultText;
 }
 
@@ -764,6 +876,57 @@ async function recordTaskStateUpdateFromToolResult(
     taskState,
     type: "task_state_updated",
   });
+}
+
+async function recordBackgroundTaskStartedFromToolResult(
+  lifecycleEmitter: LifecycleEmitter,
+  round: number,
+  result: ToolResult,
+): Promise<void> {
+  if (result.status !== "completed" || result.toolName !== "bash") {
+    return;
+  }
+
+  const task = readBackgroundTaskMetadata(result.metadata?.backgroundTask);
+
+  if (!task) {
+    return;
+  }
+
+  await lifecycleEmitter.emit({
+    command: task.command,
+    kind: task.kind,
+    round,
+    taskId: task.id,
+    type: "background_task_started",
+  });
+}
+
+interface BackgroundTaskMetadata {
+  command: string;
+  id: string;
+  kind: BackgroundTaskKind;
+}
+
+function readBackgroundTaskMetadata(value: unknown): BackgroundTaskMetadata | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("command" in value) ||
+    typeof value.command !== "string" ||
+    !("id" in value) ||
+    typeof value.id !== "string" ||
+    !("kind" in value) ||
+    value.kind !== "bash"
+  ) {
+    return undefined;
+  }
+
+  return {
+    command: value.command,
+    id: value.id,
+    kind: value.kind,
+  };
 }
 
 function createPermissionBlockedResult(

@@ -8,14 +8,16 @@ import { createToolRuntime } from "./runtime.js";
 import { createTodoTool } from "./todoTool.js";
 import type { ToolRuntime } from "./types.js";
 import { createWriteTool } from "./writeTool.js";
+import type { BackgroundTaskManager } from "../runtime/backgroundTasks.js";
 
 export interface DefaultToolRuntimeOptions {
+  backgroundTasks?: BackgroundTaskManager;
   cwd: string;
 }
 
 export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): ToolRuntime {
   return createToolRuntime([
-    createBashTool(options.cwd),
+    createBashTool(options.cwd, { backgroundTasks: options.backgroundTasks }),
     createReadTool(options.cwd),
     createLsTool(options.cwd),
     createGrepTool(options.cwd),

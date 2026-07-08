@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" role="img" aria-labelledby="title desc">
+  <title id="title">c13a Background Tool Tasks flow</title>
+  <desc id="desc">A two-lane diagram comparing the existing foreground bash path with the c13a background branch and task notification return path.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .old { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .new { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .note { fill: #fefce8; stroke: #a16207; stroke-width: 2; }
+    .return { fill: #fefce8; stroke: #a16207; stroke-width: 2; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .lane { fill: #334155; font: 700 15px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 16px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrowOld { stroke: #2563eb; stroke-width: 2.5; fill: none; marker-end: url(#arrowOld); }
+    .arrowNew { stroke: #047857; stroke-width: 2.5; fill: none; marker-end: url(#arrowNew); }
+    .branch { stroke: #047857; stroke-width: 2.5; fill: none; marker-end: url(#arrowNew); stroke-dasharray: 7 6; }
+  </style>
+  <defs>
+    <marker id="arrowOld" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb" />
+    </marker>
+    <marker id="arrowNew" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#047857" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="600" />
+  <text class="title" x="56" y="54">c13a: background is an added branch, not a replacement</text>
+  <text class="caption" x="56" y="82">Blue shows the existing foreground path. Green shows the new path only used when bash.runInBackground is true.</text>
+
+  <text class="lane" x="56" y="128">Existing foreground path</text>
+  <rect class="old" x="58" y="150" width="160" height="88" rx="8" />
+  <text class="label" x="88" y="184">Model request</text>
+  <text class="mono" x="88" y="212">tools: bash</text>
+
+  <rect class="old" x="270" y="150" width="160" height="88" rx="8" />
+  <text class="label" x="302" y="184">bash tool call</text>
+  <text class="mono" x="302" y="212">foreground default</text>
+
+  <rect class="old" x="482" y="150" width="160" height="88" rx="8" />
+  <text class="label" x="516" y="184">Wait for exit</text>
+  <text class="mono" x="516" y="212">command finishes</text>
+
+  <rect class="old" x="694" y="150" width="160" height="88" rx="8" />
+  <text class="label" x="718" y="184">Tool output</text>
+  <text class="mono" x="718" y="212">stdout / stderr</text>
+
+  <rect class="old" x="906" y="150" width="160" height="88" rx="8" />
+  <text class="label" x="930" y="184">Next request</text>
+  <text class="mono" x="930" y="212">model sees result</text>
+
+  <path class="arrowOld" d="M218 194 H270" />
+  <path class="arrowOld" d="M430 194 H482" />
+  <path class="arrowOld" d="M642 194 H694" />
+  <path class="arrowOld" d="M854 194 H906" />
+
+  <text class="lane" x="56" y="326">c13a background branch</text>
+  <rect class="new" x="270" y="348" width="160" height="88" rx="8" />
+  <text class="label" x="302" y="382">Explicit switch</text>
+  <text class="mono" x="302" y="410">runInBackground</text>
+
+  <rect class="new" x="482" y="348" width="160" height="88" rx="8" />
+  <text class="label" x="510" y="382">Start task</text>
+  <text class="mono" x="510" y="410">spawn background</text>
+
+  <rect class="new" x="694" y="348" width="160" height="88" rx="8" />
+  <text class="label" x="720" y="382">Task runs</text>
+  <text class="mono" x="720" y="410">same session</text>
+
+  <rect class="new" x="906" y="348" width="160" height="88" rx="8" />
+  <text class="label" x="932" y="382">Notification</text>
+  <text class="mono" x="932" y="410">result returns later</text>
+
+  <rect class="return" x="482" y="268" width="184" height="54" rx="8" />
+  <text class="label" x="506" y="291">background_started</text>
+  <text class="mono" x="506" y="313">start result returns</text>
+
+  <path class="branch" d="M350 238 V348" />
+  <path class="arrowNew" d="M430 392 H482" />
+  <path class="arrowNew" d="M642 392 H694" />
+  <path class="arrowNew" d="M854 392 H906" />
+  <path class="branch" d="M562 348 V322" />
+  <path class="branch" d="M666 295 H986 V238" />
+  <path class="branch" d="M986 348 V318 H1036 V238" />
+
+  <rect class="note" x="58" y="486" width="1008" height="72" rx="8" />
+  <text class="caption" x="88" y="518">The foreground path still works as before. c13a adds a lower branch and an explicit start-result return path.</text>
+  <text class="caption" x="88" y="540">When the background task has a result, a notification returns to the next model request.</text>
+</svg>

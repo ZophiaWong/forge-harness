@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="540" viewBox="0 0 1120 540" role="img" aria-labelledby="title desc">
+  <title id="title">c13a Background Tool Tasks timeline</title>
+  <desc id="desc">A two-lane timeline showing the foreground round and background task flow: the model starts a background task, receives background_started immediately, the task runs and finishes later, and a task notification enters a later model input.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .laneBg { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+    .foreground { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .background { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+    .return { fill: #fefce8; stroke: #a16207; stroke-width: 2; }
+    .note { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+    .badge { fill: #0f172a; }
+    .badgeText { fill: #ffffff; font: 700 12px ui-sans-serif, system-ui, sans-serif; }
+    .title { fill: #0f172a; font: 700 20px ui-sans-serif, system-ui, sans-serif; }
+    .lane { fill: #334155; font: 700 15px ui-sans-serif, system-ui, sans-serif; }
+    .label { fill: #0f172a; font: 700 15px ui-sans-serif, system-ui, sans-serif; }
+    .mono { fill: #0f172a; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .caption { fill: #475569; font: 13px ui-sans-serif, system-ui, sans-serif; }
+    .arrowFg { stroke: #2563eb; stroke-width: 2.5; fill: none; marker-end: url(#arrowFg); }
+    .arrowBg { stroke: #047857; stroke-width: 2.5; fill: none; marker-end: url(#arrowBg); }
+    .arrowReturn { stroke: #a16207; stroke-width: 2.5; fill: none; marker-end: url(#arrowReturn); }
+    .guide { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 5 6; }
+  </style>
+  <defs>
+    <marker id="arrowFg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb" />
+    </marker>
+    <marker id="arrowBg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#047857" />
+    </marker>
+    <marker id="arrowReturn" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#a16207" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="540" />
+  <text class="title" x="56" y="54">c13a: foreground and background timelines</text>
+  <text class="caption" x="56" y="82">Foreground rounds continue after background_started; the background process finishes later.</text>
+
+  <rect class="laneBg" x="56" y="116" width="1008" height="132" rx="8" />
+  <text class="lane" x="80" y="144">Foreground rounds</text>
+
+  <rect class="foreground" x="92" y="160" width="190" height="72" rx="8" />
+  <circle class="badge" cx="112" cy="180" r="13" />
+  <text class="badgeText" x="108" y="185">3</text>
+  <text class="label" x="132" y="184">Round N tool call</text>
+  <text class="mono" x="132" y="210">runInBackground: true</text>
+
+  <rect class="return" x="330" y="160" width="190" height="72" rx="8" />
+  <circle class="badge" cx="350" cy="180" r="13" />
+  <text class="badgeText" x="346" y="185">4</text>
+  <text class="label" x="370" y="184">background_started</text>
+  <text class="mono" x="370" y="210">start result returns</text>
+
+  <rect class="foreground" x="568" y="160" width="190" height="72" rx="8" />
+  <text class="label" x="598" y="184">Foreground continues</text>
+  <text class="mono" x="598" y="210">other checks can run</text>
+
+  <rect class="return" x="806" y="160" width="220" height="72" rx="8" />
+  <circle class="badge" cx="826" cy="180" r="13" />
+  <text class="badgeText" x="822" y="185">4</text>
+  <text class="label" x="846" y="184">Later model input</text>
+  <text class="mono" x="846" y="210">&lt;task_notification&gt;</text>
+
+  <path class="arrowFg" d="M520 196 H568" />
+  <path class="arrowFg" d="M758 196 H806" />
+
+  <rect class="laneBg" x="56" y="288" width="1008" height="132" rx="8" />
+  <text class="lane" x="80" y="316">Background task</text>
+
+  <rect class="background" x="330" y="332" width="190" height="72" rx="8" />
+  <circle class="badge" cx="350" cy="352" r="13" />
+  <text class="badgeText" x="342" y="357">1/2</text>
+  <text class="label" x="370" y="356">Start bg task</text>
+  <text class="mono" x="370" y="382">executor + registry</text>
+
+  <rect class="background" x="568" y="332" width="190" height="72" rx="8" />
+  <text class="label" x="598" y="356">Task running</text>
+  <text class="mono" x="598" y="382">foreground not blocked</text>
+
+  <rect class="background" x="806" y="332" width="220" height="72" rx="8" />
+  <text class="label" x="836" y="356">Task finished</text>
+  <text class="mono" x="836" y="382">result is ready</text>
+
+  <line class="guide" x1="425" y1="232" x2="425" y2="332" />
+  <line class="guide" x1="916" y1="232" x2="916" y2="332" />
+  <path class="arrowBg" d="M282 196 C300 196 316 262 344 332" />
+  <path class="arrowReturn" d="M425 332 V232" />
+  <path class="arrowBg" d="M520 368 H568" />
+  <path class="arrowBg" d="M758 368 H806" />
+  <path class="arrowReturn" d="M916 332 V232" />
+
+  <rect class="note" x="92" y="452" width="934" height="54" rx="8" />
+  <circle class="badge" cx="118" cy="478" r="13" />
+  <text class="badgeText" x="114" y="483">5</text>
+  <text class="caption" x="144" y="474">Trace records three separate facts on this timeline: task started, process finished, and notification injected.</text>
+  <text class="caption" x="144" y="494">Those events make the delayed return path visible after the session ends.</text>
+</svg>
