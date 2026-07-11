@@ -38,6 +38,32 @@ describe("parseCliArgs", () => {
       task: "inspect",
     });
   });
+
+  it("parses cron worker modes", () => {
+    expect(parseCliArgs(["--cron-worker"])).toEqual({
+      cronWorker: "watch",
+    });
+    expect(parseCliArgs(["--cron-worker-once"])).toEqual({
+      cronWorker: "once",
+    });
+  });
+
+  it("rejects cron worker modes mixed with tasks or verification", () => {
+    expect(parseCliArgs(["--cron-worker", "inspect"])).toEqual({
+      cronWorker: "watch",
+      error: "--cron-worker does not accept a task.",
+      task: "inspect",
+    });
+    expect(parseCliArgs(["--cron-worker-once", "--verify", "npm run build"])).toEqual({
+      cronWorker: "once",
+      error: "--cron-worker-once does not accept --verify.",
+      verifyCommand: "npm run build",
+    });
+    expect(parseCliArgs(["--cron-worker", "--cron-worker-once"])).toEqual({
+      cronWorker: "watch",
+      error: "Use only one cron worker mode.",
+    });
+  });
 });
 
 describe("parseTaskFromArgs", () => {

@@ -288,6 +288,17 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
         ...state,
         currentRound: event.round,
       };
+    case "cron_scheduled":
+    case "cron_canceled":
+      return {
+        ...state,
+        currentRound: event.round,
+      };
+    case "cron_worker_started":
+    case "cron_fired":
+    case "cron_run_finished":
+    case "cron_worker_stopped":
+      return state;
     case "candidate_answer":
       return {
         ...state,

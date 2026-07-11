@@ -6,12 +6,15 @@ import { createLsTool } from "./lsTool.js";
 import { createReadTool } from "./readTool.js";
 import { createToolRuntime } from "./runtime.js";
 import { createTodoTool } from "./todoTool.js";
+import { createCronTools } from "./cronTools.js";
 import type { ToolRuntime } from "./types.js";
 import { createWriteTool } from "./writeTool.js";
 import type { BackgroundTaskManager } from "../runtime/backgroundTasks.js";
+import type { CronScheduleStore } from "../runtime/cronStore.js";
 
 export interface DefaultToolRuntimeOptions {
   backgroundTasks?: BackgroundTaskManager;
+  cronSchedules?: CronScheduleStore;
   cwd: string;
 }
 
@@ -25,5 +28,6 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
     createEditTool(options.cwd),
     createWriteTool(options.cwd),
     createTodoTool(),
+    ...(options.cronSchedules ? createCronTools(options.cronSchedules) : []),
   ]);
 }

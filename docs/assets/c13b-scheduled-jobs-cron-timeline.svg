@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="590" viewBox="0 0 1120 590" role="img" aria-labelledby="title desc">
+  <title id="title">c13b cron worker recurring timeline</title>
+  <desc id="desc">A timeline showing a recurring cron schedule being created, fired once by the worker, recorded in a fresh session, and remaining active for a future minute.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .lane { stroke: #cbd5e1; stroke-width: 2; }
+      .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .event { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 8; }
+      .store { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; rx: 8; }
+      .worker { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 8; }
+      .trace { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 8; }
+      .title { font: 700 24px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .label { font: 600 17px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .small { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .mono { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="590" fill="#ffffff" />
+  <text class="title" x="56" y="54">c13b: recurring cron stays active after each run</text>
+  <text class="small" x="56" y="82">The worker records each fired minute before enqueueing, then links the schedule to the latest scheduled session.</text>
+
+  <line class="lane" x1="120" y1="162" x2="1020" y2="162" />
+  <line class="lane" x1="120" y1="336" x2="1020" y2="336" />
+  <line class="lane" x1="120" y1="510" x2="1020" y2="510" />
+
+  <text class="label" x="56" y="168">Store</text>
+  <text class="label" x="56" y="342">Worker</text>
+  <text class="label" x="56" y="516">Run</text>
+
+  <rect class="store" x="154" y="118" width="190" height="88" />
+  <text class="label" x="178" y="152">cron_001 active</text>
+  <text class="mono" x="178" y="178">runCount=0</text>
+
+  <rect class="worker" x="408" y="292" width="190" height="88" />
+  <text class="label" x="432" y="326">minute matches</text>
+  <text class="mono" x="432" y="352">cron_fired</text>
+
+  <rect class="store" x="408" y="118" width="230" height="88" />
+  <text class="label" x="432" y="152">mark fired</text>
+  <text class="mono" x="432" y="178">lastFiredMinute=08:00</text>
+
+  <rect class="trace" x="664" y="466" width="220" height="88" />
+  <text class="label" x="688" y="500">fresh session</text>
+  <text class="mono" x="688" y="526">session_started ... final</text>
+
+  <rect class="store" x="828" y="118" width="230" height="88" />
+  <text class="label" x="852" y="152">record result</text>
+  <text class="mono" x="852" y="178">runCount=1 active</text>
+
+  <path class="arrow" d="M 344 162 L 408 162" />
+  <path class="arrow" d="M 523 292 L 523 206" />
+  <path class="arrow" d="M 598 336 L 704 466" />
+  <path class="arrow" d="M 884 466 L 944 206" />
+
+  <text class="small" x="408" y="430">The scheduled run has its own session trace.</text>
+  <text class="small" x="760" y="238">Recurring schedules remain active after success or failure.</text>
+</svg>

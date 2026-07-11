@@ -43,6 +43,18 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
     };
   }
 
+  if (toolCall.name === "list_crons") {
+    return allow("inspect cron schedules");
+  }
+
+  if (toolCall.name === "schedule_cron") {
+    return ask("mutating", "creating a durable cron schedule may trigger future agent runs");
+  }
+
+  if (toolCall.name === "cancel_cron") {
+    return ask("mutating", "canceling a durable cron schedule changes future agent runs");
+  }
+
   if (toolCall.name === "edit") {
     const args = parseEditArguments(toolCall.arguments);
 

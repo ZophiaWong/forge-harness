@@ -33,6 +33,7 @@ import {
   type BackgroundTaskManager,
   type BackgroundTaskNotification,
 } from "../runtime/backgroundTasks.js";
+import type { CronSchedule, CronScheduleStore } from "../runtime/cronStore.js";
 import type { RuntimeState } from "../runtime/state.js";
 import { isTaskState } from "../runtime/task.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
@@ -131,6 +132,7 @@ export interface MinimalLoopOptions {
   promptAssets?: PromptAssets;
   responseCreate?: ResponseCreate;
   runtimeState?: () => RuntimeState;
+  cronSchedules?: CronScheduleStore;
   task: string;
   toolRuntime?: ToolRuntime;
   transcript?: MinimalLoopTranscript;
@@ -185,7 +187,12 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           });
         },
       });
-  const toolRuntime = options.toolRuntime ?? createDefaultToolRuntime({ cwd: options.cwd, backgroundTasks });
+  const toolRuntime = options.toolRuntime ??
+    createDefaultToolRuntime({
+      cwd: options.cwd,
+      backgroundTasks,
+      cronSchedules: options.cronSchedules,
+    });
   const contextProjection = options.contextProjection ?? createContextProjection();
   const contextCompaction =
     options.contextCompaction === false
@@ -851,6 +858,7 @@ async function executeToolCall(
   });
   await recordTaskStateUpdateFromToolResult(lifecycleEmitter, round, toolCall.call_id, result);
   await recordBackgroundTaskStartedFromToolResult(lifecycleEmitter, round, result);
+  await recordCronScheduleEventFromToolResult(lifecycleEmitter, round, result);
   return resultText;
 }
 
@@ -927,6 +935,67 @@ function readBackgroundTaskMetadata(value: unknown): BackgroundTaskMetadata | un
     id: value.id,
     kind: value.kind,
   };
+}
+
+async function recordCronScheduleEventFromToolResult(
+  lifecycleEmitter: LifecycleEmitter,
+  round: number,
+  result: ToolResult,
+): Promise<void> {
+  if (result.status !== "completed") {
+    return;
+  }
+
+  const schedule = readCronScheduleMetadata(result.metadata?.cronSchedule);
+
+  if (!schedule) {
+    return;
+  }
+
+  if (result.toolName === "schedule_cron") {
+    await lifecycleEmitter.emit({
+      cron: schedule.cron,
+      cronId: schedule.id,
+      recurring: schedule.recurring,
+      round,
+      title: schedule.title,
+      type: "cron_scheduled",
+    });
+    return;
+  }
+
+  if (result.toolName === "cancel_cron") {
+    await lifecycleEmitter.emit({
+      cronId: schedule.id,
+      round,
+      status: schedule.status,
+      title: schedule.title,
+      type: "cron_canceled",
+    });
+  }
+}
+
+function readCronScheduleMetadata(value: unknown): CronSchedule | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "string" ||
+    !("title" in value) ||
+    typeof value.title !== "string" ||
+    !("cron" in value) ||
+    typeof value.cron !== "string" ||
+    !("prompt" in value) ||
+    typeof value.prompt !== "string" ||
+    !("recurring" in value) ||
+    typeof value.recurring !== "boolean" ||
+    !("status" in value) ||
+    typeof value.status !== "string"
+  ) {
+    return undefined;
+  }
+
+  return value as CronSchedule;
 }
 
 function createPermissionBlockedResult(

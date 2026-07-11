@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="500" viewBox="0 0 1120 500" role="img" aria-labelledby="title desc">
+  <title id="title">c13b scheduled jobs and cron flow</title>
+  <desc id="desc">A flow diagram showing a foreground agent creating a durable cron schedule, a cron worker polling the schedule store, firing a due schedule, and starting a fresh scheduled agent session.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .box { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 8; }
+      .store { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; rx: 8; }
+      .worker { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 8; }
+      .trace { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 8; }
+      .label { font: 600 18px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .small { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .mono { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #334155; }
+      .arrow { stroke: #475569; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .title { font: 700 24px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .step { fill: #0f172a; stroke: #ffffff; stroke-width: 3; }
+      .stepText { font: 700 14px ui-sans-serif, system-ui, sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: central; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="500" fill="#ffffff" />
+  <text class="title" x="56" y="54">c13b: schedule definition and worker wakeup are separate</text>
+  <text class="small" x="56" y="82">A foreground run writes durable schedule state; a worker process later starts fresh scheduled sessions.</text>
+
+  <rect class="box" x="70" y="138" width="220" height="96" />
+  <circle class="step" cx="88" cy="150" r="15" />
+  <text class="stepText" x="88" y="150">3</text>
+  <text class="label" x="96" y="174">Foreground run</text>
+  <text class="mono" x="96" y="202">schedule_cron</text>
+
+  <rect class="store" x="424" y="132" width="272" height="108" />
+  <circle class="step" cx="442" cy="144" r="15" />
+  <text class="stepText" x="442" y="144">2</text>
+  <text class="label" x="456" y="170">Durable schedule store</text>
+  <text class="mono" x="456" y="198">.forge/scheduled_tasks.json</text>
+
+  <rect class="worker" x="832" y="132" width="224" height="108" />
+  <circle class="step" cx="850" cy="144" r="15" />
+  <text class="stepText" x="850" y="144">4</text>
+  <text class="label" x="866" y="170">Cron worker</text>
+  <text class="mono" x="866" y="198">--cron-worker</text>
+
+  <rect class="worker" x="832" y="332" width="224" height="108" />
+  <circle class="step" cx="850" cy="344" r="15" />
+  <text class="stepText" x="850" y="344">5</text>
+  <text class="label" x="866" y="370">Fresh agent run</text>
+  <text class="mono" x="866" y="398">runMinimalLoop()</text>
+
+  <rect class="trace" x="424" y="332" width="272" height="108" />
+  <circle class="step" cx="442" cy="344" r="15" />
+  <text class="stepText" x="442" y="344">6</text>
+  <text class="label" x="456" y="370">Session traces</text>
+  <text class="mono" x="456" y="398">worker trace + run trace</text>
+
+  <path class="arrow" d="M 290 186 L 424 186" />
+  <text class="small" x="314" y="168">write task</text>
+
+  <path class="arrow" d="M 696 186 L 832 186" />
+  <circle class="step" cx="710" cy="168" r="15" />
+  <text class="stepText" x="710" y="168">1</text>
+  <text class="small" x="738" y="168">poll each tick</text>
+
+  <path class="arrow" d="M 944 240 L 944 332" />
+  <text class="small" x="962" y="288">due cron fires</text>
+
+  <path class="arrow" d="M 832 386 L 696 386" />
+  <text class="small" x="704" y="368">record result</text>
+
+  <path class="arrow" d="M 560 332 L 560 240" />
+  <text class="small" x="584" y="292">update lastSessionId</text>
+
+  <path class="arrow" d="M 424 386 L 290 222" />
+  <text class="small" x="304" y="326">evidence is inspectable</text>
+</svg>

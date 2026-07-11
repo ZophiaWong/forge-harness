@@ -3,6 +3,7 @@ import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../con
 import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { BackgroundTaskKind, BackgroundTaskStatus } from "./backgroundTasks.js";
+import type { CronRunStatus } from "./cronStore.js";
 import type { TaskState } from "./task.js";
 import type { VerificationStatus } from "./verification.js";
 
@@ -124,6 +125,45 @@ export type TraceEventPayload =
       kind: BackgroundTaskKind;
       command: string;
       status: BackgroundTaskStatus;
+    }
+  | {
+      type: "cron_scheduled";
+      round: number;
+      cronId: string;
+      title: string;
+      cron: string;
+      recurring: boolean;
+    }
+  | {
+      type: "cron_canceled";
+      round: number;
+      cronId: string;
+      title: string;
+      status: string;
+    }
+  | {
+      type: "cron_worker_started";
+      cwd: string;
+      mode: "watch" | "once";
+    }
+  | {
+      type: "cron_fired";
+      cronId: string;
+      title: string;
+      cron: string;
+      minuteKey: string;
+    }
+  | {
+      type: "cron_run_finished";
+      cronId: string;
+      title: string;
+      sessionId: string;
+      status: CronRunStatus;
+      error?: string;
+    }
+  | {
+      type: "cron_worker_stopped";
+      mode: "watch" | "once";
     }
   | {
       type: "candidate_answer";
