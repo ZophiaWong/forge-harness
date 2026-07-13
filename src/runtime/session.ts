@@ -5,7 +5,16 @@ import path from "node:path";
 import { createJsonlTraceRecorder } from "./traceRecorder.js";
 import type { TraceRecorder } from "./trace.js";
 
+export interface SessionWorkspaceMetadata {
+  baseBranch: string;
+  baseCommit: string;
+  branch: string;
+  mode: "git_worktree";
+  path: string;
+}
+
 export interface SessionMetadata {
+  baseCwd?: string;
   cwd: string;
   id: string;
   maxToolRounds: number;
@@ -13,6 +22,7 @@ export interface SessionMetadata {
   startedAt: string;
   task: string;
   tracePath: string;
+  workspace?: SessionWorkspaceMetadata;
 }
 
 export interface SessionPaths {
@@ -22,6 +32,7 @@ export interface SessionPaths {
 }
 
 export interface CreateSessionMetadataInput {
+  baseCwd?: string;
   cwd: string;
   id: string;
   maxToolRounds: number;
@@ -29,15 +40,18 @@ export interface CreateSessionMetadataInput {
   startedAt: string;
   task: string;
   tracePath: string;
+  workspace?: SessionWorkspaceMetadata;
 }
 
 export interface CreateCliSessionTraceOptions {
+  baseCwd?: string;
   cwd: string;
   maxToolRounds: number;
   model: string;
   now?: () => Date;
   randomSuffix?: () => string;
   task: string;
+  workspace?: SessionWorkspaceMetadata;
 }
 
 export interface CliSessionTrace {
@@ -62,6 +76,7 @@ export function createSessionPaths(cwd: string, sessionId: string): SessionPaths
 
 export function createSessionMetadata(input: CreateSessionMetadataInput): SessionMetadata {
   return {
+    ...(input.baseCwd ? { baseCwd: input.baseCwd } : {}),
     cwd: input.cwd,
     id: input.id,
     maxToolRounds: input.maxToolRounds,
@@ -69,6 +84,7 @@ export function createSessionMetadata(input: CreateSessionMetadataInput): Sessio
     startedAt: input.startedAt,
     task: input.task,
     tracePath: input.tracePath,
+    ...(input.workspace ? { workspace: input.workspace } : {}),
   };
 }
 
@@ -76,8 +92,9 @@ export async function createCliSessionTrace(options: CreateCliSessionTraceOption
   const now = options.now ?? (() => new Date());
   const startedAtDate = now();
   const sessionId = createSessionId(startedAtDate, options.randomSuffix ?? createRandomSuffix);
-  const paths = createSessionPaths(options.cwd, sessionId);
+  const paths = createSessionPaths(options.baseCwd ?? options.cwd, sessionId);
   const metadata = createSessionMetadata({
+    ...(options.baseCwd ? { baseCwd: options.baseCwd } : {}),
     cwd: options.cwd,
     id: sessionId,
     maxToolRounds: options.maxToolRounds,
@@ -85,6 +102,7 @@ export async function createCliSessionTrace(options: CreateCliSessionTraceOption
     startedAt: startedAtDate.toISOString(),
     task: options.task,
     tracePath: paths.tracePath,
+    ...(options.workspace ? { workspace: options.workspace } : {}),
   });
 
   await fs.mkdir(paths.sessionDir, { recursive: true });
@@ -100,6 +118,10 @@ export async function createCliSessionTrace(options: CreateCliSessionTraceOption
       tracePath: paths.tracePath,
     }),
   };
+}
+
+export async function writeSessionMetadata(pathname: string, metadata: SessionMetadata): Promise<void> {
+  await fs.writeFile(pathname, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 }
 
 function createRandomSuffix(): string {

@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the runnable checkpoints through `c13b Scheduled Jobs / Cron`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, and `c13b Scheduled Jobs / Cron`.
+This branch contains the documentation baseline plus the runnable checkpoints through `c14 Worktree Isolation`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, and `c14 Worktree Isolation`.
 
 ## Setup
 
@@ -50,6 +50,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c12 Context Compaction](docs/tutorial/c12-context-compaction.md): LLM summary handoff for older conversation history, with trace evidence.
 - [c13a Background Tool Tasks](docs/tutorial/c13a-background-tool-tasks.md): session-scoped background bash tasks with notification return flow.
 - [c13b Scheduled Jobs / Cron](docs/tutorial/c13b-scheduled-jobs-cron.md): durable cron schedules, worker wakeup, and fresh scheduled run traces.
+- [c14 Worktree Isolation](docs/tutorial/c14-worktree-isolation.md): explicit `--worktree` runs that bind a session to an isolated git worktree.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

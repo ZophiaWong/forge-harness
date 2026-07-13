@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">c14 worktree isolation flow</title>
+  <desc id="desc">A comparison diagram showing that before c14 foreground and scheduled runs share the base working tree, while c14 worktree runs write to an isolated git worktree and keep session evidence in the base .forge directory.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 12; }
+      .run { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 8; }
+      .shared { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 8; }
+      .worktree { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 8; }
+      .evidence { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; rx: 8; }
+      .title { font: 700 24px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .panelTitle { font: 700 20px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .label { font: 600 17px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .small { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .mono { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #334155; }
+      .warning { font: 600 14px ui-sans-serif, system-ui, sans-serif; fill: #9a3412; }
+      .ok { font: 600 14px ui-sans-serif, system-ui, sans-serif; fill: #047857; }
+      .arrow { stroke: #475569; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 2.2; stroke-dasharray: 6 6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="560" fill="#ffffff" />
+  <text class="title" x="56" y="54">c14: worktree isolation changes where a run writes</text>
+  <text class="small" x="56" y="82">The main repo keeps durable session evidence; the isolated run gets its own working directory and branch.</text>
+
+  <rect class="panel" x="56" y="116" width="492" height="390" rx="12" />
+  <text class="panelTitle" x="88" y="154">Before c14: shared base cwd</text>
+
+  <rect class="run" x="92" y="192" width="170" height="82" rx="8" />
+  <text class="label" x="116" y="225">Foreground run</text>
+  <text class="mono" x="116" y="250">cwd = repo root</text>
+
+  <rect class="run" x="92" y="340" width="170" height="82" rx="8" />
+  <text class="label" x="116" y="373">Scheduled run</text>
+  <text class="mono" x="116" y="398">cwd = repo root</text>
+
+  <rect class="shared" x="336" y="246" width="168" height="122" rx="8" />
+  <text class="label" x="362" y="284">Base repo</text>
+  <text class="mono" x="362" y="310">git diff</text>
+  <text class="warning" x="362" y="338">mixed changes</text>
+
+  <path class="arrow" d="M 262 233 L 336 284" />
+  <path class="arrow" d="M 262 381 L 336 330" />
+  <text class="small" x="282" y="248">writes</text>
+  <text class="small" x="282" y="374">writes</text>
+
+  <rect class="panel" x="572" y="116" width="492" height="390" rx="12" />
+  <text class="panelTitle" x="604" y="154">c14: explicit --worktree run</text>
+
+  <rect class="run" x="608" y="214" width="178" height="96" rx="8" />
+  <text class="label" x="632" y="247">Agent run</text>
+  <text class="mono" x="632" y="272">--worktree</text>
+  <text class="mono" x="632" y="294">session id = S</text>
+
+  <rect class="worktree" x="858" y="176" width="168" height="118" rx="8" />
+  <text class="label" x="884" y="214">Worktree</text>
+  <text class="mono" x="884" y="240">.forge/worktrees/S</text>
+  <text class="mono" x="884" y="266">forge/run/S</text>
+
+  <rect class="evidence" x="858" y="350" width="168" height="94" rx="8" />
+  <text class="label" x="884" y="386">Evidence</text>
+  <text class="mono" x="884" y="412">.forge/sessions/S</text>
+
+  <path class="arrow" d="M 786 252 L 858 236" />
+  <text class="ok" x="798" y="230">tools write here</text>
+
+  <path class="dash" d="M 786 278 C 824 300 828 366 858 390" />
+  <text class="small" x="790" y="338">trace + metadata</text>
+
+  <rect class="shared" x="608" y="374" width="178" height="70" rx="8" />
+  <text class="label" x="632" y="404">Base repo stays</text>
+  <text class="mono" x="632" y="428">cwd for normal runs</text>
+</svg>

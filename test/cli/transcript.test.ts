@@ -9,6 +9,7 @@ import {
   formatRecoveryTranscript,
   formatRuntimeStateTranscript,
   formatSessionTranscript,
+  formatWorkspaceTranscript,
   formatVerificationTranscript,
 } from "../../src/cli/transcript.js";
 import type { RuntimeContextCompactionState } from "../../src/runtime/state.js";
@@ -82,6 +83,20 @@ describe("formatSessionTranscript", () => {
   it("prints the session id and trace path", () => {
     expect(formatSessionTranscript("20260625-160102-a1b2c3d4", ".forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl")).toBe(
       "[session] id=20260625-160102-a1b2c3d4 trace=.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
+    );
+  });
+});
+
+describe("formatWorkspaceTranscript", () => {
+  it("prints the isolated workspace path and branch", () => {
+    expect(formatWorkspaceTranscript({
+      baseBranch: "main",
+      baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+      branch: "forge/run/20260713-101500-a1b2c3d4",
+      mode: "git_worktree",
+      path: ".forge/worktrees/20260713-101500-a1b2c3d4",
+    })).toBe(
+      "[workspace] mode=git_worktree path=.forge/worktrees/20260713-101500-a1b2c3d4 branch=forge/run/20260713-101500-a1b2c3d4 base=main@9bd9d56",
     );
   });
 });

@@ -12,9 +12,32 @@ export type HookResultStatus = "completed" | "failed";
 
 export type TraceEventPayload =
   | {
+      type: "workspace_created";
+      baseCwd: string;
+      workspacePath: string;
+      branch: string;
+      baseBranch: string;
+      baseCommit: string;
+    }
+  | {
+      type: "workspace_setup_failed";
+      baseCwd: string;
+      workspacePath: string;
+      branch: string;
+      reason: string;
+    }
+  | {
       type: "session_started";
       task: string;
       cwd: string;
+      baseCwd?: string;
+      workspace?: {
+        baseBranch: string;
+        baseCommit: string;
+        branch: string;
+        mode: "git_worktree";
+        path: string;
+      };
       model: string;
       maxToolRounds: number;
     }

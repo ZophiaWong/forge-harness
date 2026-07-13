@@ -15,15 +15,29 @@ import {
   formatRuntimeStateTranscript,
   formatSessionTranscript,
   formatVerificationTranscript,
+  formatWorkspaceTranscript,
 } from "./transcript.js";
+import { loadRepoPromptAssets } from "../context/promptAssembly.js";
 import { DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MODEL, runMinimalLoop } from "../core/minimalLoop.js";
 import { createCronWorker, type ScheduledRunResult } from "../extensions/cronWorker.js";
 import { createLifecycleEmitter, type LifecycleHook } from "../extensions/lifecycle.js";
 import type { CronSchedule } from "../runtime/cronStore.js";
 import { createFileCronScheduleStore } from "../runtime/cronStore.js";
-import { createCliSessionTrace } from "../runtime/session.js";
+import {
+  createCliSessionTrace,
+  createSessionMetadata,
+  type CliSessionTrace,
+  type SessionWorkspaceMetadata,
+  writeSessionMetadata,
+} from "../runtime/session.js";
 import { createRuntimeStateRecorder, type RuntimeState } from "../runtime/state.js";
 import { createCommandVerifier } from "../runtime/verification.js";
+import {
+  createGitWorktreeWorkspace,
+  createWorktreeBranchName,
+  createWorktreePath,
+  WorkspaceSetupError,
+} from "../runtime/workspace.js";
 
 const cliArgs = parseCliArgs(process.argv.slice(2));
 
@@ -57,12 +71,13 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
   }
 
   try {
-    const cwd = process.cwd();
+    const baseCwd = process.cwd();
+    let executionCwd = baseCwd;
     const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
     const maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS;
-    const cronSchedules = createFileCronScheduleStore({ cwd });
+    const cronSchedules = createFileCronScheduleStore({ cwd: baseCwd });
     const sessionTrace = await createCliSessionTrace({
-      cwd,
+      cwd: baseCwd,
       maxToolRounds,
       model,
       task,
@@ -84,23 +99,42 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       recorder: runtimeStateTrace.recorder,
     });
     getRuntimeState = runtimeStateTrace.getState;
-    const displayTracePath = path.relative(cwd, sessionTrace.paths.tracePath);
-    const verifier = cliArgs.verifyCommand
-      ? createCommandVerifier({
-          command: cliArgs.verifyCommand,
-          cwd,
-        })
-      : undefined;
+    const displayTracePath = path.relative(baseCwd, sessionTrace.paths.tracePath);
 
     console.log(formatSessionTranscript(sessionTrace.metadata.id, displayTracePath));
 
+    const workspace = cliArgs.worktree
+      ? await prepareWorktreeSession({
+          baseCwd,
+          lifecycleEmitter,
+          sessionTrace,
+        })
+      : undefined;
+
+    if (workspace) {
+      executionCwd = workspace.path;
+    }
+
+    const verifier = cliArgs.verifyCommand
+      ? createCommandVerifier({
+          command: cliArgs.verifyCommand,
+          cwd: executionCwd,
+        })
+      : undefined;
+
+    if (workspace) {
+      console.log(formatWorkspaceTranscript(toDisplayWorkspace(workspace, baseCwd)));
+    }
+
     await runMinimalLoop({
       approver: createCliApprover(),
+      ...(workspace ? { baseCwd, workspace } : {}),
       cronSchedules,
-      cwd,
+      cwd: executionCwd,
       lifecycleEmitter,
       maxToolRounds,
       model,
+      ...(workspace ? { promptAssets: await loadRepoPromptAssets(baseCwd) } : {}),
       runtimeState: runtimeStateTrace.getState,
       task,
       transcript: {
@@ -177,10 +211,11 @@ async function runCronWorkerCli(cliArgs: ParsedCliArgs): Promise<void> {
     recorder: workerSession.recorder,
     runScheduledTask(task) {
       return runScheduledCronTask({
-        cwd,
+        baseCwd: cwd,
         maxToolRounds,
         model,
         task,
+        worktree: cliArgs.worktree === true,
       });
     },
     store: cronSchedules,
@@ -201,16 +236,18 @@ async function runCronWorkerCli(cliArgs: ParsedCliArgs): Promise<void> {
 }
 
 interface RunScheduledCronTaskOptions {
-  cwd: string;
+  baseCwd: string;
   maxToolRounds: number;
   model: string;
   task: CronSchedule;
+  worktree?: boolean;
 }
 
 async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promise<ScheduledRunResult> {
   const scheduledTask = `[Scheduled cron_id=${options.task.id}] ${options.task.prompt}`;
+  let executionCwd = options.baseCwd;
   const sessionTrace = await createCliSessionTrace({
-    cwd: options.cwd,
+    cwd: options.baseCwd,
     maxToolRounds: options.maxToolRounds,
     model: options.model,
     task: scheduledTask,
@@ -219,16 +256,31 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
   const lifecycleEmitter = createLifecycleEmitter({
     recorder: runtimeStateTrace.recorder,
   });
-  const displayTracePath = path.relative(options.cwd, sessionTrace.paths.tracePath);
+  const displayTracePath = path.relative(options.baseCwd, sessionTrace.paths.tracePath);
 
   console.log(`[cron-worker] scheduled session=${sessionTrace.metadata.id} trace=${displayTracePath}`);
 
   try {
+    const workspace = options.worktree
+      ? await prepareWorktreeSession({
+          baseCwd: options.baseCwd,
+          lifecycleEmitter,
+          sessionTrace,
+        })
+      : undefined;
+
+    if (workspace) {
+      executionCwd = workspace.path;
+      console.log(formatWorkspaceTranscript(toDisplayWorkspace(workspace, options.baseCwd)));
+    }
+
     await runMinimalLoop({
-      cwd: options.cwd,
+      ...(workspace ? { baseCwd: options.baseCwd, workspace } : {}),
+      cwd: executionCwd,
       lifecycleEmitter,
       maxToolRounds: options.maxToolRounds,
       model: options.model,
+      ...(workspace ? { promptAssets: await loadRepoPromptAssets(options.baseCwd) } : {}),
       runtimeState: runtimeStateTrace.getState,
       task: scheduledTask,
     });
@@ -244,4 +296,91 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
       status: "failed",
     };
   }
+}
+
+interface PrepareWorktreeSessionOptions {
+  baseCwd: string;
+  lifecycleEmitter: ReturnType<typeof createLifecycleEmitter>;
+  sessionTrace: CliSessionTrace;
+}
+
+async function prepareWorktreeSession(options: PrepareWorktreeSessionOptions): Promise<SessionWorkspaceMetadata> {
+  try {
+    const binding = await createGitWorktreeWorkspace({
+      baseCwd: options.baseCwd,
+      sessionId: options.sessionTrace.metadata.id,
+    });
+    const workspace = toSessionWorkspaceMetadata(binding);
+    const metadata = createSessionMetadata({
+      baseCwd: options.baseCwd,
+      cwd: workspace.path,
+      id: options.sessionTrace.metadata.id,
+      maxToolRounds: options.sessionTrace.metadata.maxToolRounds,
+      model: options.sessionTrace.metadata.model,
+      startedAt: options.sessionTrace.metadata.startedAt,
+      task: options.sessionTrace.metadata.task,
+      tracePath: options.sessionTrace.metadata.tracePath,
+      workspace,
+    });
+
+    options.sessionTrace.metadata = metadata;
+    await writeSessionMetadata(options.sessionTrace.paths.sessionMetadataPath, metadata);
+    return workspace;
+  } catch (error) {
+    const details = workspaceSetupFailureDetails(error, options.baseCwd, options.sessionTrace.metadata.id);
+    await options.lifecycleEmitter.emit({
+      baseCwd: options.baseCwd,
+      branch: details.branch,
+      reason: details.reason,
+      type: "workspace_setup_failed",
+      workspacePath: details.workspacePath,
+    });
+    throw error;
+  }
+}
+
+function toSessionWorkspaceMetadata(binding: {
+  baseBranch: string;
+  baseCommit: string;
+  branch: string;
+  mode: "git_worktree";
+  path: string;
+}): SessionWorkspaceMetadata {
+  return {
+    baseBranch: binding.baseBranch,
+    baseCommit: binding.baseCommit,
+    branch: binding.branch,
+    mode: binding.mode,
+    path: binding.path,
+  };
+}
+
+function toDisplayWorkspace(
+  workspace: SessionWorkspaceMetadata,
+  baseCwd: string,
+): SessionWorkspaceMetadata {
+  return {
+    ...workspace,
+    path: path.relative(baseCwd, workspace.path),
+  };
+}
+
+function workspaceSetupFailureDetails(
+  error: unknown,
+  baseCwd: string,
+  sessionId: string,
+): { branch: string; reason: string; workspacePath: string } {
+  if (error instanceof WorkspaceSetupError) {
+    return {
+      branch: error.branch,
+      reason: error.message,
+      workspacePath: error.workspacePath,
+    };
+  }
+
+  return {
+    branch: createWorktreeBranchName(sessionId),
+    reason: error instanceof Error ? error.message : String(error),
+    workspacePath: createWorktreePath(baseCwd, sessionId),
+  };
 }

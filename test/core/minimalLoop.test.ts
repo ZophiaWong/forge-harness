@@ -317,6 +317,57 @@ describe("runMinimalLoop", () => {
     ]);
   });
 
+  it("records workspace evidence before model work begins", async () => {
+    const trace = createTraceRecorder();
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "done",
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      baseCwd: "/workspace/forge-harness",
+      cwd: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+      model: "test-model",
+      responseCreate,
+      task: "inspect",
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      workspace: {
+        baseBranch: "main",
+        baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+        branch: "forge/run/20260713-101500-a1b2c3d4",
+        mode: "git_worktree",
+        path: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+      },
+    });
+
+    expect(trace.events.slice(0, 2)).toEqual([
+      {
+        baseCwd: "/workspace/forge-harness",
+        cwd: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+        maxToolRounds: 8,
+        model: "test-model",
+        task: "inspect",
+        type: "session_started",
+        workspace: {
+          baseBranch: "main",
+          baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+          branch: "forge/run/20260713-101500-a1b2c3d4",
+          mode: "git_worktree",
+          path: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+        },
+      },
+      {
+        baseBranch: "main",
+        baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+        baseCwd: "/workspace/forge-harness",
+        branch: "forge/run/20260713-101500-a1b2c3d4",
+        type: "workspace_created",
+        workspacePath: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+      },
+    ]);
+  });
+
   it("emits task state updates from completed todo tool results and feeds the projected todo result back", async () => {
     const rawArguments = JSON.stringify({
       acceptance: ["npm run build exits with code 0"],

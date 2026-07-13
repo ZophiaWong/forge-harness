@@ -85,6 +85,14 @@ export interface RuntimeContextCompactionState {
   trigger: ContextCompactionTrigger;
 }
 
+export interface RuntimeWorkspaceState {
+  baseBranch: string;
+  baseCommit: string;
+  branch: string;
+  mode: "git_worktree";
+  path: string;
+}
+
 export type RuntimeProblem =
   | {
       kind: "tool_result";
@@ -107,6 +115,12 @@ export type RuntimeProblem =
       message: string;
     }
   | {
+      branch: string;
+      kind: "workspace_setup_failed";
+      message: string;
+      workspacePath: string;
+    }
+  | {
       kind: "verification_failed";
       round: number;
       status: Exclude<VerificationStatus, "passed">;
@@ -115,6 +129,7 @@ export type RuntimeProblem =
 
 export interface RuntimeState {
   candidateAnswer?: RuntimeCandidateAnswerState;
+  baseCwd?: string;
   compactionCount?: number;
   currentRound: number;
   cwd?: string;
@@ -136,6 +151,7 @@ export interface RuntimeState {
   status: RuntimeStatus;
   taskState?: RuntimeTaskState;
   task?: string;
+  workspace?: RuntimeWorkspaceState;
 }
 
 export interface RuntimeStateRecorder {
@@ -153,9 +169,34 @@ export function createInitialRuntimeState(): RuntimeState {
 
 export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPayload): RuntimeState {
   switch (event.type) {
+    case "workspace_created":
+      return {
+        ...state,
+        baseCwd: event.baseCwd,
+        workspace: {
+          baseBranch: event.baseBranch,
+          baseCommit: event.baseCommit,
+          branch: event.branch,
+          mode: "git_worktree",
+          path: event.workspacePath,
+        },
+      };
+    case "workspace_setup_failed":
+      return {
+        ...state,
+        baseCwd: event.baseCwd,
+        lastProblem: {
+          branch: event.branch,
+          kind: "workspace_setup_failed",
+          message: event.reason,
+          workspacePath: event.workspacePath,
+        },
+        status: "failed",
+      };
     case "session_started":
       return {
         ...createInitialRuntimeState(),
+        ...(event.baseCwd ? { baseCwd: event.baseCwd } : state.baseCwd ? { baseCwd: state.baseCwd } : {}),
         currentRound: 0,
         cwd: event.cwd,
         ended: false,
@@ -163,6 +204,7 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
         model: event.model,
         status: "running",
         task: event.task,
+        ...(event.workspace ? { workspace: event.workspace } : state.workspace ? { workspace: state.workspace } : {}),
       };
     case "model_request":
       return {

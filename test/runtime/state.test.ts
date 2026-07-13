@@ -166,6 +166,43 @@ describe("RuntimeState projection", () => {
     expect(state.lastProblem).toBeUndefined();
   });
 
+  it("projects workspace setup events into runtime state", () => {
+    const workspaceState = applyEvents([
+      {
+        baseCwd: "/workspace/forge-harness",
+        branch: "forge/run/20260713-101500-a1b2c3d4",
+        baseBranch: "main",
+        baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+        type: "workspace_created",
+        workspacePath: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+      },
+    ]);
+
+    expect(workspaceState.baseCwd).toBe("/workspace/forge-harness");
+    expect(workspaceState.workspace).toEqual({
+      baseBranch: "main",
+      baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+      branch: "forge/run/20260713-101500-a1b2c3d4",
+      mode: "git_worktree",
+      path: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+    });
+
+    const failedState = applyRuntimeStateEvent(workspaceState, {
+      baseCwd: "/workspace/forge-harness",
+      branch: "forge/run/20260713-101500-a1b2c3d4",
+      reason: "base repo must be clean before creating an isolated worktree",
+      type: "workspace_setup_failed",
+      workspacePath: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+    });
+
+    expect(failedState.lastProblem).toEqual({
+      branch: "forge/run/20260713-101500-a1b2c3d4",
+      kind: "workspace_setup_failed",
+      message: "base repo must be clean before creating an isolated worktree",
+      workspacePath: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
+    });
+  });
+
   it("records tool failures and session failures as the current problem", () => {
     const failedToolState = applyEvents([
       {

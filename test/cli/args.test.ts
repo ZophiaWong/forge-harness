@@ -32,6 +32,21 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("parses --worktree for foreground and cron worker runs", () => {
+    expect(parseCliArgs(["--worktree", "inspect", "this", "project"])).toEqual({
+      task: "inspect this project",
+      worktree: true,
+    });
+    expect(parseCliArgs(["--cron-worker", "--worktree"])).toEqual({
+      cronWorker: "watch",
+      worktree: true,
+    });
+    expect(parseCliArgs(["--worktree", "--cron-worker-once"])).toEqual({
+      cronWorker: "once",
+      worktree: true,
+    });
+  });
+
   it("returns an error when --verify has no command", () => {
     expect(parseCliArgs(["inspect", "--verify"])).toEqual({
       error: "--verify requires a command.",
@@ -84,5 +99,7 @@ describe("usageText", () => {
     expect(usageText("forge-harness")).toContain(
       'forge-harness --hook-log --verify "npm run build" "fix the build"',
     );
+    expect(usageText("forge-harness")).toContain('forge-harness --worktree "fix docs"');
+    expect(usageText("forge-harness")).toContain("forge-harness --cron-worker --worktree");
   });
 });

@@ -40,4 +40,42 @@ describe("session metadata", () => {
       tracePath: "/workspace/forge-harness/.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
     });
   });
+
+  it("builds metadata for a worktree-bound session while storing evidence in the base repo", () => {
+    const metadata = createSessionMetadata({
+      baseCwd: "/workspace/forge-harness",
+      cwd: "/workspace/forge-harness/.forge/worktrees/20260625-160102-a1b2c3d4",
+      id: "20260625-160102-a1b2c3d4",
+      maxToolRounds: 8,
+      model: "gpt-5.4-mini",
+      startedAt: "2026-06-25T08:01:02.000Z",
+      task: "inspect docs",
+      tracePath: "/workspace/forge-harness/.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
+      workspace: {
+        baseBranch: "main",
+        baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+        branch: "forge/run/20260625-160102-a1b2c3d4",
+        mode: "git_worktree",
+        path: "/workspace/forge-harness/.forge/worktrees/20260625-160102-a1b2c3d4",
+      },
+    });
+
+    expect(metadata).toEqual({
+      baseCwd: "/workspace/forge-harness",
+      cwd: "/workspace/forge-harness/.forge/worktrees/20260625-160102-a1b2c3d4",
+      id: "20260625-160102-a1b2c3d4",
+      maxToolRounds: 8,
+      model: "gpt-5.4-mini",
+      startedAt: "2026-06-25T08:01:02.000Z",
+      task: "inspect docs",
+      tracePath: "/workspace/forge-harness/.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
+      workspace: {
+        baseBranch: "main",
+        baseCommit: "9bd9d56d8c3fe94a72c1707a6f805fe87527ca23",
+        branch: "forge/run/20260625-160102-a1b2c3d4",
+        mode: "git_worktree",
+        path: "/workspace/forge-harness/.forge/worktrees/20260625-160102-a1b2c3d4",
+      },
+    });
+  });
 });

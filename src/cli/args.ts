@@ -4,6 +4,7 @@ export interface ParsedCliArgs {
   hookLog?: boolean;
   task?: string;
   verifyCommand?: string;
+  worktree?: boolean;
 }
 
 export function parseCliArgs(args: string[]): ParsedCliArgs {
@@ -11,6 +12,7 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
   let cronWorker: "watch" | "once" | undefined;
   let hookLog = false;
   let verifyCommand: string | undefined;
+  let worktree = false;
   let error: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -44,6 +46,11 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
       continue;
     }
 
+    if (arg === "--worktree") {
+      worktree = true;
+      continue;
+    }
+
     taskParts.push(arg);
   }
 
@@ -63,6 +70,7 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
     ...(hookLog ? { hookLog } : {}),
     ...task,
     ...(verifyCommand ? { verifyCommand } : {}),
+    ...(worktree ? { worktree } : {}),
   };
 }
 
@@ -74,9 +82,11 @@ export function usageText(binaryName: string): string {
   return [
     "Usage:",
     `  ${binaryName} "inspect this project"`,
+    `  ${binaryName} --worktree "fix docs"`,
     `  ${binaryName} --verify "npm run build" "fix the build"`,
     `  ${binaryName} --hook-log --verify "npm run build" "fix the build"`,
     `  ${binaryName} --cron-worker`,
+    `  ${binaryName} --cron-worker --worktree`,
     `  ${binaryName} --cron-worker-once`,
     "",
     "Example:",

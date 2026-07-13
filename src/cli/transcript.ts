@@ -1,6 +1,7 @@
 import type { HookableTraceEvent } from "../extensions/lifecycle.js";
 import type { PermissionDecision } from "../governance/types.js";
 import type { PromptAssemblySummary } from "../context/promptAssembly.js";
+import type { SessionWorkspaceMetadata } from "../runtime/session.js";
 import { countTaskItems } from "../runtime/task.js";
 import type { RuntimeContextCompactionState, RuntimeState } from "../runtime/state.js";
 import type { VerificationResult } from "../runtime/verification.js";
@@ -50,6 +51,16 @@ export function formatContextCompactionTranscript(compaction: RuntimeContextComp
 
 export function formatSessionTranscript(sessionId: string, tracePath: string): string {
   return `[session] id=${sessionId} trace=${tracePath}`;
+}
+
+export function formatWorkspaceTranscript(workspace: SessionWorkspaceMetadata): string {
+  return [
+    "[workspace]",
+    `mode=${workspace.mode}`,
+    `path=${workspace.path}`,
+    `branch=${workspace.branch}`,
+    `base=${workspace.baseBranch}@${workspace.baseCommit.slice(0, 7)}`,
+  ].join(" ");
 }
 
 export function formatVerificationTranscript(result: VerificationResult): string {

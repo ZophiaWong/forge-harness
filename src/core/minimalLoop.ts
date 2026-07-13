@@ -35,6 +35,7 @@ import {
 } from "../runtime/backgroundTasks.js";
 import type { CronSchedule, CronScheduleStore } from "../runtime/cronStore.js";
 import type { RuntimeState } from "../runtime/state.js";
+import type { SessionWorkspaceMetadata } from "../runtime/session.js";
 import { isTaskState } from "../runtime/task.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
 import type { SessionEndStatus } from "../runtime/trace.js";
@@ -123,6 +124,7 @@ export interface MinimalLoopOptions {
   baseURL?: string;
   contextProjection?: ContextProjection;
   contextCompaction?: false | Partial<ContextCompactionOptions>;
+  baseCwd?: string;
   cwd: string;
   lifecycleEmitter?: LifecycleEmitter;
   maxRecoveryAttempts?: number;
@@ -137,6 +139,7 @@ export interface MinimalLoopOptions {
   toolRuntime?: ToolRuntime;
   transcript?: MinimalLoopTranscript;
   verifier?: Verifier;
+  workspace?: SessionWorkspaceMetadata;
 }
 
 export interface MinimalLoopResult {
@@ -217,12 +220,24 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
 
   try {
     await lifecycleEmitter.emit({
+      ...(options.baseCwd ? { baseCwd: options.baseCwd } : {}),
       cwd: options.cwd,
       maxToolRounds,
       model,
       task: options.task,
       type: "session_started",
+      ...(options.workspace ? { workspace: options.workspace } : {}),
     });
+    if (options.workspace && options.baseCwd) {
+      await lifecycleEmitter.emit({
+        baseBranch: options.workspace.baseBranch,
+        baseCommit: options.workspace.baseCommit,
+        baseCwd: options.baseCwd,
+        branch: options.workspace.branch,
+        type: "workspace_created",
+        workspacePath: options.workspace.path,
+      });
+    }
     const responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
 
     for (let round = 1; round <= maxToolRounds; round += 1) {
