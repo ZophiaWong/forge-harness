@@ -93,9 +93,9 @@ flowchart TB
 | --- | --- | --- | --- |
 | `L1 Loop & Execution` | 模型输出怎样变成真实动作？ | agent loop、model call、tool call、tool result、tool dispatch、shell/file tools、MCP adapter。 | `c01`, `c02`, `c04`, `c16`, `c17` |
 | `L2 Governance & Action Boundary` | 哪些动作能执行，执行前要过什么边界？ | risk classification、permission decision、approval、deny rules、safe executor、reviewable file editing、worktree boundary。 | `c03`, `c04`, `c14`, `c16`, `c17` |
-| `L3 Context & Knowledge` | 模型下一轮应该看到什么？ | message history、`Observation`、`ContextProjection`、system prompt assembly、skills、memory、context compaction。 | `c05`, `c11`, `c12`, `c15`, `c17` |
-| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15`, `c17` |
-| `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、subagents、team protocols、capstone run。 | `c09`, `c10`, `c13`, `c14`, `c15`, `c16`, `c17` |
+| `L3 Context & Knowledge` | 模型下一轮应该看到什么？ | message history、`Observation`、`ContextProjection`、system prompt assembly、skills、memory、context compaction、summary handoff。 | `c05`, `c11`, `c12`, `c15a`, `c15b`, `c17` |
+| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c17` |
+| `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、async child handoff、subagents、team protocols、capstone run。 | `c09`, `c10`, `c13`, `c14`, `c15a`, `c15b`, `c16`, `c17` |
 
 ## Layer 重叠怎么读
 

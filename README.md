@@ -51,6 +51,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c13a Background Tool Tasks](docs/tutorial/c13a-background-tool-tasks.md): session-scoped background bash tasks with notification return flow.
 - [c13b Scheduled Jobs / Cron](docs/tutorial/c13b-scheduled-jobs-cron.md): durable cron schedules, worker wakeup, and fresh scheduled run traces.
 - [c14 Worktree Isolation](docs/tutorial/c14-worktree-isolation.md): explicit `--worktree` runs that bind a session to an isolated git worktree.
+- Future c15a/c15b planning is tracked in the roadmap; runnable tutorial links on this branch stop at c14.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.
