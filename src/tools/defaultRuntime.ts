@@ -1,4 +1,5 @@
 import { createBashTool } from "./bashTool.js";
+import { createDelegateTool, type DelegateChildSessionRunner } from "./delegateTool.js";
 import { createEditTool } from "./editTool.js";
 import { createFindTool } from "./findTool.js";
 import { createGrepTool } from "./grepTool.js";
@@ -14,8 +15,12 @@ import type { CronScheduleStore } from "../runtime/cronStore.js";
 
 export interface DefaultToolRuntimeOptions {
   backgroundTasks?: BackgroundTaskManager;
+  childSessionRunner?: DelegateChildSessionRunner;
   cronSchedules?: CronScheduleStore;
   cwd: string;
+  maxToolRounds?: number;
+  parentCallId?: () => string;
+  parentRound?: () => number;
 }
 
 export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): ToolRuntime {
@@ -28,6 +33,16 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
     createEditTool(options.cwd),
     createWriteTool(options.cwd),
     createTodoTool(),
+    ...(options.childSessionRunner
+      ? [
+          createDelegateTool({
+            maxToolRounds: options.maxToolRounds ?? 8,
+            ...(options.parentCallId ? { parentCallId: options.parentCallId } : {}),
+            ...(options.parentRound ? { parentRound: options.parentRound } : {}),
+            runner: options.childSessionRunner,
+          }),
+        ]
+      : []),
     ...(options.cronSchedules ? createCronTools(options.cronSchedules) : []),
   ]);
 }

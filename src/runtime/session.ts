@@ -13,8 +13,18 @@ export interface SessionWorkspaceMetadata {
   path: string;
 }
 
+export type ChildSessionProfile = "research" | "edit";
+
+export interface ChildSessionMetadata {
+  parentCallId: string;
+  parentSessionId: string;
+  profile: ChildSessionProfile;
+  role: "child";
+}
+
 export interface SessionMetadata {
   baseCwd?: string;
+  child?: ChildSessionMetadata;
   cwd: string;
   id: string;
   maxToolRounds: number;
@@ -33,6 +43,7 @@ export interface SessionPaths {
 
 export interface CreateSessionMetadataInput {
   baseCwd?: string;
+  child?: ChildSessionMetadata;
   cwd: string;
   id: string;
   maxToolRounds: number;
@@ -45,6 +56,7 @@ export interface CreateSessionMetadataInput {
 
 export interface CreateCliSessionTraceOptions {
   baseCwd?: string;
+  child?: ChildSessionMetadata;
   cwd: string;
   maxToolRounds: number;
   model: string;
@@ -77,6 +89,7 @@ export function createSessionPaths(cwd: string, sessionId: string): SessionPaths
 export function createSessionMetadata(input: CreateSessionMetadataInput): SessionMetadata {
   return {
     ...(input.baseCwd ? { baseCwd: input.baseCwd } : {}),
+    ...(input.child ? { child: input.child } : {}),
     cwd: input.cwd,
     id: input.id,
     maxToolRounds: input.maxToolRounds,
@@ -95,6 +108,7 @@ export async function createCliSessionTrace(options: CreateCliSessionTraceOption
   const paths = createSessionPaths(options.baseCwd ?? options.cwd, sessionId);
   const metadata = createSessionMetadata({
     ...(options.baseCwd ? { baseCwd: options.baseCwd } : {}),
+    ...(options.child ? { child: options.child } : {}),
     cwd: options.cwd,
     id: sessionId,
     maxToolRounds: options.maxToolRounds,

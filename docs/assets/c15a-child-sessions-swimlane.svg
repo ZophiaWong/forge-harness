@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
+  <title id="title">c15a child sessions implementation swimlane</title>
+  <desc id="desc">A swimlane diagram showing responsibility boundaries between the current session, delegate tool, childSessions runner, child session, and evidence or workspace storage.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 24px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .small { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .laneTitle { font: 700 15px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .laneBg { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1.5; }
+      .step { fill: #ffffff; stroke: #334155; stroke-width: 2; rx: 8; }
+      .runner { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 8; }
+      .evidence { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; rx: 8; }
+      .worktree { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 8; }
+      .label { font: 700 15px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .mono { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #334155; }
+      .note { font: 13px ui-sans-serif, system-ui, sans-serif; fill: #475569; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 2; stroke-dasharray: 6 6; fill: none; marker-end: url(#arrow); }
+      .badge { fill: #0f172a; stroke: #ffffff; stroke-width: 3; }
+      .badgeText { font: 700 13px ui-sans-serif, system-ui, sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: central; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="620" />
+  <text class="title" x="56" y="54">c15a implementation boundary: delegate is thin, childSessions runs the child</text>
+  <text class="small" x="56" y="82">The core loop still runs one session. Coordination lives beside it, and evidence stays inspectable.</text>
+
+  <rect class="laneBg" x="56" y="116" width="196" height="448" rx="10" />
+  <rect class="laneBg" x="268" y="116" width="184" height="448" rx="10" />
+  <rect class="laneBg" x="468" y="116" width="206" height="448" rx="10" />
+  <rect class="laneBg" x="690" y="116" width="190" height="448" rx="10" />
+  <rect class="laneBg" x="896" y="116" width="168" height="448" rx="10" />
+
+  <text class="laneTitle" x="90" y="146">Current session</text>
+  <text class="laneTitle" x="312" y="146">delegate tool</text>
+  <text class="laneTitle" x="504" y="146">childSessions.ts</text>
+  <text class="laneTitle" x="728" y="146">Child session</text>
+  <text class="laneTitle" x="924" y="146">Evidence / workspace</text>
+
+  <rect class="step" x="82" y="188" width="144" height="72" rx="8" />
+  <text class="label" x="112" y="216">tool call</text>
+  <text class="mono" x="104" y="240">delegate(...)</text>
+
+  <rect class="step" x="292" y="188" width="136" height="72" rx="8" />
+  <circle class="badge" cx="306" cy="194" r="14" />
+  <text class="badgeText" x="306" y="194">1</text>
+  <text class="label" x="316" y="216">validate args</text>
+  <text class="note" x="310" y="240">task, profile, budget</text>
+
+  <rect class="runner" x="496" y="188" width="150" height="72" rx="8" />
+  <circle class="badge" cx="510" cy="194" r="14" />
+  <text class="badgeText" x="510" y="194">2</text>
+  <text class="label" x="526" y="216">run child</text>
+  <text class="mono" x="514" y="240">runner.run(...)</text>
+
+  <path class="arrow" d="M 226 224 L 292 224" />
+  <path class="arrow" d="M 428 224 L 496 224" />
+
+  <rect class="runner" x="496" y="304" width="150" height="86" rx="8" />
+  <circle class="badge" cx="510" cy="310" r="14" />
+  <text class="badgeText" x="510" y="310">3</text>
+  <text class="label" x="520" y="332">prepare child</text>
+  <text class="note" x="516" y="354">session metadata</text>
+  <text class="note" x="516" y="374">profile runtime</text>
+
+  <rect class="step" x="716" y="304" width="138" height="86" rx="8" />
+  <text class="label" x="742" y="332">run loop</text>
+  <text class="mono" x="728" y="354">runMinimalLoop()</text>
+  <text class="note" x="734" y="374">fresh context</text>
+
+  <rect class="worktree" x="918" y="286" width="124" height="60" rx="8" />
+  <text class="label" x="942" y="312">worktree</text>
+  <text class="note" x="936" y="332">edit profile</text>
+
+  <rect class="evidence" x="918" y="370" width="124" height="82" rx="8" />
+  <circle class="badge" cx="932" cy="376" r="14" />
+  <text class="badgeText" x="932" y="376">4</text>
+  <text class="label" x="948" y="398">trace</text>
+  <text class="note" x="936" y="420">session.json</text>
+  <text class="note" x="936" y="440">events</text>
+
+  <path class="arrow" d="M 646 348 L 716 348" />
+  <path class="dash" d="M 854 334 L 918 316" />
+  <path class="dash" d="M 854 372 L 918 408" />
+
+  <rect class="runner" x="496" y="468" width="150" height="60" rx="8" />
+  <text class="label" x="520" y="494">format result</text>
+  <text class="note" x="516" y="514">handoff metadata</text>
+
+  <rect class="step" x="292" y="468" width="136" height="60" rx="8" />
+  <text class="label" x="316" y="494">tool result</text>
+  <text class="note" x="312" y="514">return to model</text>
+
+  <rect class="evidence" x="82" y="444" width="144" height="84" rx="8" />
+  <circle class="badge" cx="96" cy="450" r="14" />
+  <text class="badgeText" x="96" y="450">5</text>
+  <text class="label" x="110" y="472">RuntimeState</text>
+  <text class="note" x="100" y="494">latest projection</text>
+  <text class="note" x="100" y="514">not full history</text>
+
+  <path class="arrow" d="M 716 492 C 690 492 676 498 646 498" />
+  <path class="arrow" d="M 496 498 L 428 498" />
+  <path class="arrow" d="M 292 498 L 226 498" />
+  <path class="dash" d="M 918 430 C 850 486 730 532 646 514" />
+</svg>

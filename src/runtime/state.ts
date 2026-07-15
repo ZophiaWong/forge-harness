@@ -1,6 +1,7 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { ToolStatus } from "../tools/types.js";
+import type { ChildSessionProfile, SessionWorkspaceMetadata } from "./session.js";
 import type { RuntimeTaskState } from "./task.js";
 import type { SessionEndStatus, TraceEventPayload, TraceRecorder } from "./trace.js";
 import type { VerificationStatus } from "./verification.js";
@@ -93,6 +94,17 @@ export interface RuntimeWorkspaceState {
   path: string;
 }
 
+export interface RuntimeChildHandoffState {
+  changedFiles?: string[];
+  childSessionId: string;
+  finalAnswer: string;
+  parentCallId: string;
+  profile: ChildSessionProfile;
+  round: number;
+  tracePath: string;
+  workspace?: SessionWorkspaceMetadata;
+}
+
 export type RuntimeProblem =
   | {
       kind: "tool_result";
@@ -121,6 +133,13 @@ export type RuntimeProblem =
       workspacePath: string;
     }
   | {
+      childSessionId: string;
+      kind: "child_session_failed";
+      message: string;
+      profile: ChildSessionProfile;
+      round: number;
+    }
+  | {
       kind: "verification_failed";
       round: number;
       status: Exclude<VerificationStatus, "passed">;
@@ -130,12 +149,15 @@ export type RuntimeProblem =
 export interface RuntimeState {
   candidateAnswer?: RuntimeCandidateAnswerState;
   baseCwd?: string;
+  childHandoffCount?: number;
+  childSessionCount?: number;
   compactionCount?: number;
   currentRound: number;
   cwd?: string;
   ended: boolean;
   finalAnswer?: RuntimeFinalAnswerState;
   lastApprovalResult?: RuntimeApprovalResultState;
+  lastChildHandoff?: RuntimeChildHandoffState;
   lastCompaction?: RuntimeContextCompactionState;
   lastModelRequest?: RuntimeModelRequestState;
   lastModelResponse?: RuntimeModelResponseState;
@@ -321,6 +343,43 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           summary: event.taskState.summary,
           updatedAtRound: event.round,
           updatedByCallId: event.callId,
+        },
+      };
+    case "child_session_started":
+      return {
+        ...state,
+        childSessionCount: (state.childSessionCount ?? 0) + 1,
+        currentRound: event.round,
+      };
+    case "child_session_finished":
+      return {
+        ...state,
+        currentRound: event.round,
+        lastProblem:
+          event.status === "failed"
+            ? {
+                childSessionId: event.childSessionId,
+                kind: "child_session_failed",
+                message: event.reason ?? "child session failed",
+                profile: event.profile,
+                round: event.round,
+              }
+            : state.lastProblem,
+      };
+    case "child_session_handoff":
+      return {
+        ...state,
+        childHandoffCount: (state.childHandoffCount ?? 0) + 1,
+        currentRound: event.round,
+        lastChildHandoff: {
+          ...(event.changedFiles ? { changedFiles: [...event.changedFiles] } : {}),
+          childSessionId: event.childSessionId,
+          finalAnswer: event.finalAnswer,
+          parentCallId: event.parentCallId,
+          profile: event.profile,
+          round: event.round,
+          tracePath: event.tracePath,
+          ...(event.workspace ? { workspace: event.workspace } : {}),
         },
       };
     case "background_task_started":

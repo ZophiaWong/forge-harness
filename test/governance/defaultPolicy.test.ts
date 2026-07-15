@@ -67,6 +67,31 @@ describe("createDefaultPermissionPolicy", () => {
     });
   });
 
+  it("allows research delegation but asks before edit delegation", () => {
+    expect(decide("delegate", { profile: "research", task: "Inspect the c14 tutorial." })).toEqual({
+      action: "allow",
+      reason: "read-only child session delegation",
+      risk: "inspect",
+    });
+
+    expect(decide("delegate", { profile: "edit", task: "Update one docs paragraph." })).toEqual({
+      action: "ask",
+      reason: "write-capable child session may modify files in an isolated worktree",
+      risk: "mutating",
+    });
+  });
+
+  it("denies malformed or unknown delegation profiles", () => {
+    expect(decide("delegate", { task: "Inspect docs." })).toMatchObject({
+      action: "deny",
+      risk: "unknown",
+    });
+    expect(decide("delegate", { profile: "audit", task: "Inspect docs." })).toMatchObject({
+      action: "deny",
+      risk: "unknown",
+    });
+  });
+
   it("denies malformed file editing arguments", () => {
     expect(decide("edit", { path: "sample.txt", oldText: "old" })).toMatchObject({
       action: "deny",

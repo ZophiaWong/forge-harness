@@ -17,6 +17,11 @@ interface WriteArguments {
   path: string;
 }
 
+interface DelegateArguments {
+  profile: "research" | "edit";
+  task: string;
+}
+
 export function createDefaultPermissionPolicy(): PermissionPolicy {
   return {
     decide(toolCall) {
@@ -41,6 +46,20 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
       reason: "runtime task state update",
       risk: "mutating",
     };
+  }
+
+  if (toolCall.name === "delegate") {
+    const args = parseDelegateArguments(toolCall.arguments);
+
+    if (!args) {
+      return deny("unknown", "delegate arguments must include non-empty task and profile of research or edit");
+    }
+
+    if (args.profile === "research") {
+      return allow("read-only child session delegation");
+    }
+
+    return ask("mutating", "write-capable child session may modify files in an isolated worktree");
   }
 
   if (toolCall.name === "list_crons") {
@@ -124,6 +143,31 @@ function deny(risk: "destructive" | "unknown", reason: string): PermissionDecisi
     reason,
     risk,
   };
+}
+
+function parseDelegateArguments(rawArguments: string): DelegateArguments | undefined {
+  try {
+    const parsed: unknown = JSON.parse(rawArguments);
+
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "task" in parsed &&
+      typeof parsed.task === "string" &&
+      parsed.task.trim().length > 0 &&
+      "profile" in parsed &&
+      (parsed.profile === "research" || parsed.profile === "edit")
+    ) {
+      return {
+        profile: parsed.profile,
+        task: parsed.task,
+      };
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
 }
 
 function parseBashArguments(rawArguments: string): BashArguments | undefined {

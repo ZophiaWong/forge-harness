@@ -18,6 +18,7 @@ import {
   type PromptAssemblySummary,
 } from "../context/promptAssembly.js";
 import { createContextProjection, type ContextProjection } from "../context/projection.js";
+import type { ChildSessionRunner } from "../extensions/childSessions.js";
 import { createLifecycleEmitter, type LifecycleEmitter } from "../extensions/lifecycle.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import type {
@@ -135,6 +136,7 @@ export interface MinimalLoopOptions {
   responseCreate?: ResponseCreate;
   runtimeState?: () => RuntimeState;
   cronSchedules?: CronScheduleStore;
+  childSessionRunner?: ChildSessionRunner;
   task: string;
   toolRuntime?: ToolRuntime;
   transcript?: MinimalLoopTranscript;
@@ -192,9 +194,11 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       });
   const toolRuntime = options.toolRuntime ??
     createDefaultToolRuntime({
-      cwd: options.cwd,
       backgroundTasks,
+      ...(options.childSessionRunner ? { childSessionRunner: options.childSessionRunner } : {}),
       cronSchedules: options.cronSchedules,
+      cwd: options.cwd,
+      maxToolRounds,
     });
   const contextProjection = options.contextProjection ?? createContextProjection();
   const contextCompaction =
@@ -860,7 +864,7 @@ async function executeToolCall(
     }
   }
 
-  const result = await toolRuntime.execute(request);
+  const result = await toolRuntime.execute(request, { callId: toolCall.call_id, round });
   const resultText = projectToolResult(result, contextProjection);
   transcript?.toolResult(round, resultText);
   await lifecycleEmitter.emit({

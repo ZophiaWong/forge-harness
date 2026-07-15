@@ -33,7 +33,9 @@ export interface ToolResult {
 }
 
 export interface ToolHandlerInput {
+  callId?: string;
   rawArguments: string;
+  round?: number;
 }
 
 export type ToolHandler = (input: ToolHandlerInput) => Promise<ToolResult>;
@@ -45,5 +47,5 @@ export interface RegisteredTool {
 
 export interface ToolRuntime {
   toolDefinitions(): ToolDefinition[];
-  execute(toolCall: ToolCallRequest): Promise<ToolResult>;
+  execute(toolCall: ToolCallRequest, context?: { callId?: string; round?: number }): Promise<ToolResult>;
 }

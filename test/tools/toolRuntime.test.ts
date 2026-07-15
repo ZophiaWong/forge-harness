@@ -72,6 +72,28 @@ describe("createDefaultToolRuntime", () => {
     ]);
   });
 
+  it("exposes delegate only when a child session runner is provided", () => {
+    const withoutRunner = createDefaultToolRuntime({ cwd: process.cwd() });
+    const withRunner = createDefaultToolRuntime({
+      childSessionRunner: {
+        run: async () => ({
+          childSessionId: "child",
+          finalAnswer: "done",
+          profile: "research",
+          status: "completed",
+          tracePath: "trace.jsonl",
+        }),
+      },
+      cwd: process.cwd(),
+      maxToolRounds: 8,
+      parentCallId: () => "call_delegate",
+      parentRound: () => 1,
+    });
+
+    expect(withoutRunner.toolDefinitions().map((tool) => tool.name)).not.toContain("delegate");
+    expect(withRunner.toolDefinitions().map((tool) => tool.name)).toContain("delegate");
+  });
+
   it("keeps ls non-strict because its path argument is optional", () => {
     const runtime = createDefaultToolRuntime({ cwd: process.cwd() });
     const lsDefinition = runtime.toolDefinitions().find((tool) => tool.name === "ls");

@@ -112,7 +112,7 @@ flowchart TB
 | [`c13a` Background Tool Tasks](tutorial/c13a-background-tool-tasks.md) | `L5 + L4` | 长命令不该总是阻塞 foreground loop。 | session-scoped background bash task、notification 回流、background trace。 | foreground loop 能启动后台任务，并在后续 round 接收结果。 |
 | [`c13b` Scheduled Jobs / Cron](tutorial/c13b-scheduled-jobs-cron.md) | `L5 + L4` | 有些任务需要稍后或定时继续，而不是只在当前 session 内后台运行。 | durable cron schedule、worker wakeup、fresh scheduled run trace。 | harness 能创建 cron schedule，并由 worker 触发新的 agent run。 |
 | [`c14` Worktree Isolation](tutorial/c14-worktree-isolation.md) | `L2 + L4 + L5` | 并行或高风险修改会污染主工作区。 | session-bound worktree、merge review。 | 每条工作线有独立 filesystem boundary。 |
-| `c15a` Child Sessions / Handoff | `L5 + L3 + L4` | 独立子任务会挤占主上下文，也需要独立工作区。 | 同步 child session、profile、summary handoff、workspace binding。 | 子任务隔离执行，再把结果交回主任务。 |
+| [`c15a` Child Sessions / Handoff](tutorial/c15a-child-sessions-handoff.md) | `L5 + L3 + L4` | 独立子任务会挤占主上下文，也需要独立工作区。 | 同步 child session、profile、summary handoff、workspace binding。 | 子任务隔离执行，再把结果交回主任务。 |
 | `c15b` Async Child Sessions / Parallel Handoff | `L5 + L3 + L4` | research 子任务可能很慢，串行等待会卡住 parent session。 | async child session、child registry、handoff notification、final gate。 | parent 能继续推进，并在后续 round 接收 child handoff。 |
 | `c16` MCP / Plugin Routing | `L1 + L2` | 内置 tools 不够，外部工具也要被治理。 | MCP/plugin adapter through Tool Runtime。 | 外部工具复用 permission 和 result protocol。 |
 | `c17` Team Protocols / Comprehensive Harness | all | 机制多了以后，需要回到一条可解释 agent turn。 | capstone run、team handoff、sync/async delegation protocol。 | 串起 tools、permission、context、trace、state、handoff、verification。 |

@@ -7,7 +7,7 @@ export function createToolRuntime(tools: RegisteredTool[]): ToolRuntime {
     toolDefinitions() {
       return tools.map((tool) => tool.definition);
     },
-    async execute(toolCall) {
+    async execute(toolCall, context) {
       const tool = registry.get(toolCall.name);
 
       if (!tool) {
@@ -19,7 +19,11 @@ export function createToolRuntime(tools: RegisteredTool[]): ToolRuntime {
       }
 
       try {
-        return await tool.handler({ rawArguments: toolCall.arguments });
+        return await tool.handler({
+          ...(context?.callId ? { callId: context.callId } : {}),
+          rawArguments: toolCall.arguments,
+          ...(context?.round !== undefined ? { round: context.round } : {}),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {

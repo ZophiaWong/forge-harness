@@ -4,6 +4,7 @@ import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { BackgroundTaskKind, BackgroundTaskStatus } from "./backgroundTasks.js";
 import type { CronRunStatus } from "./cronStore.js";
+import type { ChildSessionProfile, SessionWorkspaceMetadata } from "./session.js";
 import type { TaskState } from "./task.js";
 import type { VerificationStatus } from "./verification.js";
 
@@ -124,6 +125,38 @@ export type TraceEventPayload =
       round: number;
       callId: string;
       taskState: TaskState;
+    }
+  | {
+      type: "child_session_started";
+      round: number;
+      parentCallId: string;
+      childSessionId: string;
+      profile: ChildSessionProfile;
+      task: string;
+      tracePath: string;
+      workspace?: SessionWorkspaceMetadata;
+    }
+  | {
+      type: "child_session_finished";
+      round: number;
+      parentCallId: string;
+      childSessionId: string;
+      profile: ChildSessionProfile;
+      status: SessionEndStatus;
+      tracePath: string;
+      reason?: string;
+      workspace?: SessionWorkspaceMetadata;
+    }
+  | {
+      type: "child_session_handoff";
+      round: number;
+      parentCallId: string;
+      childSessionId: string;
+      profile: ChildSessionProfile;
+      finalAnswer: string;
+      tracePath: string;
+      changedFiles?: string[];
+      workspace?: SessionWorkspaceMetadata;
     }
   | {
       type: "background_task_started";

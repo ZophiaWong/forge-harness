@@ -442,6 +442,73 @@ describe("RuntimeState projection", () => {
 
     expect(state).toEqual(baseState);
   });
+
+  it("projects only the latest child handoff and child counters", () => {
+    const state = applyEvents([
+      {
+        childSessionId: "child-1",
+        parentCallId: "call_1",
+        profile: "research",
+        round: 1,
+        task: "Inspect docs.",
+        tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        type: "child_session_started",
+      },
+      {
+        childSessionId: "child-1",
+        parentCallId: "call_1",
+        profile: "research",
+        round: 1,
+        status: "completed",
+        tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        type: "child_session_finished",
+      },
+      {
+        childSessionId: "child-1",
+        finalAnswer: "Research complete.",
+        parentCallId: "call_1",
+        profile: "research",
+        round: 1,
+        tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        type: "child_session_handoff",
+      },
+      {
+        childSessionId: "child-2",
+        parentCallId: "call_2",
+        profile: "edit",
+        round: 2,
+        task: "Update docs.",
+        tracePath: "/repo/.forge/sessions/child-2/trace.jsonl",
+        type: "child_session_started",
+      },
+      {
+        childSessionId: "child-2",
+        parentCallId: "call_2",
+        profile: "edit",
+        reason: "worktree setup failed",
+        round: 2,
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-2/trace.jsonl",
+        type: "child_session_finished",
+      },
+    ]);
+
+    expect(state.childSessionCount).toBe(2);
+    expect(state.childHandoffCount).toBe(1);
+    expect(state.lastChildHandoff).toMatchObject({
+      childSessionId: "child-1",
+      finalAnswer: "Research complete.",
+      parentCallId: "call_1",
+      profile: "research",
+    });
+    expect(state.lastProblem).toEqual({
+      childSessionId: "child-2",
+      kind: "child_session_failed",
+      message: "worktree setup failed",
+      profile: "edit",
+      round: 2,
+    });
+  });
 });
 
 describe("createRuntimeStateRecorder", () => {

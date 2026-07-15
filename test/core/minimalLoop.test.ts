@@ -989,6 +989,9 @@ describe("runMinimalLoop", () => {
     expect(toolRuntime.execute).toHaveBeenCalledWith({
       arguments: rawArguments,
       name: "bash",
+    }, {
+      callId: "call_allow",
+      round: 1,
     });
   });
 
@@ -1218,6 +1221,9 @@ describe("runMinimalLoop", () => {
     expect(toolRuntime.execute).toHaveBeenCalledWith({
       arguments: JSON.stringify({ path: "package.json" }),
       name: "read",
+    }, {
+      callId: "call_read",
+      round: 1,
     });
     expect(callsFor(responseCreate)[1]?.input).toContainEqual(
       expect.objectContaining({

@@ -19,25 +19,15 @@ import {
 } from "./transcript.js";
 import { loadRepoPromptAssets } from "../context/promptAssembly.js";
 import { DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MODEL, runMinimalLoop } from "../core/minimalLoop.js";
+import { createChildSessionRunner } from "../extensions/childSessions.js";
 import { createCronWorker, type ScheduledRunResult } from "../extensions/cronWorker.js";
 import { createLifecycleEmitter, type LifecycleHook } from "../extensions/lifecycle.js";
 import type { CronSchedule } from "../runtime/cronStore.js";
 import { createFileCronScheduleStore } from "../runtime/cronStore.js";
-import {
-  createCliSessionTrace,
-  createSessionMetadata,
-  type CliSessionTrace,
-  type SessionWorkspaceMetadata,
-  writeSessionMetadata,
-} from "../runtime/session.js";
+import { createCliSessionTrace, type SessionWorkspaceMetadata } from "../runtime/session.js";
+import { prepareWorktreeSession } from "../runtime/sessionWorkspace.js";
 import { createRuntimeStateRecorder, type RuntimeState } from "../runtime/state.js";
 import { createCommandVerifier } from "../runtime/verification.js";
-import {
-  createGitWorktreeWorkspace,
-  createWorktreeBranchName,
-  createWorktreePath,
-  WorkspaceSetupError,
-} from "../runtime/workspace.js";
 
 const cliArgs = parseCliArgs(process.argv.slice(2));
 
@@ -100,6 +90,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     });
     getRuntimeState = runtimeStateTrace.getState;
     const displayTracePath = path.relative(baseCwd, sessionTrace.paths.tracePath);
+    const approver = createCliApprover();
 
     console.log(formatSessionTranscript(sessionTrace.metadata.id, displayTracePath));
 
@@ -127,8 +118,15 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     }
 
     await runMinimalLoop({
-      approver: createCliApprover(),
+      approver,
       ...(workspace ? { baseCwd, workspace } : {}),
+      childSessionRunner: createChildSessionRunner({
+        approver,
+        baseCwd,
+        model,
+        parentLifecycleEmitter: lifecycleEmitter,
+        parentSessionId: sessionTrace.metadata.id,
+      }),
       cronSchedules,
       cwd: executionCwd,
       lifecycleEmitter,
@@ -276,6 +274,12 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
 
     await runMinimalLoop({
       ...(workspace ? { baseCwd: options.baseCwd, workspace } : {}),
+      childSessionRunner: createChildSessionRunner({
+        baseCwd: options.baseCwd,
+        model: options.model,
+        parentLifecycleEmitter: lifecycleEmitter,
+        parentSessionId: sessionTrace.metadata.id,
+      }),
       cwd: executionCwd,
       lifecycleEmitter,
       maxToolRounds: options.maxToolRounds,
@@ -298,63 +302,6 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
   }
 }
 
-interface PrepareWorktreeSessionOptions {
-  baseCwd: string;
-  lifecycleEmitter: ReturnType<typeof createLifecycleEmitter>;
-  sessionTrace: CliSessionTrace;
-}
-
-async function prepareWorktreeSession(options: PrepareWorktreeSessionOptions): Promise<SessionWorkspaceMetadata> {
-  try {
-    const binding = await createGitWorktreeWorkspace({
-      baseCwd: options.baseCwd,
-      sessionId: options.sessionTrace.metadata.id,
-    });
-    const workspace = toSessionWorkspaceMetadata(binding);
-    const metadata = createSessionMetadata({
-      baseCwd: options.baseCwd,
-      cwd: workspace.path,
-      id: options.sessionTrace.metadata.id,
-      maxToolRounds: options.sessionTrace.metadata.maxToolRounds,
-      model: options.sessionTrace.metadata.model,
-      startedAt: options.sessionTrace.metadata.startedAt,
-      task: options.sessionTrace.metadata.task,
-      tracePath: options.sessionTrace.metadata.tracePath,
-      workspace,
-    });
-
-    options.sessionTrace.metadata = metadata;
-    await writeSessionMetadata(options.sessionTrace.paths.sessionMetadataPath, metadata);
-    return workspace;
-  } catch (error) {
-    const details = workspaceSetupFailureDetails(error, options.baseCwd, options.sessionTrace.metadata.id);
-    await options.lifecycleEmitter.emit({
-      baseCwd: options.baseCwd,
-      branch: details.branch,
-      reason: details.reason,
-      type: "workspace_setup_failed",
-      workspacePath: details.workspacePath,
-    });
-    throw error;
-  }
-}
-
-function toSessionWorkspaceMetadata(binding: {
-  baseBranch: string;
-  baseCommit: string;
-  branch: string;
-  mode: "git_worktree";
-  path: string;
-}): SessionWorkspaceMetadata {
-  return {
-    baseBranch: binding.baseBranch,
-    baseCommit: binding.baseCommit,
-    branch: binding.branch,
-    mode: binding.mode,
-    path: binding.path,
-  };
-}
-
 function toDisplayWorkspace(
   workspace: SessionWorkspaceMetadata,
   baseCwd: string,
@@ -362,25 +309,5 @@ function toDisplayWorkspace(
   return {
     ...workspace,
     path: path.relative(baseCwd, workspace.path),
-  };
-}
-
-function workspaceSetupFailureDetails(
-  error: unknown,
-  baseCwd: string,
-  sessionId: string,
-): { branch: string; reason: string; workspacePath: string } {
-  if (error instanceof WorkspaceSetupError) {
-    return {
-      branch: error.branch,
-      reason: error.message,
-      workspacePath: error.workspacePath,
-    };
-  }
-
-  return {
-    branch: createWorktreeBranchName(sessionId),
-    reason: error instanceof Error ? error.message : String(error),
-    workspacePath: createWorktreePath(baseCwd, sessionId),
   };
 }

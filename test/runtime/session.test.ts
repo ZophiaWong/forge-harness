@@ -78,4 +78,32 @@ describe("session metadata", () => {
       },
     });
   });
+
+  it("builds metadata for a child session source", () => {
+    const metadata = createSessionMetadata({
+      child: {
+        parentCallId: "call_delegate",
+        parentSessionId: "parent-session",
+        profile: "research",
+        role: "child",
+      },
+      cwd: "/workspace/forge-harness",
+      id: "child-session",
+      maxToolRounds: 4,
+      model: "gpt-5.4-mini",
+      startedAt: "2026-06-25T08:01:02.000Z",
+      task: "Inspect docs",
+      tracePath: "/workspace/forge-harness/.forge/sessions/child-session/trace.jsonl",
+    });
+
+    expect(metadata).toMatchObject({
+      child: {
+        parentCallId: "call_delegate",
+        parentSessionId: "parent-session",
+        profile: "research",
+        role: "child",
+      },
+      id: "child-session",
+    });
+  });
 });
