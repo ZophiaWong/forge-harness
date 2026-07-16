@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the runnable checkpoints through `c15a Child Sessions / Handoff`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, and `c15a Child Sessions / Handoff`.
+This branch contains the documentation baseline plus the runnable checkpoints through `c15b Async Child Sessions / Parallel Handoff With Edit Preview`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, and `c15b Async Child Sessions / Parallel Handoff With Edit Preview`.
 
 ## Setup
 
@@ -52,7 +52,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c13b Scheduled Jobs / Cron](docs/tutorial/c13b-scheduled-jobs-cron.md): durable cron schedules, worker wakeup, and fresh scheduled run traces.
 - [c14 Worktree Isolation](docs/tutorial/c14-worktree-isolation.md): explicit `--worktree` runs that bind a session to an isolated git worktree.
 - [c15a Child Sessions / Handoff](docs/tutorial/c15a-child-sessions-handoff.md): synchronous fresh child sessions with profile boundaries, isolated edit worktrees, and handoff evidence.
-- Future c15b planning is tracked in the roadmap; runnable tutorial links on this branch stop at c15a.
+- [c15b Async Child Sessions / Parallel Handoff With Edit Preview](docs/tutorial/c15b-async-child-sessions-parallel-handoff.md): async research/edit child sessions, notification return flow, final gate, and isolated edit preview metadata.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.

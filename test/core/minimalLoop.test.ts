@@ -19,6 +19,7 @@ vi.mock("openai", () => ({
 
 import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
 import type { PromptAssets } from "../../src/context/promptAssembly.js";
+import type { ChildSessionRunner } from "../../src/extensions/childSessions.js";
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
@@ -112,6 +113,25 @@ function verifierWithResults(...results: VerificationResult[]): Verifier {
       return result;
     }),
   };
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+
+  return { promise, resolve };
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe("runMinimalLoop", () => {
@@ -1356,6 +1376,136 @@ describe("runMinimalLoop", () => {
 
     expect(canceledIndex).toBeGreaterThan(-1);
     expect(sessionEndedIndex).toBeGreaterThan(canceledIndex);
+  });
+
+  it("lets the parent continue after async delegation and gates final until child handoff returns", async () => {
+    const trace = createTraceRecorder();
+    const childResult = createDeferred<{
+      childSessionId: string;
+      finalAnswer: string;
+      profile: "research";
+      status: "completed";
+      tracePath: string;
+    }>();
+    const childSessionRunner: ChildSessionRunner = {
+      run: vi.fn(),
+      start: vi.fn().mockResolvedValue({
+        childSessionId: "child-async-1",
+        profile: "research",
+        promise: childResult.promise,
+        status: "running",
+        tracePath: "/repo/.forge/sessions/child-async-1/trace.jsonl",
+      }),
+    };
+    const responseCreate: ResponseCreate = vi.fn(async (request) => {
+      const callCount = (responseCreate as ReturnType<typeof vi.fn>).mock.calls.length;
+
+      if (callCount === 1) {
+        return {
+          output: [
+            {
+              arguments: JSON.stringify({
+                maxToolRounds: 3,
+                profile: "research",
+                runInBackground: true,
+                task: "Inspect c15b async boundaries.",
+              }),
+              call_id: "call_delegate",
+              name: "delegate",
+              type: "function_call",
+            },
+          ],
+          output_text: "",
+        };
+      }
+
+      if (callCount === 2) {
+        expect(JSON.stringify(request.input)).toContain("status: running");
+        return {
+          output: [
+            {
+              arguments: JSON.stringify({ path: "README.md" }),
+              call_id: "call_read",
+              name: "read",
+              type: "function_call",
+            },
+          ],
+          output_text: "",
+        };
+      }
+
+      if (callCount === 3) {
+        return {
+          output: [],
+          output_text: "premature final",
+        };
+      }
+
+      if (callCount === 4) {
+        expect(JSON.stringify(request.input)).toContain("<child_session_notification>");
+        expect(JSON.stringify(request.input)).toContain("status: running");
+        childResult.resolve({
+          childSessionId: "child-async-1",
+          finalAnswer: "Async research complete.",
+          profile: "research",
+          status: "completed",
+          tracePath: "/repo/.forge/sessions/child-async-1/trace.jsonl",
+        });
+        await flushPromises();
+        return {
+          output: [],
+          output_text: "second premature final",
+        };
+      }
+
+      expect(JSON.stringify(request.input)).toContain("Async research complete.");
+      return {
+        output: [],
+        output_text: "final after child handoff",
+      };
+    }) as unknown as ResponseCreate;
+
+    const result = await runMinimalLoop({
+      apiKey: "test-key",
+      childSessionRunner,
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      maxToolRounds: 5,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "use async delegation",
+    });
+
+    expect(result).toEqual({ finalAnswer: "final after child handoff", rounds: 5 });
+    expect(childSessionRunner.start).toHaveBeenCalledWith({
+      maxToolRounds: 3,
+      parentCallId: "call_delegate",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: true,
+      task: "Inspect c15b async boundaries.",
+    });
+    expect(trace.events).not.toContainEqual({
+      answer: "premature final",
+      round: 3,
+      type: "final_answer",
+    });
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        childSessionId: "child-async-1",
+        profile: "research",
+        status: "running",
+        type: "child_session_notification",
+      }),
+    );
+    expect(trace.events).toContainEqual(
+      expect.objectContaining({
+        childSessionId: "child-async-1",
+        profile: "research",
+        status: "completed",
+        type: "child_session_notification",
+      }),
+    );
   });
 
   it("does not add background support to an injected custom tool runtime", async () => {

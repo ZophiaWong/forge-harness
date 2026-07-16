@@ -147,6 +147,7 @@ export type RuntimeProblem =
     };
 
 export interface RuntimeState {
+  asyncChildPendingCount?: number;
   candidateAnswer?: RuntimeCandidateAnswerState;
   baseCwd?: string;
   childHandoffCount?: number;
@@ -348,12 +349,18 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
     case "child_session_started":
       return {
         ...state,
+        asyncChildPendingCount: event.runInBackground
+          ? (state.asyncChildPendingCount ?? 0) + 1
+          : state.asyncChildPendingCount,
         childSessionCount: (state.childSessionCount ?? 0) + 1,
         currentRound: event.round,
       };
     case "child_session_finished":
       return {
         ...state,
+        asyncChildPendingCount: event.runInBackground
+          ? Math.max((state.asyncChildPendingCount ?? 0) - 1, 0)
+          : state.asyncChildPendingCount,
         currentRound: event.round,
         lastProblem:
           event.status === "failed"
@@ -381,6 +388,11 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           tracePath: event.tracePath,
           ...(event.workspace ? { workspace: event.workspace } : {}),
         },
+      };
+    case "child_session_notification":
+      return {
+        ...state,
+        currentRound: event.round,
       };
     case "background_task_started":
     case "background_task_finished":

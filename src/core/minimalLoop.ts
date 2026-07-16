@@ -18,7 +18,13 @@ import {
   type PromptAssemblySummary,
 } from "../context/promptAssembly.js";
 import { createContextProjection, type ContextProjection } from "../context/projection.js";
-import type { ChildSessionRunner } from "../extensions/childSessions.js";
+import {
+  createAsyncChildSessionManager,
+  formatChildSessionNotification,
+  type AsyncChildSessionManager,
+  type AsyncChildSessionNotification,
+  type ChildSessionRunner,
+} from "../extensions/childSessions.js";
 import { createLifecycleEmitter, type LifecycleEmitter } from "../extensions/lifecycle.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import type {
@@ -192,10 +198,14 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           });
         },
       });
+  const childSessions =
+    !options.toolRuntime && options.childSessionRunner
+      ? createAsyncChildSessionManager({ runner: options.childSessionRunner })
+      : undefined;
   const toolRuntime = options.toolRuntime ??
     createDefaultToolRuntime({
       backgroundTasks,
-      ...(options.childSessionRunner ? { childSessionRunner: options.childSessionRunner } : {}),
+      ...(childSessions ? { childSessionRunner: childSessions } : {}),
       cronSchedules: options.cronSchedules,
       cwd: options.cwd,
       maxToolRounds,
@@ -250,6 +260,13 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       const toolDefinitions = toolRuntime.toolDefinitions();
       await appendBackgroundTaskNotifications({
         backgroundTasks,
+        inputHistory,
+        lifecycleEmitter,
+        round,
+        running: false,
+      });
+      await appendChildSessionNotifications({
+        childSessions,
         inputHistory,
         lifecycleEmitter,
         round,
@@ -320,8 +337,15 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
           round,
           running: true,
         });
+        const childGateInjected = await appendChildSessionNotifications({
+          childSessions,
+          inputHistory,
+          lifecycleEmitter,
+          round,
+          running: true,
+        });
 
-        if (backgroundGateInjected > 0) {
+        if (backgroundGateInjected + childGateInjected > 0) {
           await maybeReactiveCompactInputHistory({
             contextCompaction,
             inputHistory,
@@ -742,6 +766,54 @@ async function recordBackgroundTaskNotification(
     status: notification.status,
     taskId: notification.id,
     type: "background_task_notification",
+  });
+}
+
+interface AppendChildSessionNotificationsOptions {
+  childSessions: AsyncChildSessionManager | undefined;
+  inputHistory: ReturnType<typeof createInputHistoryManager>;
+  lifecycleEmitter: LifecycleEmitter;
+  round: number;
+  running: boolean;
+}
+
+async function appendChildSessionNotifications(
+  options: AppendChildSessionNotificationsOptions,
+): Promise<number> {
+  if (!options.childSessions) {
+    return 0;
+  }
+
+  const notifications = [
+    ...options.childSessions.drainNotifications(),
+    ...(options.running ? options.childSessions.runningNotifications() : []),
+  ];
+
+  for (const notification of notifications) {
+    options.inputHistory.appendRoundItems(options.round, [
+      {
+        role: "user",
+        content: formatChildSessionNotification(notification),
+      } as CompactableInputItem,
+    ]);
+    await recordChildSessionNotification(options.lifecycleEmitter, options.round, notification);
+  }
+
+  return notifications.length;
+}
+
+async function recordChildSessionNotification(
+  lifecycleEmitter: LifecycleEmitter,
+  round: number,
+  notification: AsyncChildSessionNotification,
+): Promise<void> {
+  await lifecycleEmitter.emit({
+    childSessionId: notification.childSessionId,
+    profile: notification.profile,
+    round,
+    status: notification.status,
+    tracePath: notification.tracePath,
+    type: "child_session_notification",
   });
 }
 

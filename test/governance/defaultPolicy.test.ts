@@ -81,6 +81,32 @@ describe("createDefaultPermissionPolicy", () => {
     });
   });
 
+  it("keeps async delegation permission boundaries aligned with child profile", () => {
+    expect(
+      decide("delegate", {
+        profile: "research",
+        runInBackground: true,
+        task: "Inspect async child design options.",
+      }),
+    ).toEqual({
+      action: "allow",
+      reason: "read-only child session delegation",
+      risk: "inspect",
+    });
+
+    expect(
+      decide("delegate", {
+        profile: "edit",
+        runInBackground: true,
+        task: "Draft c15b tutorial text in an isolated worktree.",
+      }),
+    ).toEqual({
+      action: "ask",
+      reason: "write-capable child session may modify files in an isolated worktree",
+      risk: "mutating",
+    });
+  });
+
   it("denies malformed or unknown delegation profiles", () => {
     expect(decide("delegate", { task: "Inspect docs." })).toMatchObject({
       action: "deny",

@@ -132,6 +132,7 @@ export type TraceEventPayload =
       parentCallId: string;
       childSessionId: string;
       profile: ChildSessionProfile;
+      runInBackground?: boolean;
       task: string;
       tracePath: string;
       workspace?: SessionWorkspaceMetadata;
@@ -142,6 +143,7 @@ export type TraceEventPayload =
       parentCallId: string;
       childSessionId: string;
       profile: ChildSessionProfile;
+      runInBackground?: boolean;
       status: SessionEndStatus;
       tracePath: string;
       reason?: string;
@@ -157,6 +159,14 @@ export type TraceEventPayload =
       tracePath: string;
       changedFiles?: string[];
       workspace?: SessionWorkspaceMetadata;
+    }
+  | {
+      type: "child_session_notification";
+      round: number;
+      childSessionId: string;
+      profile: ChildSessionProfile;
+      status: "running" | SessionEndStatus;
+      tracePath: string;
     }
   | {
       type: "background_task_started";

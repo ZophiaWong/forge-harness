@@ -127,6 +127,10 @@ export function formatRuntimeStateTranscript(state: RuntimeState, round?: number
     parts.push(`lastCompact=${state.lastCompaction.trigger}`);
   }
 
+  if (state.asyncChildPendingCount !== undefined) {
+    parts.push(`asyncChildren=${state.asyncChildPendingCount}`);
+  }
+
   if (state.taskState) {
     const counts = countTaskItems(state.taskState);
     const openItems = counts.pending + counts.in_progress + counts.blocked;

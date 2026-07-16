@@ -509,6 +509,56 @@ describe("RuntimeState projection", () => {
       round: 2,
     });
   });
+
+  it("projects pending async child sessions without keeping a full child index", () => {
+    const state = applyEvents([
+      {
+        childSessionId: "child-1",
+        parentCallId: "call_1",
+        profile: "research",
+        round: 1,
+        runInBackground: true,
+        task: "Inspect docs.",
+        tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        type: "child_session_started",
+      },
+      {
+        childSessionId: "child-2",
+        parentCallId: "call_2",
+        profile: "edit",
+        round: 1,
+        runInBackground: true,
+        task: "Draft docs.",
+        tracePath: "/repo/.forge/sessions/child-2/trace.jsonl",
+        type: "child_session_started",
+      },
+      {
+        childSessionId: "child-1",
+        parentCallId: "call_1",
+        profile: "research",
+        round: 2,
+        runInBackground: true,
+        status: "completed",
+        tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        type: "child_session_finished",
+      },
+      {
+        childSessionId: "child-1",
+        finalAnswer: "Research complete.",
+        parentCallId: "call_1",
+        profile: "research",
+        round: 2,
+        tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        type: "child_session_handoff",
+      },
+    ]);
+
+    expect(state.childSessionCount).toBe(2);
+    expect(state.asyncChildPendingCount).toBe(1);
+    expect(state.childHandoffCount).toBe(1);
+    expect(state.lastChildHandoff?.childSessionId).toBe("child-1");
+    expect("childSessions" in state).toBe(false);
+  });
 });
 
 describe("createRuntimeStateRecorder", () => {

@@ -6,6 +6,7 @@ export interface ChildSessionRunRequest {
   parentCallId: string;
   parentRound: number;
   profile: ChildSessionProfile;
+  runInBackground: boolean;
   task: string;
 }
 
@@ -22,8 +23,17 @@ export interface ChildSessionRunResult {
   };
 }
 
+export interface ChildSessionRunHandle {
+  childSessionId: string;
+  profile: ChildSessionProfile;
+  promise: Promise<ChildSessionRunResult>;
+  status: "running";
+  tracePath: string;
+}
+
 export interface DelegateChildSessionRunner {
   run(request: ChildSessionRunRequest): Promise<ChildSessionRunResult>;
+  start(request: ChildSessionRunRequest): Promise<ChildSessionRunHandle>;
 }
 
 export interface CreateDelegateToolOptions {
@@ -36,13 +46,14 @@ export interface CreateDelegateToolOptions {
 interface DelegateArguments {
   maxToolRounds?: number;
   profile: ChildSessionProfile;
+  runInBackground: boolean;
   task: string;
 }
 
 export const delegateToolDefinition: ToolDefinition = {
   type: "function",
   name: "delegate",
-  description: "Run a synchronous fresh child session with an explicit research or edit profile.",
+  description: "Run a fresh child session with an explicit research or edit profile, synchronously by default or asynchronously when requested.",
   strict: true,
   parameters: {
     type: "object",
@@ -61,8 +72,12 @@ export const delegateToolDefinition: ToolDefinition = {
         type: ["number", "null"],
         description: "Optional child tool round cap. Use null to inherit the parent maxToolRounds.",
       },
+      runInBackground: {
+        type: ["boolean", "null"],
+        description: "Set true to start the child session asynchronously and receive its handoff later.",
+      },
     },
-    required: ["task", "profile", "maxToolRounds"],
+    required: ["task", "profile", "maxToolRounds", "runInBackground"],
   },
 };
 
@@ -74,7 +89,7 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
 
       if (!args) {
         return failedDelegateResult(
-          "delegate arguments must be JSON with non-empty string task, profile of research/edit, and optional integer maxToolRounds",
+          "delegate arguments must be JSON with non-empty string task, profile of research/edit, optional integer maxToolRounds, and optional boolean runInBackground",
         );
       }
 
@@ -92,11 +107,37 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
       }
 
       try {
+        if (args.runInBackground) {
+          const handle = await options.runner.start({
+            maxToolRounds,
+            parentCallId,
+            parentRound,
+            profile: args.profile,
+            runInBackground: true,
+            task: args.task,
+          });
+
+          return {
+            content: formatDelegateStartResult(handle),
+            status: "completed",
+            toolName: "delegate",
+            metadata: {
+              childSession: {
+                childSessionId: handle.childSessionId,
+                profile: handle.profile,
+                status: handle.status,
+                tracePath: handle.tracePath,
+              },
+            },
+          };
+        }
+
         const result = await options.runner.run({
           maxToolRounds,
           parentCallId,
           parentRound,
           profile: args.profile,
+          runInBackground: false,
           task: args.task,
         });
 
@@ -137,13 +178,21 @@ function parseDelegateArguments(rawArguments: string): DelegateArguments | undef
       isChildProfile(parsed.profile) &&
       (!("maxToolRounds" in parsed) ||
         parsed.maxToolRounds === null ||
-        (typeof parsed.maxToolRounds === "number" && Number.isInteger(parsed.maxToolRounds)))
+        (typeof parsed.maxToolRounds === "number" && Number.isInteger(parsed.maxToolRounds))) &&
+      (!("runInBackground" in parsed) ||
+        parsed.runInBackground === null ||
+        typeof parsed.runInBackground === "boolean")
     ) {
       const maxToolRounds =
         "maxToolRounds" in parsed && typeof parsed.maxToolRounds === "number" ? parsed.maxToolRounds : undefined;
+      const runInBackground =
+        "runInBackground" in parsed && typeof parsed.runInBackground === "boolean"
+          ? parsed.runInBackground
+          : false;
       return {
         ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
         profile: parsed.profile,
+        runInBackground,
         task: parsed.task,
       };
     }
@@ -187,4 +236,15 @@ function formatDelegateResult(result: ChildSessionRunResult): string {
   lines.push("handoff:");
   lines.push(result.finalAnswer);
   return lines.join("\n");
+}
+
+function formatDelegateStartResult(result: ChildSessionRunHandle): string {
+  return [
+    `child_session_id: ${result.childSessionId}`,
+    `profile: ${result.profile}`,
+    `status: ${result.status}`,
+    `trace_path: ${result.tracePath}`,
+    "handoff:",
+    "(child session is running in background)",
+  ].join("\n");
 }

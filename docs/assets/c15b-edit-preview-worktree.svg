@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">c15b async edit preview worktree</title>
+  <desc id="desc">A diagram showing an async edit child creating an isolated worktree, modifying files there, and returning workspace path, branch, changed files, and handoff without merging.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 24px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .small { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .box { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 8; }
+      .work { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 8; }
+      .meta { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 8; }
+      .stop { fill: #fef2f2; stroke: #b91c1c; stroke-width: 2; rx: 8; }
+      .label { font: 700 16px ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .mono { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #334155; }
+      .note { font: 13px ui-sans-serif, system-ui, sans-serif; fill: #475569; }
+      .arrow { stroke: #475569; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .return { stroke: #047857; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .blocked { stroke: #b91c1c; stroke-width: 2.4; stroke-dasharray: 8 8; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="520" />
+  <text class="title" x="56" y="54">c15b edit preview: writable child, isolated result</text>
+  <text class="small" x="56" y="82">Async edit can modify files, but only inside its own worktree. The parent receives metadata and handoff, not an automatic merge.</text>
+
+  <rect class="box" x="70" y="132" width="220" height="86" rx="8" />
+  <text class="label" x="104" y="164">Parent session</text>
+  <text class="mono" x="104" y="192">delegate edit async</text>
+
+  <rect class="work" x="398" y="118" width="256" height="116" rx="8" />
+  <text class="label" x="438" y="154">Edit child worktree</text>
+  <text class="mono" x="438" y="184">.forge/worktrees/...</text>
+  <text class="note" x="438" y="208">edit/write still ask</text>
+
+  <rect class="meta" x="760" y="114" width="284" height="138" rx="8" />
+  <text class="label" x="804" y="150">Notification payload</text>
+  <text class="mono" x="804" y="180">workspace_path</text>
+  <text class="mono" x="804" y="204">workspace_branch</text>
+  <text class="mono" x="804" y="228">changed_files + handoff</text>
+
+  <rect class="stop" x="400" y="326" width="254" height="96" rx="8" />
+  <text class="label" x="452" y="360">Not in c15b</text>
+  <text class="mono" x="452" y="388">auto merge</text>
+  <text class="mono" x="452" y="412">review gate</text>
+
+  <path class="arrow" d="M 290 176 L 398 176" />
+  <text class="small" x="306" y="160">approval to start</text>
+
+  <path class="return" d="M 654 176 L 760 176" />
+  <text class="small" x="674" y="160">completion</text>
+
+  <path class="return" d="M 760 266 C 650 314, 425 314, 290 218" />
+  <rect class="bg" x="432" y="300" width="272" height="24" />
+  <text class="small" x="452" y="316">metadata flows back to parent</text>
+
+  <path class="blocked" d="M 526 234 L 526 326" />
+  <text class="small" x="548" y="266">no merge step</text>
+</svg>

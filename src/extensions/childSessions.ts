@@ -20,6 +20,7 @@ import { createReadTool } from "../tools/readTool.js";
 import { createToolRuntime } from "../tools/runtime.js";
 import { createTodoTool } from "../tools/todoTool.js";
 import type {
+  ChildSessionRunHandle,
   ChildSessionRunRequest,
   ChildSessionRunResult,
   DelegateChildSessionRunner,
@@ -47,7 +48,10 @@ export interface CreateChildSessionRunnerOptions {
 export function createChildSessionRunner(options: CreateChildSessionRunnerOptions): ChildSessionRunner {
   return {
     async run(request) {
-      return runChildSession(options, request);
+      return (await startChildSession(options, request)).promise;
+    },
+    async start(request) {
+      return startChildSession(options, request);
     },
   };
 }
@@ -100,10 +104,10 @@ export async function listChangedFiles(cwd: string): Promise<string[]> {
     .sort((left, right) => left.localeCompare(right));
 }
 
-async function runChildSession(
+async function startChildSession(
   options: CreateChildSessionRunnerOptions,
   request: ChildSessionRunRequest,
-): Promise<ChildSessionRunResult> {
+): Promise<ChildSessionRunHandle> {
   const childTask = formatChildProfileTask({ profile: request.profile, task: request.task });
   const childTrace = await createCliSessionTrace({
     child: {
@@ -126,94 +130,107 @@ async function runChildSession(
     parentCallId: request.parentCallId,
     profile: request.profile,
     round: request.parentRound,
+    runInBackground: request.runInBackground,
     task: request.task,
     tracePath: childTrace.paths.tracePath,
     type: "child_session_started",
   });
 
-  try {
-    if (request.profile === "edit") {
-      workspace = await prepareWorktreeSession({
+  const promise = (async (): Promise<ChildSessionRunResult> => {
+    try {
+      if (request.profile === "edit") {
+        workspace = await prepareWorktreeSession({
+          baseCwd: options.baseCwd,
+          lifecycleEmitter: childLifecycleEmitter,
+          sessionTrace: childTrace,
+        });
+        executionCwd = workspace.path;
+      }
+
+      const final = await runMinimalLoop({
+        ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+        ...(options.approver ? { approver: options.approver } : {}),
         baseCwd: options.baseCwd,
+        ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+        cwd: executionCwd,
         lifecycleEmitter: childLifecycleEmitter,
-        sessionTrace: childTrace,
+        maxToolRounds: request.maxToolRounds,
+        model: options.model,
+        ...(options.permissionPolicy ? { permissionPolicy: options.permissionPolicy } : {}),
+        promptAssets: await loadRepoPromptAssets(options.baseCwd),
+        ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
+        task: childTask,
+        toolRuntime: createChildProfileToolRuntime({ cwd: executionCwd, profile: request.profile }),
+        ...(workspace ? { workspace } : {}),
       });
-      executionCwd = workspace.path;
+      const changedFiles = workspace ? await listChangedFiles(workspace.path) : undefined;
+      const result: ChildSessionRunResult = {
+        ...(changedFiles ? { changedFiles } : {}),
+        childSessionId: childTrace.metadata.id,
+        finalAnswer: final.finalAnswer,
+        profile: request.profile,
+        status: "completed",
+        tracePath: childTrace.paths.tracePath,
+        ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
+      };
+
+      await options.parentLifecycleEmitter.emit({
+        childSessionId: childTrace.metadata.id,
+        parentCallId: request.parentCallId,
+        profile: request.profile,
+        round: request.parentRound,
+        runInBackground: request.runInBackground,
+        status: "completed",
+        tracePath: childTrace.paths.tracePath,
+        type: "child_session_finished",
+        ...(workspace ? { workspace } : {}),
+      });
+      await options.parentLifecycleEmitter.emit({
+        ...(changedFiles ? { changedFiles } : {}),
+        childSessionId: childTrace.metadata.id,
+        finalAnswer: final.finalAnswer,
+        parentCallId: request.parentCallId,
+        profile: request.profile,
+        round: request.parentRound,
+        tracePath: childTrace.paths.tracePath,
+        type: "child_session_handoff",
+        ...(workspace ? { workspace } : {}),
+      });
+
+      return result;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await options.parentLifecycleEmitter.emit({
+        childSessionId: childTrace.metadata.id,
+        parentCallId: request.parentCallId,
+        profile: request.profile,
+        reason,
+        round: request.parentRound,
+        runInBackground: request.runInBackground,
+        status: "failed",
+        tracePath: childTrace.paths.tracePath,
+        type: "child_session_finished",
+        ...(workspace ? { workspace } : {}),
+      });
+
+      return {
+        childSessionId: childTrace.metadata.id,
+        finalAnswer: `Child session failed: ${reason}`,
+        profile: request.profile,
+        status: "failed",
+        tracePath: childTrace.paths.tracePath,
+        ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
+      };
     }
+  })();
 
-    const final = await runMinimalLoop({
-      ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-      ...(options.approver ? { approver: options.approver } : {}),
-      baseCwd: options.baseCwd,
-      ...(options.baseURL ? { baseURL: options.baseURL } : {}),
-      cwd: executionCwd,
-      lifecycleEmitter: childLifecycleEmitter,
-      maxToolRounds: request.maxToolRounds,
-      model: options.model,
-      ...(options.permissionPolicy ? { permissionPolicy: options.permissionPolicy } : {}),
-      promptAssets: await loadRepoPromptAssets(options.baseCwd),
-      ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
-      task: childTask,
-      toolRuntime: createChildProfileToolRuntime({ cwd: executionCwd, profile: request.profile }),
-      ...(workspace ? { workspace } : {}),
-    });
-    const changedFiles = workspace ? await listChangedFiles(workspace.path) : undefined;
-    const result: ChildSessionRunResult = {
-      ...(changedFiles ? { changedFiles } : {}),
-      childSessionId: childTrace.metadata.id,
-      finalAnswer: final.finalAnswer,
-      profile: request.profile,
-      status: "completed",
-      tracePath: childTrace.paths.tracePath,
-      ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
-    };
-
-    await options.parentLifecycleEmitter.emit({
-      childSessionId: childTrace.metadata.id,
-      parentCallId: request.parentCallId,
-      profile: request.profile,
-      round: request.parentRound,
-      status: "completed",
-      tracePath: childTrace.paths.tracePath,
-      type: "child_session_finished",
-      ...(workspace ? { workspace } : {}),
-    });
-    await options.parentLifecycleEmitter.emit({
-      ...(changedFiles ? { changedFiles } : {}),
-      childSessionId: childTrace.metadata.id,
-      finalAnswer: final.finalAnswer,
-      parentCallId: request.parentCallId,
-      profile: request.profile,
-      round: request.parentRound,
-      tracePath: childTrace.paths.tracePath,
-      type: "child_session_handoff",
-      ...(workspace ? { workspace } : {}),
-    });
-
-    return result;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    await options.parentLifecycleEmitter.emit({
-      childSessionId: childTrace.metadata.id,
-      parentCallId: request.parentCallId,
-      profile: request.profile,
-      reason,
-      round: request.parentRound,
-      status: "failed",
-      tracePath: childTrace.paths.tracePath,
-      type: "child_session_finished",
-      ...(workspace ? { workspace } : {}),
-    });
-
-    return {
-      childSessionId: childTrace.metadata.id,
-      finalAnswer: `Child session failed: ${reason}`,
-      profile: request.profile,
-      status: "failed",
-      tracePath: childTrace.paths.tracePath,
-      ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
-    };
-  }
+  return {
+    childSessionId: childTrace.metadata.id,
+    profile: request.profile,
+    promise,
+    status: "running",
+    tracePath: childTrace.paths.tracePath,
+  };
 }
 
 export function createNoopChildSessionRunner(): ChildSessionRunner {
@@ -225,4 +242,140 @@ export function createNoopChildSessionRunner(): ChildSessionRunner {
     parentLifecycleEmitter,
     parentSessionId: "noop-parent",
   });
+}
+
+export type AsyncChildSessionStatus = "running" | "completed" | "failed";
+
+export interface AsyncChildSessionNotification {
+  changedFiles?: string[];
+  childSessionId: string;
+  finalAnswer?: string;
+  profile: ChildSessionProfile;
+  status: AsyncChildSessionStatus;
+  tracePath: string;
+  workspace?: {
+    branch: string;
+    path: string;
+  };
+}
+
+export interface AsyncChildSessionManager extends ChildSessionRunner {
+  drainNotifications(): AsyncChildSessionNotification[];
+  pendingCount(): number;
+  runningNotifications(): AsyncChildSessionNotification[];
+}
+
+export function createAsyncChildSessionManager(options: {
+  runner: ChildSessionRunner;
+}): AsyncChildSessionManager {
+  interface ManagedChildSession {
+    handle: ChildSessionRunHandle;
+    order: number;
+    result?: ChildSessionRunResult;
+    terminalNotified: boolean;
+  }
+
+  const sessions: ManagedChildSession[] = [];
+  let nextOrder = 1;
+
+  return {
+    drainNotifications() {
+      return sessions
+        .filter((session) => session.result && !session.terminalNotified)
+        .sort((left, right) => left.order - right.order)
+        .map((session) => {
+          session.terminalNotified = true;
+          return toChildSessionNotification(session);
+        });
+    },
+    pendingCount() {
+      return sessions.filter((session) => !session.result).length;
+    },
+    async run(request) {
+      return options.runner.run(request);
+    },
+    runningNotifications() {
+      return sessions
+        .filter((session) => !session.result)
+        .sort((left, right) => left.order - right.order)
+        .map((session) => toChildSessionNotification(session));
+    },
+    async start(request) {
+      const handle = await options.runner.start(request);
+      const session: ManagedChildSession = {
+        handle,
+        order: nextOrder,
+        terminalNotified: false,
+      };
+      nextOrder += 1;
+      sessions.push(session);
+      void handle.promise
+        .then((result) => {
+          session.result = result;
+        })
+        .catch((error) => {
+          session.result = {
+            childSessionId: handle.childSessionId,
+            finalAnswer: `Child session failed: ${error instanceof Error ? error.message : String(error)}`,
+            profile: handle.profile,
+            status: "failed",
+            tracePath: handle.tracePath,
+          };
+        });
+      return handle;
+    },
+  };
+}
+
+export function formatChildSessionNotification(notification: AsyncChildSessionNotification): string {
+  const lines = [
+    "<child_session_notification>",
+    `child_session_id: ${notification.childSessionId}`,
+    `profile: ${notification.profile}`,
+    `status: ${notification.status}`,
+    `trace_path: ${notification.tracePath}`,
+  ];
+
+  if (notification.workspace) {
+    lines.push(`workspace_path: ${notification.workspace.path}`);
+    lines.push(`workspace_branch: ${notification.workspace.branch}`);
+  }
+
+  if (notification.changedFiles) {
+    lines.push("changed_files:");
+    lines.push(
+      ...(notification.changedFiles.length > 0
+        ? notification.changedFiles.map((file) => `- ${file}`)
+        : ["(none)"]),
+    );
+  }
+
+  lines.push("handoff:");
+  lines.push(notification.finalAnswer ?? "(child session is still running)");
+  lines.push("</child_session_notification>");
+  return lines.join("\n");
+}
+
+function toChildSessionNotification(session: {
+  handle: ChildSessionRunHandle;
+  result?: ChildSessionRunResult;
+}): AsyncChildSessionNotification {
+  if (!session.result) {
+    return {
+      childSessionId: session.handle.childSessionId,
+      profile: session.handle.profile,
+      status: "running",
+      tracePath: session.handle.tracePath,
+    };
+  }
+
+  return {
+    ...(session.result.changedFiles ? { changedFiles: [...session.result.changedFiles] } : {}),
+    childSessionId: session.result.childSessionId,
+    finalAnswer: session.result.finalAnswer,
+    profile: session.result.profile,
+    status: session.result.status,
+    tracePath: session.result.tracePath,
+    ...(session.result.workspace ? { workspace: { ...session.result.workspace } } : {}),
+  };
 }
