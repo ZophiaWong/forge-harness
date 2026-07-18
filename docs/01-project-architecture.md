@@ -60,8 +60,8 @@ sequenceDiagram
 | --- | --- | --- |
 | `src/cli/` | 接收任务、解析参数、把请求交给 harness。 | `c01` |
 | `src/core/` | turn runner、agent loop control、LLM call path。 | `c01`, `c08`, `c17` |
-| `src/tools/` | tool definition、dispatch、adapter、tool result。 | `c02`, `c04`, `c16` |
-| `src/governance/` | risk classification、permission decision、approval。 | `c03`, `c14`, `c16` |
+| `src/tools/` | tool definition、dispatch、adapter、tool result。 | `c02`, `c04`, `c16a` |
+| `src/governance/` | risk classification、permission decision、approval。 | `c03`, `c14`, `c16a` |
 | `src/context/` | `Observation`、`ContextProjection`、prompt assembly、compaction。 | `c05`, `c11`, `c12` |
 | `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、replay。 | `c06`, `c07`, `c08`, `c13`, `c14` |
 | `src/domain/` | shared runtime terms and protocols。 | 随实现逐步补齐 |
@@ -91,11 +91,11 @@ flowchart TB
 
 | Layer | 它问的问题 | 包含的机制 | 主要章节 |
 | --- | --- | --- | --- |
-| `L1 Loop & Execution` | 模型输出怎样变成真实动作？ | agent loop、model call、tool call、tool result、tool dispatch、shell/file tools、MCP adapter。 | `c01`, `c02`, `c04`, `c16`, `c17` |
-| `L2 Governance & Action Boundary` | 哪些动作能执行，执行前要过什么边界？ | risk classification、permission decision、approval、deny rules、safe executor、reviewable file editing、worktree boundary。 | `c03`, `c04`, `c14`, `c16`, `c17` |
+| `L1 Loop & Execution` | 模型输出怎样变成真实动作？ | agent loop、model call、tool call、tool result、tool dispatch、shell/file tools、MCP adapter。 | `c01`, `c02`, `c04`, `c16a`, `c17` |
+| `L2 Governance & Action Boundary` | 哪些动作能执行，执行前要过什么边界？ | risk classification、permission decision、approval、deny rules、safe executor、reviewable file editing、worktree boundary。 | `c03`, `c04`, `c14`, `c16a`, `c17` |
 | `L3 Context & Knowledge` | 模型下一轮应该看到什么？ | message history、`Observation`、`ContextProjection`、system prompt assembly、skills、memory、context compaction、summary handoff。 | `c05`, `c11`, `c12`, `c15a`, `c15b`, `c17` |
-| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c17` |
-| `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、async child handoff、subagents、team protocols、capstone run。 | `c09`, `c10`, `c13`, `c14`, `c15a`, `c15b`, `c16`, `c17` |
+| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c16a`, `c17` |
+| `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、async child handoff、subagents、plugin loading、team protocols、capstone run。 | `c09`, `c10`, `c13`, `c14`, `c15a`, `c15b`, `c16b`, `c17` |
 
 ## Layer 重叠怎么读
 
@@ -106,7 +106,8 @@ flowchart TB
 | `c04 Reviewable File Editing` | file editing 是一种 execution path，也需要 review 和 permission boundary。 |
 | `c12 Context Compaction` | compaction 会决定下一轮看什么，也要保留状态、证据和未解决问题。 |
 | `c14 Worktree Isolation` | worktree 是 filesystem boundary，也给恢复、review 和并行工作留下空间。 |
-| `c16 MCP / Plugin Routing` | MCP adapter 扩展 tool execution，但外部工具仍要走 permission 和 result protocol。 |
+| `c16a MCP Tool Integration` | MCP adapter 扩展 tool execution，但外部工具仍要走 permission 和 result protocol。 |
+| `c16b Plugin Loading / Registration` | Plugin 负责分发和注册组件；其中的 MCP config 仍复用 c16a 的 execution path。 |
 
 ## 课程怎样对应这些模块
 

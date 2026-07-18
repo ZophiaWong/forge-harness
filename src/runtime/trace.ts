@@ -43,6 +43,37 @@ export type TraceEventPayload =
       maxToolRounds: number;
     }
   | {
+      type: "mcp_server_trust_decided";
+      serverId: string;
+      approved: boolean;
+      reason: string;
+    }
+  | {
+      type: "mcp_server_connected";
+      serverId: string;
+      discoveredToolNames: string[];
+      exposedToolNames: string[];
+      extraToolNames: string[];
+      missingToolNames: string[];
+      incompatibleTools: Array<{
+        rawToolName: string;
+        reason: string;
+      }>;
+    }
+  | {
+      type: "mcp_server_failed";
+      serverId: string;
+      phase: "connect" | "discovery" | "call" | "transport" | "close";
+      reason: string;
+      round?: number;
+      toolName?: string;
+    }
+  | {
+      type: "mcp_server_stopped";
+      serverId: string;
+      reason: "session_end" | "unexpected_close" | "startup_failed";
+    }
+  | {
       type: "model_request";
       round: number;
       model: string;

@@ -12,6 +12,29 @@ function applyEvents(events: TraceEventPayload[]) {
 }
 
 describe("RuntimeState projection", () => {
+  it("does not project MCP live health into generic runtime state", () => {
+    const initial = createInitialRuntimeState();
+    const state = applyEvents([
+      {
+        discoveredToolNames: ["lookup_issue"],
+        exposedToolNames: ["mcp_demo_lookup_issue"],
+        extraToolNames: [],
+        incompatibleTools: [],
+        missingToolNames: [],
+        serverId: "demo",
+        type: "mcp_server_connected",
+      },
+      {
+        phase: "transport",
+        reason: "closed",
+        serverId: "demo",
+        type: "mcp_server_failed",
+      },
+    ]);
+
+    expect(state).toEqual(initial);
+  });
+
   it("projects session, model, tool, permission, approval, answer, and end events into a current snapshot", () => {
     const state = applyEvents([
       {

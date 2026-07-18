@@ -334,7 +334,7 @@ git -C <workspace_path> status --short
 
 c15b 之后，parent 已经可以同时启动多个 research child，也可以把一个 edit preview 放到独立 worktree 里。一个真实任务可能会这样跑：先查 GitHub issue，读外部设计文档，让 edit child 起草改动，然后等所有 handoff 回来。到这一步，并行和 final gate 已经够用。
 
-接下来卡在 tool 边界。GitHub、issue tracker、外部文档和 plugin/MCP tools 都不是现在这些 built-in tools。如果它们直接绕过 `Tool Runtime`，permission、tool result、trace 记录都会分出另一条路。c16 MCP / Plugin Routing 要回答的是：外部 tools 怎样接进同一条 registry、permission 和 result protocol。
+接下来卡在 tool 边界。GitHub、issue tracker 和外部文档等系统都不是现在这些 built-in tools。如果它们提供 MCP server，Forge 仍要决定怎样启动连接、暴露 tools，并让调用复用 permission、tool result 和 trace。[c16a MCP Tool Integration](c16a-mcp-tool-integration.md) 先完成这条 MCP runtime path；plugin 的 loading 与组件注册留到 c16b。
 
 回到 c15b 本身，这一章还留着几个明确缺口：
 

@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the runnable checkpoints through `c15b Async Child Sessions / Parallel Handoff With Edit Preview`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, and `c15b Async Child Sessions / Parallel Handoff With Edit Preview`.
+This branch contains the documentation baseline plus the runnable checkpoints through `c16a MCP Tool Integration`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, `c15b Async Child Sessions / Parallel Handoff With Edit Preview`, and `c16a MCP Tool Integration`.
 
 ## Setup
 
@@ -21,6 +21,7 @@ Use Node.js `20.19.0` or newer.
 ```bash
 npm install
 cp .env.example .env
+npm run build
 ```
 
 Fill in `.env`:
@@ -53,6 +54,8 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c14 Worktree Isolation](docs/tutorial/c14-worktree-isolation.md): explicit `--worktree` runs that bind a session to an isolated git worktree.
 - [c15a Child Sessions / Handoff](docs/tutorial/c15a-child-sessions-handoff.md): synchronous fresh child sessions with profile boundaries, isolated edit worktrees, and handoff evidence.
 - [c15b Async Child Sessions / Parallel Handoff With Edit Preview](docs/tutorial/c15b-async-child-sessions-parallel-handoff.md): async research/edit child sessions, notification return flow, final gate, and isolated edit preview metadata.
+- [c16a MCP Tool Integration](docs/tutorial/c16a-mcp-tool-integration.md): one trusted foreground stdio MCP server integrated with Tool Runtime, permission, ToolResult, and trace.
+- [Minimal MCP Server Fixture](docs/appendix/minimal-mcp-server.md): local external-system fixture used by c16a.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
 - [Writing style](docs/03-writing-style.md): how tutorial chapters should read.
@@ -83,6 +86,6 @@ See [docs/01-project-architecture.md](docs/01-project-architecture.md) for the s
 
 ## Non-goals
 
-The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI.
+The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI. c16a adds one local MCP boundary only after Tool Runtime, Permission Governance, trace, and lifecycle are already in place. Plugin loading remains a later c16b checkpoint.
 
-Those topics can appear later, after the core harness has stable boundaries.
+Broader versions of those topics can appear later, after the core harness has stable boundaries.
