@@ -7,16 +7,7 @@ export interface ToolDefinition {
   strict: boolean;
   parameters: {
     type: "object";
-    additionalProperties: false;
-    properties: Record<
-      string,
-      {
-        type: string | string[];
-        description?: string;
-        [key: string]: unknown;
-      }
-    >;
-    required?: string[];
+    [key: string]: unknown;
   };
 }
 
@@ -46,6 +37,7 @@ export interface RegisteredTool {
 }
 
 export interface ToolRuntime {
+  close?(): Promise<void>;
   toolDefinitions(): ToolDefinition[];
   execute(toolCall: ToolCallRequest, context?: { callId?: string; round?: number }): Promise<ToolResult>;
 }

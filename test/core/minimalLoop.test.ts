@@ -140,6 +140,74 @@ describe("runMinimalLoop", () => {
     OpenAIMock.mockClear();
   });
 
+  it("routes additional dynamic tools and closes them before session_ended", async () => {
+    const order: string[] = [];
+    const trace = createTraceRecorder();
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "session_ended") {
+          order.push("session_ended");
+        }
+      },
+    };
+    const additionalRuntime: ToolRuntime = {
+      close: vi.fn(async () => {
+        order.push("runtime_close");
+      }),
+      execute: vi.fn(async (toolCall) => ({
+        content: "issue_id: FH-16",
+        status: "completed" as const,
+        toolName: toolCall.name,
+      })),
+      toolDefinitions: () => [{
+        description: "Look up a demo issue.",
+        name: "mcp_demo_lookup_issue",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [{
+          arguments: '{"issueId":"FH-16"}',
+          call_id: "call_mcp",
+          name: "mcp_demo_lookup_issue",
+          type: "function_call",
+        }],
+        output_text: "",
+      },
+      { output: [], output_text: "done" },
+    );
+
+    await runMinimalLoop({
+      additionalToolRuntimes: [additionalRuntime],
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "look up FH-16",
+      toolRuntime: {
+        execute: vi.fn(async (toolCall) => ({
+          content: "unused",
+          status: "completed" as const,
+          toolName: toolCall.name,
+        })),
+        toolDefinitions: () => [],
+      },
+    });
+
+    expect(callsFor(responseCreate)[0]?.tools.map((tool) => tool.name)).toEqual(["mcp_demo_lookup_issue"]);
+    expect(additionalRuntime.execute).toHaveBeenCalledWith(
+      { arguments: '{"issueId":"FH-16"}', name: "mcp_demo_lookup_issue" },
+      { callId: "call_mcp", round: 1 },
+    );
+    expect(additionalRuntime.close).toHaveBeenCalledOnce();
+    expect(order).toEqual(["runtime_close", "session_ended"]);
+  });
+
   it("appends function call output and continues until the model returns a final answer", async () => {
     const rawArguments = JSON.stringify({ command: "printf loop-ok" });
     const responseCreate = createResponseCreate(

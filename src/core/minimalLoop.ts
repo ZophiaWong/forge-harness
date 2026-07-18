@@ -48,6 +48,7 @@ import { createNoopTraceRecorder } from "../runtime/trace.js";
 import type { SessionEndStatus } from "../runtime/trace.js";
 import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
+import { composeToolRuntimes } from "../tools/compositeRuntime.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
@@ -126,6 +127,7 @@ export interface MinimalLoopTranscript {
 }
 
 export interface MinimalLoopOptions {
+  additionalToolRuntimes?: ToolRuntime[];
   apiKey?: string;
   approver?: PermissionApprover;
   baseURL?: string;
@@ -202,7 +204,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     !options.toolRuntime && options.childSessionRunner
       ? createAsyncChildSessionManager({ runner: options.childSessionRunner })
       : undefined;
-  const toolRuntime = options.toolRuntime ??
+  const primaryToolRuntime = options.toolRuntime ??
     createDefaultToolRuntime({
       backgroundTasks,
       ...(childSessions ? { childSessionRunner: childSessions } : {}),
@@ -210,6 +212,9 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       cwd: options.cwd,
       maxToolRounds,
     });
+  const toolRuntime = options.additionalToolRuntimes?.length
+    ? composeToolRuntimes([primaryToolRuntime, ...options.additionalToolRuntimes])
+    : primaryToolRuntime;
   const contextProjection = options.contextProjection ?? createContextProjection();
   const contextCompaction =
     options.contextCompaction === false
@@ -366,7 +371,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
             round,
             type: "final_answer",
           });
-          await finishSession(lifecycleEmitter, backgroundTasks, round, "completed");
+          await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, round, "completed");
           reportFinalState(options);
           return { finalAnswer: candidateAnswer, rounds: round };
         }
@@ -393,7 +398,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
             round,
             type: "final_answer",
           });
-          await finishSession(lifecycleEmitter, backgroundTasks, round, "completed");
+          await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, round, "completed");
           reportFinalState(options);
           return { finalAnswer: candidateAnswer, rounds: round };
         }
@@ -470,7 +475,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       message,
       type: "session_failed",
     });
-    await finishSession(lifecycleEmitter, backgroundTasks, lastRound, "failed");
+    await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, "failed");
     throw error;
   }
 }
@@ -820,10 +825,12 @@ async function recordChildSessionNotification(
 async function finishSession(
   lifecycleEmitter: LifecycleEmitter,
   backgroundTasks: BackgroundTaskManager | undefined,
+  toolRuntime: ToolRuntime,
   rounds: number,
   status: SessionEndStatus,
 ): Promise<void> {
   await cleanupBackgroundTasks(backgroundTasks);
+  await toolRuntime.close?.();
   await lifecycleEmitter.emit({
     rounds,
     status,

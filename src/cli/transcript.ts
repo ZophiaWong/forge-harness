@@ -5,6 +5,7 @@ import type { SessionWorkspaceMetadata } from "../runtime/session.js";
 import { countTaskItems } from "../runtime/task.js";
 import type { RuntimeContextCompactionState, RuntimeState } from "../runtime/state.js";
 import type { VerificationResult } from "../runtime/verification.js";
+import type { McpToolCatalogDiagnostics } from "../extensions/mcpToolAdapter.js";
 
 export function formatFunctionCallTranscript(
   round: number,
@@ -51,6 +52,20 @@ export function formatContextCompactionTranscript(compaction: RuntimeContextComp
 
 export function formatSessionTranscript(sessionId: string, tracePath: string): string {
   return `[session] id=${sessionId} trace=${tracePath}`;
+}
+
+export function formatMcpSessionTranscript(serverId: string, diagnostics: McpToolCatalogDiagnostics): string {
+  return [
+    `[mcp] connected server=${serverId}`,
+    `tools=${formatList(diagnostics.exposedToolNames)}`,
+    `extra=${formatList(diagnostics.extraToolNames)}`,
+    `missing=${formatList(diagnostics.missingToolNames)}`,
+    `incompatible=${formatList(diagnostics.incompatibleTools.map((tool) => tool.rawToolName))}`,
+  ].join(" ");
+}
+
+export function formatMcpDisabledTranscript(serverId: string, reason: string): string {
+  return `[mcp] disabled server=${serverId} reason=${reason}`;
 }
 
 export function formatWorkspaceTranscript(workspace: SessionWorkspaceMetadata): string {
@@ -145,4 +160,8 @@ export function formatRuntimeStateTranscript(state: RuntimeState, round?: number
   const prefix = round === undefined ? "[state]" : `[round ${round}] state:`;
 
   return `${prefix} ${parts.join(" ")}`;
+}
+
+function formatList(values: string[]): string {
+  return values.length > 0 ? values.join(",") : "none";
 }

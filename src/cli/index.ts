@@ -4,11 +4,14 @@ import "dotenv/config";
 import path from "node:path";
 
 import { createCliApprover } from "./approval.js";
+import { createCliMcpServerTrustApprover } from "./mcpTrust.js";
 import { type ParsedCliArgs, parseCliArgs, usageText } from "./args.js";
 import {
   formatContextCompactionTranscript,
   formatFunctionCallTranscript,
   formatHookLogTranscript,
+  formatMcpDisabledTranscript,
+  formatMcpSessionTranscript,
   formatPermissionDecisionTranscript,
   formatPromptAssemblyTranscript,
   formatRecoveryTranscript,
@@ -22,6 +25,10 @@ import { DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MODEL, runMinimalLoop } from "../core/
 import { createChildSessionRunner } from "../extensions/childSessions.js";
 import { createCronWorker, type ScheduledRunResult } from "../extensions/cronWorker.js";
 import { createLifecycleEmitter, type LifecycleHook } from "../extensions/lifecycle.js";
+import { loadMcpProjectConfig } from "../extensions/mcpConfig.js";
+import { McpSessionStartError, startMcpSession, type McpSession } from "../extensions/mcpSession.js";
+import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
+import { createMcpPermissionPolicy } from "../governance/mcpPolicy.js";
 import type { CronSchedule } from "../runtime/cronStore.js";
 import { createFileCronScheduleStore } from "../runtime/cronStore.js";
 import { createCliSessionTrace, type SessionWorkspaceMetadata } from "../runtime/session.js";
@@ -53,6 +60,7 @@ if (cliArgs.error) {
 async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
   const task = cliArgs.task;
   let getRuntimeState: (() => RuntimeState) | undefined;
+  let mcpSession: McpSession | undefined;
 
   if (!task) {
     console.error(usageText("forge-harness"));
@@ -62,6 +70,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
 
   try {
     const baseCwd = process.cwd();
+    const mcpConfig = await loadMcpProjectConfig(baseCwd);
     let executionCwd = baseCwd;
     const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
     const maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS;
@@ -94,6 +103,33 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
 
     console.log(formatSessionTranscript(sessionTrace.metadata.id, displayTracePath));
 
+    if (mcpConfig) {
+      const trust = await createCliMcpServerTrustApprover().approve({ baseCwd, config: mcpConfig });
+      await lifecycleEmitter.emit({
+        approved: trust.approved,
+        reason: trust.reason ?? "approved by user",
+        serverId: mcpConfig.server.id,
+        type: "mcp_server_trust_decided",
+      });
+
+      if (trust.approved) {
+        try {
+          mcpSession = await startMcpSession({
+            baseCwd,
+            lifecycleEmitter,
+            server: mcpConfig.server,
+          });
+          console.log(formatMcpSessionTranscript(mcpConfig.server.id, mcpSession.diagnostics));
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const phase = error instanceof McpSessionStartError ? ` phase=${error.phase}` : "";
+          console.error(formatMcpDisabledTranscript(mcpConfig.server.id, `${reason}${phase}`));
+        }
+      } else {
+        console.error(formatMcpDisabledTranscript(mcpConfig.server.id, trust.reason ?? "startup rejected"));
+      }
+    }
+
     const workspace = cliArgs.worktree
       ? await prepareWorktreeSession({
           baseCwd,
@@ -118,6 +154,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     }
 
     await runMinimalLoop({
+      ...(mcpSession ? { additionalToolRuntimes: [mcpSession] } : {}),
       approver,
       ...(workspace ? { baseCwd, workspace } : {}),
       childSessionRunner: createChildSessionRunner({
@@ -132,6 +169,14 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       lifecycleEmitter,
       maxToolRounds,
       model,
+      ...(mcpSession
+        ? {
+            permissionPolicy: createMcpPermissionPolicy(
+              createDefaultPermissionPolicy(),
+              mcpSession.permissionPolicies,
+            ),
+          }
+        : {}),
       ...(workspace ? { promptAssets: await loadRepoPromptAssets(baseCwd) } : {}),
       runtimeState: runtimeStateTrace.getState,
       task,
@@ -179,6 +224,8 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     }
     console.error(`forge-harness failed: ${message}`);
     process.exitCode = 1;
+  } finally {
+    await mcpSession?.close();
   }
 }
 

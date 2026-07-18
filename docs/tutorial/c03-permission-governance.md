@@ -267,7 +267,7 @@ c03 只实现 pre-tool execution gate。它还不是完整 permission system。
 
 | Permission layer         | 它问的问题                                     | c03 做到哪里                                                                        | 后面补什么                                                                                        |
 | ------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `Tool action request`    | 模型具体想调用哪个 tool？参数是什么？          | 把 `{ name, arguments }` 当成一次 action request。                                  | 外部 tools 进入后，c16 会继续处理 MCP / plugin action。                                           |
+| `Tool action request`    | 模型具体想调用哪个 tool？参数是什么？          | 把 `{ name, arguments }` 当成一次 action request。                                  | c16a 会让外部 MCP tool call 复用这道门禁；plugin loading 留到 c16b。                              |
 | `Risk classification`    | 这个 action 是读取、修改、破坏，还是无法判断？ | 分类成 `inspect`、`mutating`、`destructive`、`unknown`。                            | `edit` / `write` 进入后，c04 会让文件修改有更具体的风险形状。                                     |
 | `Permission decision`    | harness 这次应该放行、询问，还是直接拒绝？     | 返回 `allow`、`ask` 或 `deny`。                                                     | policy file 和 policy composition 留到外部工具压力出现后再做。                                    |
 | `Human approval`         | 需要问人时，谁来确认？默认答案是什么？         | CLI 里出现一次真实 `[y/N]` prompt，默认拒绝。                                       | approval cache 和 session-scoped approval 要等 session / trace 更稳定。                           |

@@ -1,0 +1,21 @@
+{
+  "server": {
+    "id": "demo",
+    "command": "node",
+    "args": ["dist/extensions/mcpDemoServer.js"],
+    "connectTimeoutMs": 5000,
+    "toolCallTimeoutMs": 30000,
+    "tools": {
+      "lookup_issue": {
+        "action": "allow",
+        "risk": "inspect",
+        "reason": "Reads deterministic issue data from the local MCP demo fixture."
+      },
+      "create_note": {
+        "action": "ask",
+        "risk": "mutating",
+        "reason": "Appends a note to .forge/mcp-demo-notes.json in the project root."
+      }
+    }
+  }
+}

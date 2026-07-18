@@ -39,12 +39,13 @@ flowchart TB
     c14["c14 Worktree Isolation"]
     c15a["c15a Child Sessions / Handoff"]
     c15b["c15b Async Child Sessions / Parallel Handoff With Edit Preview"]
-    c16["c16 MCP / Plugin Routing"]
+    c16a["c16a MCP Tool Integration"]
+    c16b["c16b Plugin Loading / Registration"]
     c17["c17 Team Protocols / Comprehensive Harness"]
   end
 
   c00 --> c01 --> c02 --> c03 --> c04 --> c05 --> c06 --> c07 --> c08
-  c08 --> c09 --> c10 --> c11 --> c12 --> c13a --> c13b --> c14 --> c15a --> c15b --> c16 --> c17
+  c08 --> c09 --> c10 --> c11 --> c12 --> c13a --> c13b --> c14 --> c15a --> c15b --> c16a --> c16b --> c17
 
   c06 -. "有了稳定事件" .-> c09
   c07 -. "需要显式工作状态" .-> c10
@@ -62,11 +63,14 @@ flowchart TB
   c14 -. "工作区需要隔离" .-> c15a
   c13a -. "后台结果需要回流" .-> c15b
   c15a -. "已有 child handoff" .-> c15b
-  c02 -. "工具已有接入边界" .-> c16
-  c03 -. "外部工具也要治理" .-> c16
+  c02 -. "工具已有接入边界" .-> c16a
+  c03 -. "外部工具也要治理" .-> c16a
+  c11 -. "已有可注册的 skill" .-> c16b
+  c16a -. "MCP 配置需要新的来源" .-> c16b
   c15a -. "需要交接协议" .-> c17
   c15b -. "需要并行结果收束" .-> c17
-  c16 -. "接入外部工具" .-> c17
+  c16a -. "接入外部工具" .-> c17
+  c16b -. "加载 plugin 组件" .-> c17
   c08 -. "完成前要验证" .-> c17
 ```
 
@@ -74,7 +78,7 @@ flowchart TB
 
 `Part 2` 的顺序按任务变长后的问题来排。每一章都复用 `Core Harness` 已经有的边界。
 
-原来的 `c13 Background / Cron` 拆成两章：`c13a Background Tool Tasks` 只处理当前 session 内的后台 tool task；`c13b Scheduled Jobs / Cron` 再处理 durable job、schedule 和 worker wakeup。`c15 Child Sessions / Subagents` 也拆成两章：`c15a Child Sessions / Handoff` 先讲同步 child session、profile、worktree-bound edit 和 summary handoff；`c15b Async Child Sessions / Parallel Handoff` 再讲异步 research/edit child、notification 回流、final gate 和 edit preview metadata。`c16`、`c17` 编号不变。
+原来的 `c13 Background / Cron` 拆成两章：`c13a Background Tool Tasks` 只处理当前 session 内的后台 tool task；`c13b Scheduled Jobs / Cron` 再处理 durable job、schedule 和 worker wakeup。`c15 Child Sessions / Subagents` 也拆成两章：`c15a Child Sessions / Handoff` 先讲同步 child session、profile、worktree-bound edit 和 summary handoff；`c15b Async Child Sessions / Parallel Handoff` 再讲异步 research/edit child、notification 回流、final gate 和 edit preview metadata。外部扩展也分两步：`c16a MCP Tool Integration` 先完成 MCP runtime path，`c16b Plugin Loading / Registration` 再处理 plugin manifest 和组件注册。`c17` 排在两章之后。
 
 | Chapter | 从哪里长出来 | 为什么现在需要 | 完成后有什么 |
 | --- | --- | --- | --- |
@@ -87,8 +91,9 @@ flowchart TB
 | `c14` Worktree Isolation | `c03 Permission Governance` + `c04 Reviewable File Editing` | 修改范围变大或并行后，需要 filesystem boundary。 | 每条工作线有独立工作区。 |
 | `c15a` Child Sessions / Handoff | `c10 Task / Todo` + `c12 Context Compaction` + `c14 Worktree Isolation` | 子任务需要独立上下文、profile 边界、独立工作区和 summary handoff。 | 同步 child session 隔离执行，再把结果作为 handoff 交回主任务。 |
 | `c15b` Async Child Sessions / Parallel Handoff | `c13a Background Tool Tasks` + `c15a Child Sessions / Handoff` | 独立 research 和 edit preview 子任务不该总是阻塞 parent session。 | 异步 child session 能启动、完成、通知，并在 final 前回流 handoff；edit child 只返回 worktree preview metadata。 |
-| `c16` MCP / Plugin Routing | `c02 Tool Runtime` + `c03 Permission Governance` | 外部 tools 不能绕过 registry、permission 和 result protocol。 | 外部工具走同一条 tool runtime path。 |
-| `c17` Team Protocols / Comprehensive Harness | `c08 Verification / Recovery` + `c15a/c15b Child Sessions` + `c16 MCP / Plugin Routing` | 机制变多后，需要协议决定何时同步、何时异步、何时调用外部工具，以及完成前怎样收束证据。 | 一个 capstone run 串起 tools、permission、context、trace、state、handoff 和 verification。 |
+| `c16a` MCP Tool Integration | `c02 Tool Runtime` + `c03 Permission Governance` | 外部 MCP tools 不能绕过 runtime、permission 和 result protocol。 | 一个 foreground stdio MCP server 走同一条 tool runtime path。 |
+| `c16b` Plugin Loading / Registration | `c09 Hooks` + `c11 Skills / Memory` + `c16a MCP Tool Integration` | 可分发的扩展需要 manifest 和统一 loading boundary，不能让每种组件自行接入。 | enabled plugin 的组件进入 Forge 现有子系统，plugin-provided MCP config 复用 c16a。 |
+| `c17` Team Protocols / Comprehensive Harness | `c08 Verification / Recovery` + `c15a/c15b Child Sessions` + `c16a/c16b Extensions` | 机制变多后，需要协议决定何时同步、何时异步、何时调用外部工具，以及完成前怎样收束证据。 | 一个 capstone run 串起 tools、permission、context、trace、state、handoff 和 verification。 |
 
 `c02` 只落地 `bash`、`read`、`ls` 这三个 built-in tools。`edit` / `write` 会在 `c04 Reviewable File Editing` 里进入；`grep` / `find` 会在 `c05 Context Projection` 里和搜索输出的上下文压力一起讲。
 
@@ -114,7 +119,8 @@ flowchart TB
 | [`c14` Worktree Isolation](tutorial/c14-worktree-isolation.md) | `L2 + L4 + L5` | 并行或高风险修改会污染主工作区。 | session-bound worktree、merge review。 | 每条工作线有独立 filesystem boundary。 |
 | [`c15a` Child Sessions / Handoff](tutorial/c15a-child-sessions-handoff.md) | `L5 + L3 + L4` | 独立子任务会挤占主上下文，也需要独立工作区。 | 同步 child session、profile、summary handoff、workspace binding。 | 子任务隔离执行，再把结果交回主任务。 |
 | [`c15b` Async Child Sessions / Parallel Handoff With Edit Preview](tutorial/c15b-async-child-sessions-parallel-handoff.md) | `L5 + L3 + L4` | research 和 edit preview 子任务可能很慢，串行等待会卡住 parent session。 | async child session、child registry、handoff notification、final gate、edit preview metadata。 | parent 能继续推进，并在后续 round 接收 child handoff。 |
-| `c16` MCP / Plugin Routing | `L1 + L2` | 内置 tools 不够，外部工具也要被治理。 | MCP/plugin adapter through Tool Runtime。 | 外部工具复用 permission 和 result protocol。 |
+| [`c16a` MCP Tool Integration](tutorial/c16a-mcp-tool-integration.md) | `L1 + L2 + L4` | 内置 tools 不够，外部 MCP tools 也要被治理。 | strict project config、startup trust、dynamic MCP runtime、permission/result/trace adapter。 | 一个 local stdio MCP server 复用 Tool Runtime、permission、ToolResult 和 trace。 |
+| `c16b` Plugin Loading / Registration | `L5` | 可分发的扩展组件还没有统一的安装、启用和注册入口。 | plugin manifest、loading boundary、component registration。 | enabled plugin 的组件进入对应子系统，MCP config 复用 c16a。 |
 | `c17` Team Protocols / Comprehensive Harness | all | 机制多了以后，需要回到一条可解释 agent turn。 | capstone run、team handoff、sync/async delegation protocol。 | 串起 tools、permission、context、trace、state、handoff、verification。 |
 
 ## Branch 和 tag

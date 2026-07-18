@@ -229,6 +229,11 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
         task: event.task,
         ...(event.workspace ? { workspace: event.workspace } : state.workspace ? { workspace: state.workspace } : {}),
       };
+    case "mcp_server_trust_decided":
+    case "mcp_server_connected":
+    case "mcp_server_failed":
+    case "mcp_server_stopped":
+      return state;
     case "model_request":
       return {
         ...state,

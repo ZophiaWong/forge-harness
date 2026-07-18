@@ -126,6 +126,38 @@ describe("createLifecycleEmitter", () => {
     ]);
   });
 
+  it("makes MCP lifecycle events visible to hooks", async () => {
+    const trace = createTraceRecorder();
+    const handled: string[] = [];
+    const emitter = createLifecycleEmitter({
+      hooks: [{
+        events: ["mcp_server_connected", "mcp_server_stopped"],
+        handle(event) {
+          handled.push(event.type);
+        },
+        name: "mcp-health-log",
+      }],
+      recorder: trace.recorder,
+    });
+
+    await emitter.emit({
+      discoveredToolNames: ["lookup_issue"],
+      exposedToolNames: ["mcp_demo_lookup_issue"],
+      extraToolNames: [],
+      incompatibleTools: [],
+      missingToolNames: [],
+      serverId: "demo",
+      type: "mcp_server_connected",
+    });
+    await emitter.emit({
+      reason: "session_end",
+      serverId: "demo",
+      type: "mcp_server_stopped",
+    });
+
+    expect(handled).toEqual(["mcp_server_connected", "mcp_server_stopped"]);
+  });
+
   it("records failed hook results and continues with later hooks", async () => {
     const trace = createTraceRecorder();
     const handled: string[] = [];

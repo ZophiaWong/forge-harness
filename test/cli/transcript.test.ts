@@ -4,6 +4,8 @@ import {
   formatContextCompactionTranscript,
   formatFunctionCallTranscript,
   formatHookLogTranscript,
+  formatMcpDisabledTranscript,
+  formatMcpSessionTranscript,
   formatPermissionDecisionTranscript,
   formatPromptAssemblyTranscript,
   formatRecoveryTranscript,
@@ -83,6 +85,26 @@ describe("formatSessionTranscript", () => {
   it("prints the session id and trace path", () => {
     expect(formatSessionTranscript("20260625-160102-a1b2c3d4", ".forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl")).toBe(
       "[session] id=20260625-160102-a1b2c3d4 trace=.forge/sessions/20260625-160102-a1b2c3d4/trace.jsonl",
+    );
+  });
+});
+
+describe("MCP transcript", () => {
+  it("prints connected tools and tolerant discovery diagnostics", () => {
+    expect(formatMcpSessionTranscript("demo", {
+      discoveredToolNames: ["create_note", "lookup_issue", "server_extra"],
+      exposedToolNames: ["mcp_demo_create_note", "mcp_demo_lookup_issue"],
+      extraToolNames: ["server_extra"],
+      incompatibleTools: [{ rawToolName: "bad/name", reason: "invalid name" }],
+      missingToolNames: ["configured_missing"],
+    })).toBe(
+      "[mcp] connected server=demo tools=mcp_demo_create_note,mcp_demo_lookup_issue extra=server_extra missing=configured_missing incompatible=bad/name",
+    );
+  });
+
+  it("prints a concise disabled reason", () => {
+    expect(formatMcpDisabledTranscript("demo", "startup rejected by user")).toBe(
+      "[mcp] disabled server=demo reason=startup rejected by user",
     );
   });
 });

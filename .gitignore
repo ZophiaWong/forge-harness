@@ -43,6 +43,7 @@ Thumbs.db
 !.codex/skills/researching-coding-agents/
 !.codex/skills/researching-coding-agents/**
 .forge/*
+!.forge/mcp.json
 !.forge/memory.md
 !.forge/skills/
 !.forge/skills/**/
