@@ -16,6 +16,7 @@ describe("RuntimeState projection", () => {
     const initial = createInitialRuntimeState();
     const state = applyEvents([
       {
+        deniedToolNames: [],
         discoveredToolNames: ["lookup_issue"],
         exposedToolNames: ["mcp_demo_lookup_issue"],
         extraToolNames: [],
@@ -33,6 +34,44 @@ describe("RuntimeState projection", () => {
     ]);
 
     expect(state).toEqual(initial);
+  });
+
+  it("does not project plugin trust or startup health snapshots", () => {
+    const initial = createInitialRuntimeState();
+    const afterTrust = applyRuntimeStateEvent(initial, {
+      approved: true,
+      pluginName: "issue-workflow",
+      reason: "approved",
+      root: "/plugins/issue-workflow",
+      type: "plugin_trust_decided",
+      version: "0.1.0",
+    });
+    const afterActivation = applyRuntimeStateEvent(afterTrust, {
+      components: {
+        hooks: { active: [], declared: [], failed: [] },
+        mcpServers: { active: [], declared: [], failed: [] },
+        skills: {
+          active: ["issue-workflow:triage"],
+          declared: ["issue-workflow:triage"],
+          failed: [],
+        },
+      },
+      pluginName: "issue-workflow",
+      status: "active",
+      tools: {
+        declared: [],
+        denied: [],
+        exposed: [],
+        extra: [],
+        incompatible: [],
+        missing: [],
+      },
+      type: "plugin_activation_result",
+      version: "0.1.0",
+    });
+
+    expect(afterTrust).toBe(initial);
+    expect(afterActivation).toBe(initial);
   });
 
   it("projects session, model, tool, permission, approval, answer, and end events into a current snapshot", () => {

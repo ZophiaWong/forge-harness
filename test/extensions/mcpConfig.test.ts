@@ -88,6 +88,30 @@ describe("loadMcpProjectConfig", () => {
 
     await expect(loadMcpProjectConfig(cwd)).rejects.toThrow(/at least one configured tool/);
   });
+
+  it("accepts an explicit deny policy without exposing authority by default", async () => {
+    const cwd = await writeConfig({
+      server: {
+        command: "node",
+        id: "demo",
+        tools: {
+          delete_issue: {
+            action: "deny",
+            reason: "the tutorial host never grants deletion",
+            risk: "destructive",
+          },
+        },
+      },
+    });
+
+    await expect(loadMcpProjectConfig(cwd)).resolves.toMatchObject({
+      server: {
+        tools: {
+          delete_issue: { action: "deny" },
+        },
+      },
+    });
+  });
 });
 
 async function writeConfig(config: unknown): Promise<string> {

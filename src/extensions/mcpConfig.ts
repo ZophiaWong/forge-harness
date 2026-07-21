@@ -10,7 +10,7 @@ export const DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS = 30_000;
 export const MCP_PROJECT_CONFIG_PATH = path.join(".forge", "mcp.json");
 
 export interface McpToolPolicyConfig {
-  action: Extract<PermissionDecisionAction, "allow" | "ask">;
+  action: Extract<PermissionDecisionAction, "allow" | "ask" | "deny">;
   reason: string;
   risk: PermissionRisk;
 }
@@ -30,7 +30,7 @@ export interface McpProjectConfig {
 }
 
 const toolPolicySchema = z.object({
-  action: z.enum(["allow", "ask"]),
+  action: z.enum(["allow", "ask", "deny"]),
   reason: z.string().trim().min(1),
   risk: z.enum(["inspect", "mutating", "destructive", "unknown"]),
 }).strict();

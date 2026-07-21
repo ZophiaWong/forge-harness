@@ -8,6 +8,7 @@ export type HookableTraceEvent = Exclude<TraceEventPayload, { type: "hook_result
 export type HookableTraceEventType = HookableTraceEvent["type"];
 
 export interface LifecycleHook {
+  eventMode?: "original" | "frozen-clone";
   events?: HookableTraceEventType[];
   handle(event: HookableTraceEvent): Promise<void> | void;
   name: string;
@@ -37,7 +38,10 @@ export function createLifecycleEmitter(options: LifecycleEmitterOptions): Lifecy
         }
 
         try {
-          await hook.handle(event);
+          const hookEvent = hook.eventMode === "frozen-clone"
+            ? deepFreeze(structuredClone(event))
+            : event;
+          await hook.handle(hookEvent);
           await hookResultRecorder.record(createHookResult(event, hook.name, "completed"));
         } catch (error) {
           await hookResultRecorder.record(createHookResult(event, hook.name, "failed", formatHookError(error)));
@@ -45,6 +49,18 @@ export function createLifecycleEmitter(options: LifecycleEmitterOptions): Lifecy
       }
     },
   };
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+
+  return Object.freeze(value);
 }
 
 function matchesHookEvent(hook: LifecycleHook, eventType: HookableTraceEventType): boolean {

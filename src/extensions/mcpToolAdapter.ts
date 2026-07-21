@@ -20,6 +20,7 @@ export interface McpToolIncompatibility {
 }
 
 export interface McpToolCatalogDiagnostics {
+  deniedToolNames: string[];
   discoveredToolNames: string[];
   exposedToolNames: string[];
   extraToolNames: string[];
@@ -48,6 +49,7 @@ export function createMcpToolCatalog(
   const exposedToRaw = new Map<string, string>();
   const permissions = new Map<string, PermissionDecision>();
   const incompatibleTools: McpToolIncompatibility[] = [];
+  const deniedToolNames: string[] = [];
   const discoveredByName = new Map(discoveredTools.map((tool) => [tool.name, tool]));
   const discoveryCounts = countToolNames(discoveredTools);
   const discoveredToolNames = [...new Set(discoveredTools.map((tool) => tool.name))].sort(compareStrings);
@@ -56,6 +58,19 @@ export function createMcpToolCatalog(
   const exposedNames = new Set<string>();
 
   for (const rawToolName of configuredToolNames) {
+    const configuredPolicy = server.tools[rawToolName];
+    if (!configuredPolicy) {
+      continue;
+    }
+
+    const exposedName = `mcp_${server.id}_${rawToolName}`;
+
+    if (configuredPolicy.action === "deny") {
+      deniedToolNames.push(exposedName);
+      permissions.set(exposedName, { ...configuredPolicy });
+      continue;
+    }
+
     const discovered = discoveredByName.get(rawToolName);
 
     if (!discovered) {
@@ -78,7 +93,6 @@ export function createMcpToolCatalog(
       continue;
     }
 
-    const exposedName = `mcp_${server.id}_${rawToolName}`;
     const nameError = validateExposedName(exposedName);
 
     if (nameError) {
@@ -91,11 +105,6 @@ export function createMcpToolCatalog(
         rawToolName,
         reason: `exposed name "${exposedName}" conflicts with another MCP tool`,
       });
-      continue;
-    }
-
-    const configuredPolicy = server.tools[rawToolName];
-    if (!configuredPolicy) {
       continue;
     }
 
@@ -114,11 +123,14 @@ export function createMcpToolCatalog(
   return {
     definitions,
     diagnostics: {
+      deniedToolNames,
       discoveredToolNames,
       exposedToolNames: definitions.map((tool) => tool.name).sort(compareStrings),
       extraToolNames: discoveredToolNames.filter((name) => !configuredNames.has(name)),
       incompatibleTools,
-      missingToolNames: configuredToolNames.filter((name) => !discoveredByName.has(name)),
+      missingToolNames: configuredToolNames.filter(
+        (name) => server.tools[name]?.action !== "deny" && !discoveredByName.has(name),
+      ),
     },
     exposedToRaw,
     permissions,

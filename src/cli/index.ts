@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { createCliApprover } from "./approval.js";
 import { createCliMcpServerTrustApprover } from "./mcpTrust.js";
+import { createCliPluginTrustApprover } from "./pluginTrust.js";
 import { type ParsedCliArgs, parseCliArgs, usageText } from "./args.js";
 import {
   formatContextCompactionTranscript,
@@ -27,6 +28,18 @@ import { createCronWorker, type ScheduledRunResult } from "../extensions/cronWor
 import { createLifecycleEmitter, type LifecycleHook } from "../extensions/lifecycle.js";
 import { loadMcpProjectConfig } from "../extensions/mcpConfig.js";
 import { McpSessionStartError, startMcpSession, type McpSession } from "../extensions/mcpSession.js";
+import {
+  activateApprovedPluginHooks,
+  buildPluginActivationEvents,
+  collectPluginTrustDecisions,
+  mergeMcpPermissionPolicies,
+  startApprovedPluginMcpServers,
+  type PluginMcpActivationResult,
+} from "../extensions/pluginActivation.js";
+import { loadPluginProjectConfig } from "../extensions/pluginConfig.js";
+import { resolvePluginDescriptors } from "../extensions/pluginDescriptors.js";
+import { preflightPlugins } from "../extensions/pluginPreflight.js";
+import { mergePluginPromptAssets } from "../extensions/pluginSkills.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import { createMcpPermissionPolicy } from "../governance/mcpPolicy.js";
 import type { CronSchedule } from "../runtime/cronStore.js";
@@ -61,6 +74,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
   const task = cliArgs.task;
   let getRuntimeState: (() => RuntimeState) | undefined;
   let mcpSession: McpSession | undefined;
+  let pluginMcpActivation: PluginMcpActivationResult | undefined;
 
   if (!task) {
     console.error(usageText("forge-harness"));
@@ -70,7 +84,14 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
 
   try {
     const baseCwd = process.cwd();
+    const projectPromptAssets = await loadRepoPromptAssets(baseCwd);
     const mcpConfig = await loadMcpProjectConfig(baseCwd);
+    const pluginConfig = await loadPluginProjectConfig(baseCwd);
+    const pluginPreflight = await preflightPlugins({
+      baseCwd,
+      config: pluginConfig,
+      ...(mcpConfig ? { standaloneMcpConfig: mcpConfig } : {}),
+    });
     let executionCwd = baseCwd;
     const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
     const maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS;
@@ -82,7 +103,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       task,
     });
     const runtimeStateTrace = createRuntimeStateRecorder(sessionTrace.recorder);
-    const hooks: LifecycleHook[] = cliArgs.hookLog
+    const builtInHooks: LifecycleHook[] = cliArgs.hookLog
       ? [
           {
             name: "event-log",
@@ -92,9 +113,9 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
           },
         ]
       : [];
-    const lifecycleEmitter = createLifecycleEmitter({
+    const startupEmitter = createLifecycleEmitter({
       hookResultRecorder: sessionTrace.recorder,
-      hooks,
+      hooks: builtInHooks,
       recorder: runtimeStateTrace.recorder,
     });
     getRuntimeState = runtimeStateTrace.getState;
@@ -103,37 +124,10 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
 
     console.log(formatSessionTranscript(sessionTrace.metadata.id, displayTracePath));
 
-    if (mcpConfig) {
-      const trust = await createCliMcpServerTrustApprover().approve({ baseCwd, config: mcpConfig });
-      await lifecycleEmitter.emit({
-        approved: trust.approved,
-        reason: trust.reason ?? "approved by user",
-        serverId: mcpConfig.server.id,
-        type: "mcp_server_trust_decided",
-      });
-
-      if (trust.approved) {
-        try {
-          mcpSession = await startMcpSession({
-            baseCwd,
-            lifecycleEmitter,
-            server: mcpConfig.server,
-          });
-          console.log(formatMcpSessionTranscript(mcpConfig.server.id, mcpSession.diagnostics));
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
-          const phase = error instanceof McpSessionStartError ? ` phase=${error.phase}` : "";
-          console.error(formatMcpDisabledTranscript(mcpConfig.server.id, `${reason}${phase}`));
-        }
-      } else {
-        console.error(formatMcpDisabledTranscript(mcpConfig.server.id, trust.reason ?? "startup rejected"));
-      }
-    }
-
     const workspace = cliArgs.worktree
       ? await prepareWorktreeSession({
           baseCwd,
-          lifecycleEmitter,
+          lifecycleEmitter: startupEmitter,
           sessionTrace,
         })
       : undefined;
@@ -153,8 +147,93 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       console.log(formatWorkspaceTranscript(toDisplayWorkspace(workspace, baseCwd)));
     }
 
+    const resolvedPlugins = resolvePluginDescriptors(pluginPreflight.plugins, executionCwd);
+    const standaloneTrust = mcpConfig
+      ? await createCliMcpServerTrustApprover().approve({ baseCwd, config: mcpConfig })
+      : undefined;
+
+    if (mcpConfig && standaloneTrust) {
+      await startupEmitter.emit({
+        approved: standaloneTrust.approved,
+        reason: standaloneTrust.reason ?? "approved by user",
+        serverId: mcpConfig.server.id,
+        type: "mcp_server_trust_decided",
+      });
+    }
+
+    const pluginTrustDecisions = await collectPluginTrustDecisions({
+      approver: createCliPluginTrustApprover(),
+      descriptors: resolvedPlugins,
+      lifecycleEmitter: startupEmitter,
+    });
+    const pluginHookActivation = await activateApprovedPluginHooks(pluginTrustDecisions);
+    const lifecycleEmitter = createLifecycleEmitter({
+      hookResultRecorder: sessionTrace.recorder,
+      hooks: [...builtInHooks, ...pluginHookActivation.hooks],
+      recorder: runtimeStateTrace.recorder,
+    });
+
+    if (mcpConfig && standaloneTrust) {
+      if (standaloneTrust.approved) {
+        try {
+          mcpSession = await startMcpSession({
+            baseCwd,
+            lifecycleEmitter,
+            server: mcpConfig.server,
+          });
+          console.log(formatMcpSessionTranscript(mcpConfig.server.id, mcpSession.diagnostics));
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const phase = error instanceof McpSessionStartError ? ` phase=${error.phase}` : "";
+          console.error(formatMcpDisabledTranscript(mcpConfig.server.id, `${reason}${phase}`));
+        }
+      } else {
+        console.error(formatMcpDisabledTranscript(
+          mcpConfig.server.id,
+          standaloneTrust.reason ?? "startup rejected",
+        ));
+      }
+    }
+
+    pluginMcpActivation = await startApprovedPluginMcpServers({
+      decisions: pluginTrustDecisions,
+      lifecycleEmitter,
+    });
+    for (const serverResult of pluginMcpActivation.servers) {
+      if (serverResult.status === "active") {
+        console.log(formatMcpSessionTranscript(serverResult.descriptor.server.id, serverResult.diagnostics));
+      } else {
+        console.error(formatMcpDisabledTranscript(serverResult.descriptor.server.id, serverResult.reason));
+      }
+    }
+
+    const approvedPlugins = pluginTrustDecisions
+      .filter((decision) => decision.result.approved)
+      .map((decision) => decision.descriptor);
+    const promptAssets = mergePluginPromptAssets(projectPromptAssets, approvedPlugins);
+    const additionalToolRuntimes = [
+      ...(mcpSession ? [mcpSession] : []),
+      ...pluginMcpActivation.sessions,
+    ];
+    const mcpPermissionPolicies = mergeMcpPermissionPolicies(
+      additionalToolRuntimes
+        .filter((runtime): runtime is McpSession | PluginMcpActivationResult["sessions"][number] => (
+          "permissionPolicies" in runtime
+        ))
+        .map((runtime) => runtime.permissionPolicies),
+    );
+    const activationEvents = buildPluginActivationEvents({
+      decisions: pluginTrustDecisions,
+      hookFailures: pluginHookActivation.failures,
+      servers: pluginMcpActivation.servers,
+    });
+    for (const event of activationEvents) {
+      await lifecycleEmitter.emit(event);
+      console.log(`[plugin] activation ${event.pluginName}@${event.version} status=${event.status}`);
+    }
+
     await runMinimalLoop({
-      ...(mcpSession ? { additionalToolRuntimes: [mcpSession] } : {}),
+      ...(additionalToolRuntimes.length > 0 ? { additionalToolRuntimes } : {}),
       approver,
       ...(workspace ? { baseCwd, workspace } : {}),
       childSessionRunner: createChildSessionRunner({
@@ -169,15 +248,15 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       lifecycleEmitter,
       maxToolRounds,
       model,
-      ...(mcpSession
+      ...(mcpPermissionPolicies.size > 0
         ? {
             permissionPolicy: createMcpPermissionPolicy(
               createDefaultPermissionPolicy(),
-              mcpSession.permissionPolicies,
+              mcpPermissionPolicies,
             ),
           }
         : {}),
-      ...(workspace ? { promptAssets: await loadRepoPromptAssets(baseCwd) } : {}),
+      promptAssets,
       runtimeState: runtimeStateTrace.getState,
       task,
       transcript: {
@@ -225,6 +304,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     console.error(`forge-harness failed: ${message}`);
     process.exitCode = 1;
   } finally {
+    await pluginMcpActivation?.close();
     await mcpSession?.close();
   }
 }

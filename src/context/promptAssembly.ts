@@ -82,7 +82,9 @@ export function parseLeadingSkillInvocations(
   let remainingTask = task.trimStart();
 
   while (true) {
-    const match = /^\/([A-Za-z0-9][A-Za-z0-9-]*)(?=\s|$)/.exec(remainingTask);
+    const match = /^\/([A-Za-z0-9][A-Za-z0-9-]*(?::[A-Za-z0-9][A-Za-z0-9-]*)?)(?=\s|$)/.exec(
+      remainingTask,
+    );
 
     if (!match) {
       break;
@@ -193,18 +195,18 @@ async function loadSkills(skillsDir: string): Promise<PromptSkill[]> {
   const skills: PromptSkill[] = [];
 
   for (const skillId of skillIds) {
-    if (!isSkillId(skillId)) {
+    if (!isPromptSkillId(skillId)) {
       throw new Error(`skill directory "${skillId}" must use lowercase letters, numbers, and hyphens`);
     }
 
     const rawSkill = await readRequiredTextFile(path.join(skillsDir, skillId, SKILL_FILE));
-    skills.push(parseSkill(skillId, rawSkill));
+    skills.push(parsePromptSkill(skillId, rawSkill));
   }
 
   return skills;
 }
 
-function parseSkill(skillId: string, rawSkill: string): PromptSkill {
+export function parsePromptSkill(skillId: string, rawSkill: string): PromptSkill {
   const normalized = rawSkill.replace(/\r\n/g, "\n");
 
   if (!normalized.startsWith("---\n")) {
@@ -271,7 +273,7 @@ async function readRequiredTextFile(filePath: string): Promise<string> {
   }
 }
 
-function isSkillId(value: string): boolean {
+export function isPromptSkillId(value: string): boolean {
   return /^[a-z0-9][a-z0-9-]*$/.test(value);
 }
 

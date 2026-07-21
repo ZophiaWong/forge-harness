@@ -125,7 +125,7 @@ tracked config 放在 `.forge/mcp.json`。当前 schema 只允许一个 `server`
 }
 ```
 
-`src/extensions/mcpConfig.ts` 用 strict Zod schema 解析文件。`args` 默认 `[]`，两个 timeout 分别默认 `5000` 和 `30000`。非法 JSON、未知字段、空 reason 或非正整数 timeout 都会在 spawn 前报错。tool 不配置就不暴露，因此 schema 不需要静态 `deny`。
+`src/extensions/mcpConfig.ts` 用 strict Zod schema 解析文件。`args` 默认 `[]`，两个 timeout 分别默认 `5000` 和 `30000`。非法 JSON、未知字段、空 reason 或非正整数 timeout 都会在 spawn 前报错。c16a 的 tracked fixture 只使用 `allow` / `ask`；当前 c16b branch 已让同一 adapter 接受显式 `deny`，被 deny 的 tool 保留 exact policy 但不暴露给模型。
 
 foreground CLI 在连接前显示 command、cwd、timeouts 和 tool policies：
 
@@ -185,7 +185,7 @@ composition 在收集 definitions 时保存 `tool name -> owner runtime`。`McpS
 
 ### 4. permission composition
 
-`src/governance/mcpPolicy.ts` 只识别 discovery catalog 实际注册过的 exposed names。已注册调用还要先通过 arguments shape 检查：
+`src/governance/mcpPolicy.ts` 按 exact final name 查找 discovery catalog 生成的 policies。`allow` / `ask` tool 必须先成功注册；显式 `deny` 即使不暴露也保留 policy。已注册调用还要先通过 arguments shape 检查：
 
 ```ts
 const decision = mcpPolicies.get(toolCall.name);
@@ -317,13 +317,15 @@ known_issues: FH-16
 
 ## 下一步缺口
 
-c16a 只支持 foreground session 中由 `.forge/mcp.json` 直接声明的单个 stdio server。它还没有实现：
+c16a 的 standalone `.forge/mcp.json` 仍只支持 foreground session 中直接声明的单个 stdio server。当前 branch 的 [c16b Plugin Loading / Registration](c16b-plugin-loading-registration.md) 已从另一条配置来源增加 plugin-provided multi-server MCP，但没有改写 standalone schema 或它的 `baseCwd` cwd 行为。
 
-- multi-server registry 和跨 server 名称冲突策略。
+这条 standalone 路径仍没有实现：
+
+- standalone multi-server registry；c16b 只在 plugin registry 内支持 multi-server，并在 preflight 检查跨来源冲突。
 - remote HTTP transport、OAuth 和 token refresh。
 - 显式 env / secrets 注入；当前只沿用 SDK 对 `HOME`、`PATH` 等基础变量的安全继承。
 - `list_changed`、reconnect、retry 或 process restart。
 - 完整 rich media projection 和递归 JSON Schema sanitizer。
-- child/cron MCP loading。
+- child/cron MCP 或 plugin loading。
 
-下一章 `c16b Plugin Loading / Registration` 会换一个问题：怎样安装或启用一个 plugin，读取它的 manifest，再把不同组件注册到 Forge 已有子系统。plugin 携带的 MCP config 继续复用 c16a 的 loading 和 execution path。manifest schema、component types、namespace 和 multi-server policy 都留到那一章再确定。
+c16b 解决的是已经配置好的 local plugin 怎样经过 manifest、preflight 和 session trust，把 skills、hooks 与 MCP descriptors 注册进现有子系统。它没有实现 install/download/marketplace；这条边界留给完整 plugin platform，而不是在教程 checkpoint 里提前扩张。
