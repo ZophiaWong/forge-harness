@@ -1,0 +1,6 @@
+{
+  "name": "review-helper",
+  "version": "0.1.0",
+  "description": "Skill-only review helper used by the c16b tutorial.",
+  "skills": "./skills"
+}

@@ -45,6 +45,7 @@ Thumbs.db
 .forge/*
 !.forge/mcp.json
 !.forge/memory.md
+!.forge/plugins.json
 !.forge/skills/
 !.forge/skills/**/
 !.forge/skills/**/SKILL.md

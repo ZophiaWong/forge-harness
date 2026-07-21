@@ -1,0 +1,9 @@
+{
+  "hooks": [
+    {
+      "name": "audit",
+      "events": ["permission_decision"],
+      "entry": "./hooks/audit.mjs"
+    }
+  ]
+}
