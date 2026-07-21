@@ -92,13 +92,14 @@ describe("formatSessionTranscript", () => {
 describe("MCP transcript", () => {
   it("prints connected tools and tolerant discovery diagnostics", () => {
     expect(formatMcpSessionTranscript("demo", {
+      deniedToolNames: [],
       discoveredToolNames: ["create_note", "lookup_issue", "server_extra"],
       exposedToolNames: ["mcp_demo_create_note", "mcp_demo_lookup_issue"],
       extraToolNames: ["server_extra"],
       incompatibleTools: [{ rawToolName: "bad/name", reason: "invalid name" }],
       missingToolNames: ["configured_missing"],
     })).toBe(
-      "[mcp] connected server=demo tools=mcp_demo_create_note,mcp_demo_lookup_issue extra=server_extra missing=configured_missing incompatible=bad/name",
+      "[mcp] connected server=demo tools=mcp_demo_create_note,mcp_demo_lookup_issue denied=none extra=server_extra missing=configured_missing incompatible=bad/name",
     );
   });
 

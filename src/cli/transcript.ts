@@ -58,6 +58,7 @@ export function formatMcpSessionTranscript(serverId: string, diagnostics: McpToo
   return [
     `[mcp] connected server=${serverId}`,
     `tools=${formatList(diagnostics.exposedToolNames)}`,
+    `denied=${formatList(diagnostics.deniedToolNames)}`,
     `extra=${formatList(diagnostics.extraToolNames)}`,
     `missing=${formatList(diagnostics.missingToolNames)}`,
     `incompatible=${formatList(diagnostics.incompatibleTools.map((tool) => tool.rawToolName))}`,

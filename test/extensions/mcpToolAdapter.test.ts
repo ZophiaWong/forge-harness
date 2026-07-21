@@ -68,6 +68,7 @@ describe("createMcpToolCatalog", () => {
       risk: "mutating",
     });
     expect(catalog.diagnostics).toEqual({
+      deniedToolNames: [],
       discoveredToolNames: ["create_note", "lookup_issue", "server_extra"],
       exposedToolNames: ["mcp_demo_create_note", "mcp_demo_lookup_issue"],
       extraToolNames: ["server_extra"],
@@ -86,6 +87,40 @@ describe("createMcpToolCatalog", () => {
 
     expect(catalog.definitions.map((tool) => tool.name)).toEqual(["mcp_demo_lookup_issue"]);
     expect(catalog.diagnostics.missingToolNames).toEqual(["create_note"]);
+  });
+
+  it("keeps deny as an exact policy while hiding the tool without missing or incompatible diagnostics", () => {
+    const catalog = createMcpToolCatalog(serverConfig({
+      tools: {
+        blocked_missing: {
+          action: "deny",
+          reason: "never expose it",
+          risk: "destructive",
+        },
+        blocked_present: {
+          action: "deny",
+          reason: "never expose it",
+          risk: "destructive",
+        },
+        lookup_issue: {
+          action: "allow",
+          reason: "read an issue",
+          risk: "inspect",
+        },
+      },
+    }), [
+      { inputSchema: { type: "string" }, name: "blocked_present" },
+      { inputSchema: { type: "object" }, name: "lookup_issue" },
+    ]);
+
+    expect(catalog.definitions.map((tool) => tool.name)).toEqual(["mcp_demo_lookup_issue"]);
+    expect(catalog.permissions.get("mcp_demo_blocked_missing")).toMatchObject({ action: "deny" });
+    expect(catalog.permissions.get("mcp_demo_blocked_present")).toMatchObject({ action: "deny" });
+    expect(catalog.diagnostics).toMatchObject({
+      deniedToolNames: ["mcp_demo_blocked_missing", "mcp_demo_blocked_present"],
+      incompatibleTools: [],
+      missingToolNames: [],
+    });
   });
 
   it("hides a duplicated discovered raw name as a tool-local conflict", () => {

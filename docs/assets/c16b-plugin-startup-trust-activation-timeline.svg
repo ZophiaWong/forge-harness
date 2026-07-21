@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
+  <title id="title">c16b Startup S1 to S7 Trust and Activation Timeline</title>
+  <desc id="desc">Seven equal-width startup stages show configuration loading, batch validation, runtime setup, grouped trust prompts, approved hook activation, sequential MCP startup, and final registration. A trust barrier separates data inspection from plugin code execution.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 26px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .subtitle { font: 15px ui-sans-serif, system-ui, sans-serif; fill: #4b5563; }
+      .stage { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
+      .stageActive { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+      .stageNo { font: 700 17px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .stageName { font: 13px ui-sans-serif, system-ui, sans-serif; fill: #374151; }
+      .lane { font: 700 14px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .grid { stroke: #e5e7eb; stroke-width: 1; }
+      .flow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .safe { fill: #ecfdf5; stroke: #047857; stroke-width: 2; }
+      .host { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 2; }
+      .trust { fill: #fefce8; stroke: #a16207; stroke-width: 2; }
+      .code { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .event { fill: #fdf4ff; stroke: #a21caf; stroke-width: 2; }
+      .small { font: 12px ui-sans-serif, system-ui, sans-serif; fill: #374151; }
+      .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2937; }
+      .barrier { stroke: #b91c1c; stroke-width: 3; stroke-dasharray: 8 6; }
+      .barrierText { font: 700 12px ui-sans-serif, system-ui, sans-serif; fill: #991b1b; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1440" height="820" />
+  <text class="title" x="42" y="45">c16b startup：S1–S7 先完成 trust，再执行 plugin code</text>
+  <text class="subtitle" x="42" y="74">七个等宽阶段对应教程中的启动表；S4 收齐全部决定，S5 才首次 import approved hook。</text>
+
+  <rect class="stage" x="180" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="196" y="120">S1</text>
+  <text class="stageName" x="196" y="142">收集配置</text>
+  <rect class="stage" x="354" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="370" y="120">S2</text>
+  <text class="stageName" x="370" y="142">启动前整批检查</text>
+  <rect class="stage" x="528" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="544" y="120">S3</text>
+  <text class="stageName" x="544" y="142">建立运行现场</text>
+  <rect class="stage" x="702" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="718" y="120">S4</text>
+  <text class="stageName" x="718" y="142">收齐 trust decisions</text>
+  <rect class="stageActive" x="876" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="892" y="120">S5</text>
+  <text class="stageName" x="892" y="142">激活 approved hooks</text>
+  <rect class="stageActive" x="1050" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="1066" y="120">S6</text>
+  <text class="stageName" x="1066" y="142">启动 MCP sessions</text>
+  <rect class="stageActive" x="1224" y="94" width="158" height="62" rx="8" />
+  <text class="stageNo" x="1240" y="120">S7</text>
+  <text class="stageName" x="1240" y="142">注册并进入 loop</text>
+
+  <text class="lane" x="42" y="221">Config / safety</text>
+  <text class="lane" x="42" y="326">Session host</text>
+  <text class="lane" x="42" y="431">Trust prompts</text>
+  <text class="lane" x="42" y="536">Plugin code</text>
+  <text class="lane" x="42" y="641">MCP startup</text>
+  <text class="lane" x="42" y="746">Registration</text>
+
+  <line class="grid" x1="164" y1="174" x2="1400" y2="174" />
+  <line class="grid" x1="164" y1="279" x2="1400" y2="279" />
+  <line class="grid" x1="164" y1="384" x2="1400" y2="384" />
+  <line class="grid" x1="164" y1="489" x2="1400" y2="489" />
+  <line class="grid" x1="164" y1="594" x2="1400" y2="594" />
+  <line class="grid" x1="164" y1="699" x2="1400" y2="699" />
+  <line class="grid" x1="164" y1="786" x2="1400" y2="786" />
+
+  <rect class="safe" x="180" y="190" width="158" height="67" rx="8" />
+  <text class="small" x="198" y="216">assets + configs</text>
+  <text class="mono" x="198" y="239">no plugin code</text>
+
+  <rect class="safe" x="354" y="190" width="158" height="67" rx="8" />
+  <text class="small" x="372" y="216">aggregate issues</text>
+  <text class="mono" x="372" y="239">preflightPlugins()</text>
+
+  <rect class="host" x="528" y="295" width="158" height="67" rx="8" />
+  <text class="small" x="546" y="321">trace + worktree</text>
+  <text class="mono" x="546" y="344">frozen descriptor</text>
+
+  <rect class="trust" x="702" y="397" width="158" height="91" rx="8" />
+  <text class="small" x="720" y="419">standalone MCP</text>
+  <text class="small" x="720" y="441">issue-workflow</text>
+  <text class="small" x="720" y="463">review-helper</text>
+  <text class="mono" x="720" y="481">all trust decided</text>
+
+  <line class="barrier" x1="868" y1="164" x2="868" y2="786" />
+  <text class="barrierText" x="874" y="181">TRUST BARRIER</text>
+
+  <rect class="code" x="876" y="505" width="158" height="67" rx="8" />
+  <text class="small" x="894" y="531">import approved hooks</text>
+  <text class="mono" x="894" y="554">runtime emitter</text>
+
+  <rect class="code" x="1050" y="610" width="158" height="67" rx="8" />
+  <text class="small" x="1068" y="636">standalone → plugins</text>
+  <text class="mono" x="1068" y="659">sequential discovery</text>
+
+  <rect class="event" x="1224" y="715" width="158" height="67" rx="8" />
+  <text class="small" x="1242" y="741">skills + policy</text>
+  <text class="mono" x="1242" y="764">activation snapshot</text>
+
+  <path class="flow" d="M 338 223 L 354 223" />
+  <path class="flow" d="M 512 223 C 522 223 518 328 528 328" />
+  <path class="flow" d="M 686 328 C 696 328 692 442 702 442" />
+  <path class="flow" d="M 860 442 C 874 442 862 538 876 538" />
+  <path class="flow" d="M 1034 538 C 1044 538 1040 643 1050 643" />
+  <path class="flow" d="M 1208 643 C 1218 643 1214 748 1224 748" />
+
+  <text class="small" x="180" y="810">S2 有任何 issue 就在 trace/worktree/trust 前停止；rejected plugin 留下 decision evidence，但不会跨过 trust barrier。</text>
+</svg>

@@ -141,6 +141,7 @@ describe("createLifecycleEmitter", () => {
     });
 
     await emitter.emit({
+      deniedToolNames: [],
       discoveredToolNames: ["lookup_issue"],
       exposedToolNames: ["mcp_demo_lookup_issue"],
       extraToolNames: [],
@@ -210,5 +211,54 @@ describe("createLifecycleEmitter", () => {
         type: "hook_result",
       },
     ]);
+  });
+
+  it("gives plugin hooks a deep-frozen clone while built-in hooks keep the original event", async () => {
+    const trace = createTraceRecorder();
+    const observations: Array<{ frozen: boolean; same: boolean; nestedFrozen: boolean }> = [];
+    const event: TraceEventPayload = {
+      deniedToolNames: [],
+      discoveredToolNames: ["lookup_issue"],
+      exposedToolNames: ["mcp_demo_lookup_issue"],
+      extraToolNames: [],
+      incompatibleTools: [],
+      missingToolNames: [],
+      serverId: "demo",
+      type: "mcp_server_connected",
+    };
+    const emitter = createLifecycleEmitter({
+      hooks: [
+        {
+          handle(received) {
+            observations.push({
+              frozen: Object.isFrozen(received),
+              nestedFrozen: Object.isFrozen(received.type === "mcp_server_connected" && received.discoveredToolNames),
+              same: received === event,
+            });
+          },
+          name: "built-in",
+        },
+        {
+          eventMode: "frozen-clone",
+          handle(received) {
+            observations.push({
+              frozen: Object.isFrozen(received),
+              nestedFrozen: Object.isFrozen(received.type === "mcp_server_connected" && received.discoveredToolNames),
+              same: received === event,
+            });
+          },
+          name: "plugin:observer",
+        },
+      ],
+      recorder: trace.recorder,
+    });
+
+    await emitter.emit(event);
+
+    expect(observations).toEqual([
+      { frozen: false, nestedFrozen: false, same: true },
+      { frozen: true, nestedFrozen: true, same: false },
+    ]);
+    expect(Object.isFrozen(event)).toBe(false);
   });
 });

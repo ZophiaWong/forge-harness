@@ -10,6 +10,28 @@ import type { VerificationStatus } from "./verification.js";
 
 export type SessionEndStatus = "completed" | "failed";
 export type HookResultStatus = "completed" | "failed";
+export type PluginActivationStatus = "active" | "degraded" | "failed";
+
+export interface PluginComponentActivation {
+  active: string[];
+  declared: string[];
+  failed: Array<{
+    id: string;
+    reason: string;
+  }>;
+}
+
+export interface PluginToolActivation {
+  declared: string[];
+  denied: string[];
+  exposed: string[];
+  extra: string[];
+  incompatible: Array<{
+    reason: string;
+    toolName: string;
+  }>;
+  missing: string[];
+}
 
 export type TraceEventPayload =
   | {
@@ -49,7 +71,28 @@ export type TraceEventPayload =
       reason: string;
     }
   | {
+      type: "plugin_trust_decided";
+      approved: boolean;
+      pluginName: string;
+      reason: string;
+      root: string;
+      version: string;
+    }
+  | {
+      type: "plugin_activation_result";
+      components: {
+        hooks: PluginComponentActivation;
+        mcpServers: PluginComponentActivation;
+        skills: PluginComponentActivation;
+      };
+      pluginName: string;
+      status: PluginActivationStatus;
+      tools: PluginToolActivation;
+      version: string;
+    }
+  | {
       type: "mcp_server_connected";
+      deniedToolNames: string[];
       serverId: string;
       discoveredToolNames: string[];
       exposedToolNames: string[];

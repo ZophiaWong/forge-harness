@@ -230,6 +230,8 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
         ...(event.workspace ? { workspace: event.workspace } : state.workspace ? { workspace: state.workspace } : {}),
       };
     case "mcp_server_trust_decided":
+    case "plugin_trust_decided":
+    case "plugin_activation_result":
     case "mcp_server_connected":
     case "mcp_server_failed":
     case "mcp_server_stopped":

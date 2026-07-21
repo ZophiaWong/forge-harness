@@ -98,6 +98,33 @@ describe("prompt assembly", () => {
     });
   });
 
+  it("accepts one plugin namespace colon without changing leading, unknown, or dedup semantics", () => {
+    const skills = [
+      { body: "project", description: "project triage", id: "triage" },
+      { body: "plugin", description: "plugin triage", id: "issue-workflow:triage" },
+    ];
+
+    expect(parseLeadingSkillInvocations(
+      "/triage /issue-workflow:triage /issue-workflow:triage inspect FH-16",
+      skills,
+    )).toEqual({
+      selectedSkillIds: ["triage", "issue-workflow:triage"],
+      task: "inspect FH-16",
+    });
+    expect(parseLeadingSkillInvocations("text /issue-workflow:triage", skills)).toEqual({
+      selectedSkillIds: [],
+      task: "text /issue-workflow:triage",
+    });
+    expect(parseLeadingSkillInvocations("/unknown:triage inspect", skills)).toEqual({
+      selectedSkillIds: [],
+      task: "/unknown:triage inspect",
+    });
+    expect(parseLeadingSkillInvocations("/issue-workflow:triage:extra inspect", skills)).toEqual({
+      selectedSkillIds: [],
+      task: "/issue-workflow:triage:extra inspect",
+    });
+  });
+
   it("assembles prompt sections in scope order and injects only selected skill bodies", () => {
     const assets: PromptAssets = {
       projectMemory: "Memory marker.",

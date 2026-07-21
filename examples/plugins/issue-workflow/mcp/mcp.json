@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "demo": {
+      "command": "node",
+      "args": [
+        "${pluginRoot}/mcp/server.mjs",
+        "--project-root",
+        "${projectRoot}"
+      ],
+      "connectTimeoutMs": 5000,
+      "toolCallTimeoutMs": 30000,
+      "tools": ["lookup_issue", "create_note"]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "plugins": [
+    {
+      "path": "./examples/plugins/issue-workflow",
+      "enabled": true,
+      "mcpPolicies": {
+        "demo": {
+          "lookup_issue": {
+            "action": "allow",
+            "risk": "inspect",
+            "reason": "Read the fixture issue catalog without changing project files."
+          },
+          "create_note": {
+            "action": "ask",
+            "risk": "mutating",
+            "reason": "Write a demo note under the active project workspace."
+          }
+        }
+      }
+    },
+    {
+      "path": "./examples/plugins/review-helper",
+      "enabled": true
+    }
+  ]
+}

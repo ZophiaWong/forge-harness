@@ -1,0 +1,8 @@
+{
+  "name": "issue-workflow",
+  "version": "0.1.0",
+  "description": "Small issue workflow plugin used by the c16b tutorial.",
+  "skills": "./skills",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./mcp/mcp.json"
+}

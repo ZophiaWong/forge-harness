@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="850" viewBox="0 0 1440 850" role="img" aria-labelledby="title desc">
+  <title id="title">c16b Plugin Registration and Ownership Boundaries</title>
+  <desc id="desc">Four rows show the startup input or risk, the host gate, and the safe result or existing Forge owner for path trust, execution approval, naming ownership, and capability authority.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 26px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .subtitle { font: 15px ui-sans-serif, system-ui, sans-serif; fill: #4b5563; }
+      .column { font: 700 14px ui-sans-serif, system-ui, sans-serif; fill: #475569; letter-spacing: .04em; }
+      .row { fill: #f8fafc; stroke: #d1d5db; stroke-width: 1.5; }
+      .input { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .gate { fill: #ecfdf5; stroke: #047857; stroke-width: 2.4; }
+      .owner { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 2; }
+      .policy { fill: #fdf4ff; stroke: #a21caf; stroke-width: 2; }
+      .label { font: 700 17px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .small { font: 14px ui-sans-serif, system-ui, sans-serif; fill: #374151; }
+      .mono { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2937; }
+      .monoTight { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2937; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1440" height="850" />
+  <text class="title" x="48" y="47">c16b：四条 loading boundary 与组件归属</text>
+  <text class="subtitle" x="48" y="76">每一行都从一次启动可能碰到的问题出发：plugin 提供声明，host 负责检查、审批、命名与授权。</text>
+
+  <text class="column" x="67" y="118">启动输入 / 风险</text>
+  <text class="column" x="570" y="118">HOST GATE</text>
+  <text class="column" x="1010" y="118">安全结果 / 既有 OWNER</text>
+
+  <rect class="row" x="42" y="132" width="1356" height="152" rx="12" />
+  <rect class="input" x="62" y="153" width="392" height="110" rx="9" />
+  <text class="label" x="84" y="181">plugin root 与 component path</text>
+  <text class="mono" x="84" y="207">plugins.json → root → manifest component</text>
+  <text class="small" x="84" y="235">风险：root 不存在，或 component symlink 越界</text>
+
+  <rect class="gate" x="535" y="153" width="342" height="110" rx="9" />
+  <text class="label" x="557" y="181">路径可信</text>
+  <text class="small" x="557" y="207">configuration / path</text>
+  <text class="mono" x="557" y="235">realpath + root containment</text>
+
+  <rect class="owner" x="958" y="153" width="420" height="110" rx="9" />
+  <text class="label" x="980" y="181">canonical plugin root</text>
+  <text class="small" x="980" y="207">component paths 全部留在同一个 root</text>
+  <text class="mono" x="980" y="235">validated plugin descriptor</text>
+
+  <path class="arrow" d="M 454 208 L 535 208" />
+  <path class="arrow" d="M 877 208 L 958 208" />
+
+  <rect class="row" x="42" y="302" width="1356" height="152" rx="12" />
+  <rect class="input" x="62" y="323" width="392" height="110" rx="9" />
+  <text class="label" x="84" y="351">将要执行的 plugin code</text>
+  <text class="mono" x="84" y="377">hooks.entry · mcp.command · args · cwd</text>
+  <text class="small" x="84" y="405">风险：读取声明时顺手 import 或 spawn</text>
+
+  <rect class="gate" x="535" y="323" width="342" height="110" rx="9" />
+  <text class="label" x="557" y="351">执行审批</text>
+  <text class="small" x="557" y="377">trust / execution</text>
+  <text class="mono" x="557" y="405">prompt descriptor === spawn descriptor</text>
+
+  <rect class="owner" x="958" y="323" width="420" height="110" rx="9" />
+  <text class="label" x="980" y="351">approved code only</text>
+  <text class="small" x="980" y="377">获批后才 import hook、启动 McpSession</text>
+  <text class="mono" x="980" y="405">rejected plugin → inert</text>
+
+  <path class="arrow" d="M 454 378 L 535 378" />
+  <path class="arrow" d="M 877 378 L 958 378" />
+
+  <rect class="row" x="42" y="472" width="1356" height="152" rx="12" />
+  <rect class="input" x="62" y="493" width="392" height="110" rx="9" />
+  <text class="label" x="84" y="521">plugin 内的 local names</text>
+  <text class="mono" x="84" y="547">triage · audit · demo · lookup_issue</text>
+  <text class="small" x="84" y="575">风险：合并 registry 后覆盖另一个 owner</text>
+
+  <rect class="gate" x="535" y="493" width="342" height="110" rx="9" />
+  <text class="label" x="557" y="521">命名归属</text>
+  <text class="small" x="557" y="547">namespace / routing</text>
+  <text class="mono" x="557" y="575">effective identity + uniqueness</text>
+
+  <rect class="owner" x="958" y="493" width="420" height="110" rx="9" />
+  <text class="label" x="980" y="517">effective identity → owner</text>
+  <text class="monoTight" x="980" y="539">issue-workflow:triage → PromptAssets</text>
+  <text class="monoTight" x="980" y="557">issue-workflow:audit → LifecycleEmitter</text>
+  <text class="monoTight" x="980" y="575">issue-workflow-demo → McpSession</text>
+  <text class="monoTight" x="980" y="593">mcp_issue-workflow-demo_lookup_issue → Tool Runtime</text>
+
+  <path class="arrow" d="M 454 548 L 535 548" />
+  <path class="arrow" d="M 877 548 L 958 548" />
+
+  <rect class="row" x="42" y="642" width="1356" height="152" rx="12" />
+  <rect class="input" x="62" y="663" width="392" height="110" rx="9" />
+  <text class="label" x="84" y="691">tool declaration 与 discovery</text>
+  <text class="mono" x="84" y="717">mcpPolicies · tools/list · inputSchema</text>
+  <text class="small" x="84" y="745">风险：把 server 自报能力当作 host 授权</text>
+
+  <rect class="gate" x="535" y="663" width="342" height="110" rx="9" />
+  <text class="label" x="557" y="691">能力授权</text>
+  <text class="small" x="557" y="717">declaration / authority</text>
+  <text class="mono" x="557" y="745">declared × discovered × host policy</text>
+
+  <rect class="policy" x="958" y="663" width="420" height="110" rx="9" />
+  <text class="label" x="980" y="691">exact-name Permission Policy</text>
+  <text class="mono" x="980" y="717">compatible + allow / ask → exposed</text>
+  <text class="monoTight" x="980" y="745">deny / extra / missing / incompatible → hidden</text>
+
+  <path class="arrow" d="M 454 718 L 535 718" />
+  <path class="arrow" d="M 877 718 L 958 718" />
+
+  <text class="small" x="48" y="826">橙色是 plugin/project 输入，绿色是 c16b host gate，蓝色与紫色是检查后的结果及既有 runtime/governance owner。</text>
+</svg>
