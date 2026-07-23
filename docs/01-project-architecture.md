@@ -58,14 +58,14 @@ sequenceDiagram
 
 | Module | 负责什么 | 主要章节 |
 | --- | --- | --- |
-| `src/cli/` | 接收任务、解析参数、把请求交给 harness。 | `c01` |
-| `src/core/` | turn runner、agent loop control、LLM call path。 | `c01`, `c08`, `c17` |
-| `src/tools/` | tool definition、dispatch、adapter、tool result。 | `c02`, `c04`, `c16a`, `c16b` |
-| `src/governance/` | risk classification、permission decision、approval。 | `c03`, `c14`, `c16a`, `c16b` |
-| `src/context/` | `Observation`、`ContextProjection`、prompt assembly、compaction。 | `c05`, `c11`, `c12`, `c16b` |
-| `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、replay。 | `c06`, `c07`, `c08`, `c13`, `c14`, `c16b` |
-| `src/domain/` | shared runtime terms and protocols。 | 随实现逐步补齐 |
-| `src/extensions/` | hooks、skills、background runs、subagents、MCP、plugin loading、team protocols。 | `c09` 到 `c17` |
+| `src/cli/` | 接收任务、解析参数、把请求交给 harness；启动 Leader 管理的 teammate process。 | `c01`, `c17b` |
+| `src/core/` | turn runner、agent loop control、LLM call path。 | `c01`, `c08`, `c17c` |
+| `src/tools/` | tool definition、dispatch、adapter、tool result。 | `c02`, `c04`, `c16a`, `c16b`, `c17a` 到 `c17c` |
+| `src/governance/` | risk classification、permission decision、approval。 | `c03`, `c14`, `c16a`, `c16b`, `c17c` |
+| `src/context/` | `Observation`、`ContextProjection`、prompt assembly、compaction、mailbox projection。 | `c05`, `c11`, `c12`, `c16b`, `c17b`, `c17c` |
+| `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、replay。 | `c06`, `c07`, `c08`, `c13`, `c14`, `c16b`, `c17a` 到 `c17c` |
+| `src/domain/` | shared runtime terms and protocols。 | `c17a` 到 `c17c` 随需要补齐 |
+| `src/extensions/` | hooks、skills、background runs、subagents、MCP、plugin loading、team runtime 和 coordination protocol。 | `c09` 到 `c17c` |
 
 不要提前建一个 `src/state/` god module。状态应该以 domain data 和 runtime projection 的形式存在，由使用它的模块持有。
 
@@ -91,11 +91,11 @@ flowchart TB
 
 | Layer | 它问的问题 | 包含的机制 | 主要章节 |
 | --- | --- | --- | --- |
-| `L1 Loop & Execution` | 模型输出怎样变成真实动作？ | agent loop、model call、tool call、tool result、tool dispatch、shell/file tools、MCP adapter。 | `c01`, `c02`, `c04`, `c16a`, `c17` |
-| `L2 Governance & Action Boundary` | 哪些动作能执行，执行前要过什么边界？ | risk classification、permission decision、approval、deny rules、safe executor、reviewable file editing、worktree boundary、plugin session trust。 | `c03`, `c04`, `c14`, `c16a`, `c16b`, `c17` |
-| `L3 Context & Knowledge` | 模型下一轮应该看到什么？ | message history、`Observation`、`ContextProjection`、system prompt assembly、skills、memory、context compaction、summary handoff、plugin skill namespace。 | `c05`, `c11`, `c12`, `c15a`, `c15b`, `c16b`, `c17` |
-| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence、plugin preflight 与 activation snapshot。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c16a`, `c16b`, `c17` |
-| `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、async child handoff、subagents、plugin loading、team protocols、capstone run。 | `c09`, `c10`, `c13`, `c14`, `c15a`, `c15b`, `c16b`, `c17` |
+| `L1 Loop & Execution` | 模型输出怎样变成真实动作？ | agent loop、model call、tool call、tool result、tool dispatch、shell/file tools、MCP adapter、explicit integration。 | `c01`, `c02`, `c04`, `c16a`, `c17c` |
+| `L2 Governance & Action Boundary` | 哪些动作能执行，执行前要过什么边界？ | risk classification、permission decision、approval、deny rules、safe executor、reviewable file editing、worktree boundary、plugin session trust、Leader review gate。 | `c03`, `c04`, `c14`, `c16a`, `c16b`, `c17c` |
+| `L3 Context & Knowledge` | 模型下一轮应该看到什么？ | message history、`Observation`、`ContextProjection`、system prompt assembly、skills、memory、context compaction、summary handoff、plugin skill namespace、mailbox message。 | `c05`, `c11`, `c12`, `c15a`, `c15b`, `c16b`, `c17b`, `c17c` |
+| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence、plugin activation snapshot、task graph、team lifecycle、completion evidence。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c16a`, `c16b`, `c17a`, `c17b`, `c17c` |
+| `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、async handoff、plugin loading、shared task graph、long-lived teammates、mailbox、coordination protocol。 | `c09`, `c10`, `c13`, `c14`, `c15a`, `c15b`, `c16b`, `c17a`, `c17b`, `c17c` |
 
 ## Layer 重叠怎么读
 
@@ -108,6 +108,9 @@ flowchart TB
 | `c14 Worktree Isolation` | worktree 是 filesystem boundary，也给恢复、review 和并行工作留下空间。 |
 | `c16a MCP Tool Integration` | MCP adapter 扩展 tool execution，但外部工具仍要走 permission 和 result protocol。 |
 | `c16b Plugin Loading / Registration` | Plugin 用一个 boundary 协调 skills、hooks 与 MCP；同时影响 session trust、prompt knowledge、startup evidence 和扩展规模，因此属于 `L2 + L3 + L4 + L5`。 |
+| `c17a Shared Team Task Graph` | task graph 既是多个 session 的共享工作状态，也是 trace 和 completion 使用的证据，因此属于 `L5 + L4`。 |
+| `c17b Long-Lived Teammates / Mailbox` | teammate process 增加可长期寻址的并发成员，mailbox 决定下一轮能看到什么，lifecycle 和投递结果还要进入证据，因此属于 `L5 + L3 + L4`。 |
+| `c17c Coordination / Completion Protocol` | assignment、plan approval、review、integration 和 completion gate 同时影响执行、治理、上下文、证据与团队协调，因此覆盖五层。 |
 
 ## 课程怎样对应这些模块
 
