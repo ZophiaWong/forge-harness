@@ -36,6 +36,9 @@ export async function prepareWorktreeSession(
       model: options.sessionTrace.metadata.model,
       startedAt: options.sessionTrace.metadata.startedAt,
       task: options.sessionTrace.metadata.task,
+      ...(options.sessionTrace.metadata.taskGraph
+        ? { taskGraph: options.sessionTrace.metadata.taskGraph }
+        : {}),
       tracePath: options.sessionTrace.metadata.tracePath,
       workspace,
     });

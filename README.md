@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the runnable checkpoints through `c16b Plugin Loading / Registration`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, `c15b Async Child Sessions / Parallel Handoff With Edit Preview`, `c16a MCP Tool Integration`, and `c16b Plugin Loading / Registration`.
+This branch contains the documentation baseline plus the runnable checkpoints through `c17a Shared Team Task Graph`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, `c15b Async Child Sessions / Parallel Handoff With Edit Preview`, `c16a MCP Tool Integration`, `c16b Plugin Loading / Registration`, and `c17a Shared Team Task Graph`.
 
 ## Setup
 
@@ -56,6 +56,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c15b Async Child Sessions / Parallel Handoff With Edit Preview](docs/tutorial/c15b-async-child-sessions-parallel-handoff.md): async research/edit child sessions, notification return flow, final gate, and isolated edit preview metadata.
 - [c16a MCP Tool Integration](docs/tutorial/c16a-mcp-tool-integration.md): one trusted foreground stdio MCP server integrated with Tool Runtime, permission, ToolResult, and trace.
 - [c16b Plugin Loading / Registration](docs/tutorial/c16b-plugin-loading-registration.md): strict local plugin preflight, per-session trust, namespaced skills/hooks, and plugin-provided multi-server MCP registration.
+- [c17a Shared Team Task Graph](docs/tutorial/c17a-shared-team-task-graph.md): shared dependencies, role-scoped transitions, acceptance evidence, and atomic root-session snapshots across Leader and child sessions.
 - [Minimal MCP Server Fixture](docs/appendix/minimal-mcp-server.md): local external-system fixture used by c16a.
 - [Minimal Plugin Fixtures](docs/appendix/minimal-plugin-fixtures.md): one full and one skill-only local plugin used by c16b.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
@@ -88,6 +89,6 @@ See [docs/01-project-architecture.md](docs/01-project-architecture.md) for the s
 
 ## Non-goals
 
-The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI. c16a adds one local MCP boundary only after Tool Runtime, Permission Governance, trace, and lifecycle are already in place. c16b then adds loading for already-configured local plugins; it does not add a marketplace, downloader, persistent trust store, or package manager.
+The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI. c16a adds one local MCP boundary only after Tool Runtime, Permission Governance, trace, and lifecycle are already in place. c16b then adds loading for already-configured local plugins. c17a adds a root-session scoped shared task graph, but not task ownership, claiming, verification roles, or recovery attempts.
 
-Broader versions of those topics can appear later, after the core harness has stable boundaries.
+c16b still does not add a marketplace, downloader, persistent trust store, or package manager. Task ownership stays in c17c; attempts, resume, idempotency, reconciliation, and event replay stay in c18.

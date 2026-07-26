@@ -67,6 +67,38 @@ describe("createDefaultPermissionPolicy", () => {
     });
   });
 
+  it("allows team-task reads and harness-local graph mutations", () => {
+    expect(decide("task_list", {})).toEqual({
+      action: "allow",
+      reason: "team task graph inspection",
+      risk: "inspect",
+    });
+    expect(decide("task_get", { id: "task_001" })).toEqual({
+      action: "allow",
+      reason: "team task graph inspection",
+      risk: "inspect",
+    });
+
+    for (const [name, args] of [
+      [
+        "task_create",
+        {
+          acceptance: ["done"],
+          description: "Create a task.",
+          title: "Task",
+        },
+      ],
+      ["task_update", { id: "task_001", status: "in_progress" }],
+      ["task_add_evidence", { id: "task_001", summary: "Verified." }],
+    ] as const) {
+      expect(decide(name, args)).toEqual({
+        action: "allow",
+        reason: "team task graph update",
+        risk: "mutating",
+      });
+    }
+  });
+
   it("allows research delegation but asks before edit delegation", () => {
     expect(decide("delegate", { profile: "research", task: "Inspect the c14 tutorial." })).toEqual({
       action: "allow",

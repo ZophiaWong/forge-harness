@@ -48,6 +48,22 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
     };
   }
 
+  if (toolCall.name === "task_list" || toolCall.name === "task_get") {
+    return allow("team task graph inspection");
+  }
+
+  if (
+    toolCall.name === "task_create" ||
+    toolCall.name === "task_update" ||
+    toolCall.name === "task_add_evidence"
+  ) {
+    return {
+      action: "allow",
+      reason: "team task graph update",
+      risk: "mutating",
+    };
+  }
+
   if (toolCall.name === "delegate") {
     const args = parseDelegateArguments(toolCall.arguments);
 

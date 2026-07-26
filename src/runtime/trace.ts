@@ -1,6 +1,12 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
+import type {
+  TeamTaskFailureCode,
+  TeamTaskGraphHealth,
+  TeamTaskMutationOperation,
+  TeamTaskStatus,
+} from "../domain/teamTask.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { BackgroundTaskKind, BackgroundTaskStatus } from "./backgroundTasks.js";
 import type { CronRunStatus } from "./cronStore.js";
@@ -31,6 +37,17 @@ export interface PluginToolActivation {
     toolName: string;
   }>;
   missing: string[];
+}
+
+export interface TraceTaskGraphError {
+  code: TeamTaskFailureCode;
+  message: string;
+}
+
+export interface TraceTaskGraphProjection {
+  error?: TraceTaskGraphError;
+  health: TeamTaskGraphHealth;
+  revision?: number;
 }
 
 export type TraceEventPayload =
@@ -192,7 +209,16 @@ export type TraceEventPayload =
       callId: string;
       toolName: string;
       status: ToolStatus;
+      taskGraph?: TraceTaskGraphProjection;
       projectedOutput: string;
+    }
+  | {
+      type: "task_graph_mutated";
+      nextStatus?: TeamTaskStatus;
+      operation: TeamTaskMutationOperation;
+      previousStatus?: TeamTaskStatus;
+      revision: number;
+      taskId: string;
     }
   | {
       type: "task_state_updated";

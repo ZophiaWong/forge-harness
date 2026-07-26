@@ -1,4 +1,5 @@
 import type { ChildSessionProfile } from "../runtime/session.js";
+import type { TeamTaskStore } from "../runtime/teamTaskStore.js";
 import type { RegisteredTool, ToolDefinition, ToolResult } from "./types.js";
 
 export interface ChildSessionRunRequest {
@@ -8,6 +9,7 @@ export interface ChildSessionRunRequest {
   profile: ChildSessionProfile;
   runInBackground: boolean;
   task: string;
+  taskId?: string;
 }
 
 export interface ChildSessionRunResult {
@@ -41,6 +43,7 @@ export interface CreateDelegateToolOptions {
   parentCallId?: () => string;
   parentRound?: () => number;
   runner: DelegateChildSessionRunner;
+  taskStore?: TeamTaskStore;
 }
 
 interface DelegateArguments {
@@ -48,6 +51,7 @@ interface DelegateArguments {
   profile: ChildSessionProfile;
   runInBackground: boolean;
   task: string;
+  taskId?: string;
 }
 
 export const delegateToolDefinition: ToolDefinition = {
@@ -63,6 +67,10 @@ export const delegateToolDefinition: ToolDefinition = {
         type: "string",
         description: "The child task prompt. It may include leading slash skill invocations for the child session.",
       },
+      taskId: {
+        type: ["string", "null"],
+        description: "Optional in-progress team task to link to the child. Use null for an ad-hoc read-only graph link.",
+      },
       profile: {
         type: "string",
         description: 'Child profile to run: "research" for read-only investigation, or "edit" for isolated file edits.',
@@ -77,7 +85,7 @@ export const delegateToolDefinition: ToolDefinition = {
         description: "Set true to start the child session asynchronously and receive its handoff later.",
       },
     },
-    required: ["task", "profile", "maxToolRounds", "runInBackground"],
+    required: ["task", "profile", "taskId", "maxToolRounds", "runInBackground"],
   },
 };
 
@@ -107,6 +115,18 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
       }
 
       try {
+        if (args.taskId) {
+          if (!options.taskStore) {
+            throw new Error("delegate taskId requires a root task graph binding");
+          }
+          const linkedTask = await options.taskStore.get(args.taskId);
+          if (linkedTask.task.status !== "in_progress") {
+            throw new Error(
+              `delegate taskId "${args.taskId}" must reference an in_progress team task`,
+            );
+          }
+        }
+
         if (args.runInBackground) {
           const handle = await options.runner.start({
             maxToolRounds,
@@ -115,6 +135,7 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
             profile: args.profile,
             runInBackground: true,
             task: args.task,
+            ...(args.taskId ? { taskId: args.taskId } : {}),
           });
 
           return {
@@ -139,6 +160,7 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
           profile: args.profile,
           runInBackground: false,
           task: args.task,
+          ...(args.taskId ? { taskId: args.taskId } : {}),
         });
 
         if (result.status === "failed") {
@@ -181,7 +203,10 @@ function parseDelegateArguments(rawArguments: string): DelegateArguments | undef
         (typeof parsed.maxToolRounds === "number" && Number.isInteger(parsed.maxToolRounds))) &&
       (!("runInBackground" in parsed) ||
         parsed.runInBackground === null ||
-        typeof parsed.runInBackground === "boolean")
+        typeof parsed.runInBackground === "boolean") &&
+      (!("taskId" in parsed) ||
+        parsed.taskId === null ||
+        (typeof parsed.taskId === "string" && parsed.taskId.trim().length > 0))
     ) {
       const maxToolRounds =
         "maxToolRounds" in parsed && typeof parsed.maxToolRounds === "number" ? parsed.maxToolRounds : undefined;
@@ -194,6 +219,9 @@ function parseDelegateArguments(rawArguments: string): DelegateArguments | undef
         profile: parsed.profile,
         runInBackground,
         task: parsed.task,
+        ...("taskId" in parsed && typeof parsed.taskId === "string"
+          ? { taskId: parsed.taskId }
+          : {}),
       };
     }
   } catch {

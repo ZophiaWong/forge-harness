@@ -1,5 +1,11 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
+import type {
+  TeamTaskFailureCode,
+  TeamTaskGraphHealth,
+  TeamTaskMutationOperation,
+  TeamTaskStatus,
+} from "../domain/teamTask.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { ChildSessionProfile, SessionWorkspaceMetadata } from "./session.js";
 import type { RuntimeTaskState } from "./task.js";
@@ -105,6 +111,26 @@ export interface RuntimeChildHandoffState {
   workspace?: SessionWorkspaceMetadata;
 }
 
+export interface RuntimeTaskGraphErrorState {
+  code: TeamTaskFailureCode;
+  message: string;
+}
+
+export interface RuntimeTaskGraphMutationState {
+  nextStatus?: TeamTaskStatus;
+  operation: TeamTaskMutationOperation;
+  previousStatus?: TeamTaskStatus;
+  revision: number;
+  taskId: string;
+}
+
+export interface RuntimeTaskGraphState {
+  health: TeamTaskGraphHealth;
+  lastError?: RuntimeTaskGraphErrorState;
+  lastMutation?: RuntimeTaskGraphMutationState;
+  lastSeenRevision?: number;
+}
+
 export type RuntimeProblem =
   | {
       kind: "tool_result";
@@ -174,6 +200,7 @@ export interface RuntimeState {
   status: RuntimeStatus;
   taskState?: RuntimeTaskState;
   task?: string;
+  taskGraph?: RuntimeTaskGraphState;
   workspace?: RuntimeWorkspaceState;
 }
 
@@ -340,6 +367,27 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           status: event.status,
           toolName: event.toolName,
         },
+        ...(event.taskGraph
+          ? { taskGraph: applyTaskGraphProjection(state.taskGraph, event.taskGraph) }
+          : {}),
+      };
+    case "task_graph_mutated":
+      return {
+        ...state,
+        taskGraph: {
+          health: state.taskGraph?.health ?? "healthy",
+          ...(state.taskGraph?.lastError
+            ? { lastError: { ...state.taskGraph.lastError } }
+            : {}),
+          lastMutation: {
+            ...(event.nextStatus ? { nextStatus: event.nextStatus } : {}),
+            operation: event.operation,
+            ...(event.previousStatus ? { previousStatus: event.previousStatus } : {}),
+            revision: event.revision,
+            taskId: event.taskId,
+          },
+          lastSeenRevision: event.revision,
+        },
       };
     case "task_state_updated":
       return {
@@ -476,6 +524,28 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
     case "hook_result":
       return state;
   }
+}
+
+function applyTaskGraphProjection(
+  current: RuntimeTaskGraphState | undefined,
+  projection: NonNullable<Extract<TraceEventPayload, { type: "tool_result" }>["taskGraph"]>,
+): RuntimeTaskGraphState {
+  return {
+    health: projection.health,
+    ...(projection.error
+      ? { lastError: { ...projection.error } }
+      : current?.lastError
+        ? { lastError: { ...current.lastError } }
+        : {}),
+    ...(current?.lastMutation
+      ? { lastMutation: { ...current.lastMutation } }
+      : {}),
+    ...(projection.revision !== undefined
+      ? { lastSeenRevision: projection.revision }
+      : current?.lastSeenRevision !== undefined
+        ? { lastSeenRevision: current.lastSeenRevision }
+        : {}),
+  };
 }
 
 export function createRuntimeStateRecorder(delegate: TraceRecorder): RuntimeStateRecorder {
