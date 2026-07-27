@@ -744,3 +744,50 @@ describe("createRuntimeStateRecorder", () => {
     );
   });
 });
+
+describe("teammate runtime projection", () => {
+  it("stores only member summaries and replaces the active session on rejoin transitions", () => {
+    let state = createInitialRuntimeState();
+    state = applyRuntimeStateEvent(state, {
+      name: "docs-editor",
+      profile: "edit",
+      sessionId: "session-a",
+      state: "starting",
+      tracePath: "/trace-a.jsonl",
+      type: "teammate_registered",
+      unreadCount: 1,
+      workspace: {
+        branch: "forge/teammate/root/docs-editor",
+        path: "/repo/.forge/worktrees/root/teammates/docs-editor",
+      },
+    });
+    state = applyRuntimeStateEvent(state, {
+      name: "docs-editor",
+      previousState: "starting",
+      profile: "edit",
+      sessionId: "session-b",
+      state: "busy",
+      tracePath: "/trace-b.jsonl",
+      type: "teammate_state_changed",
+      unreadCount: 0,
+      workspace: {
+        branch: "forge/teammate/root/docs-editor",
+        path: "/repo/.forge/worktrees/root/teammates/docs-editor",
+      },
+    });
+
+    expect(state.teammates).toEqual([{
+      name: "docs-editor",
+      profile: "edit",
+      sessionId: "session-b",
+      state: "busy",
+      tracePath: "/trace-b.jsonl",
+      unreadCount: 0,
+      workspace: {
+        branch: "forge/teammate/root/docs-editor",
+        path: "/repo/.forge/worktrees/root/teammates/docs-editor",
+      },
+    }]);
+    expect(JSON.stringify(state)).not.toContain("mailbox body");
+  });
+});

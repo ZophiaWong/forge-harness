@@ -64,6 +64,29 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
     };
   }
 
+  if (toolCall.name === "teammate_start") {
+    const profile = parseTeammateStartProfile(toolCall.arguments);
+    if (profile === "research") {
+      return allow("read-only long-lived teammate");
+    }
+    if (profile === "edit") {
+      return ask("mutating", "write-capable teammate may modify its stable isolated worktree");
+    }
+    return deny("unknown", "teammate_start profile must be research or edit");
+  }
+
+  if (toolCall.name === "teammate_rejoin") {
+    return ask("unknown", "rejoin creates a fresh model session for a failed teammate");
+  }
+
+  if (
+    toolCall.name === "teammate_list"
+    || toolCall.name === "message_send"
+    || toolCall.name === "message_broadcast"
+  ) {
+    return allow("team mailbox operation");
+  }
+
   if (toolCall.name === "delegate") {
     const args = parseDelegateArguments(toolCall.arguments);
 
@@ -183,6 +206,23 @@ function parseDelegateArguments(rawArguments: string): DelegateArguments | undef
     return undefined;
   }
 
+  return undefined;
+}
+
+function parseTeammateStartProfile(rawArguments: string): "research" | "edit" | undefined {
+  try {
+    const parsed: unknown = JSON.parse(rawArguments);
+    if (
+      typeof parsed === "object"
+      && parsed !== null
+      && "profile" in parsed
+      && (parsed.profile === "research" || parsed.profile === "edit")
+    ) {
+      return parsed.profile;
+    }
+  } catch {
+    return undefined;
+  }
   return undefined;
 }
 

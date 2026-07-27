@@ -22,9 +22,14 @@ vi.mock("openai", () => ({
   default: OpenAIMock,
 }));
 
-import { runMinimalLoop, type ResponseCreate } from "../../src/core/minimalLoop.js";
+import {
+  createMinimalLoopSession,
+  runMinimalLoop,
+  type ResponseCreate,
+} from "../../src/core/minimalLoop.js";
 import type { PromptAssets } from "../../src/context/promptAssembly.js";
 import type { ChildSessionRunner } from "../../src/extensions/childSessions.js";
+import type { TeammateManager } from "../../src/extensions/teammates.js";
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
@@ -2269,5 +2274,145 @@ describe("runMinimalLoop", () => {
         type: "function_call_output",
       }),
     );
+  });
+});
+
+describe("createMinimalLoopSession", () => {
+  it("keeps history and tools across turns while resetting the per-turn round budget", async () => {
+    const trace = createTraceRecorder();
+    const toolRuntime: ToolRuntime = {
+      close: vi.fn(async () => undefined),
+      execute: vi.fn(async () => ({
+        content: "first observation",
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [{
+        description: "Read a fixture.",
+        name: "read",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    const responseCreate = createResponseCreate(
+      {
+        output: [{
+          arguments: '{"path":"README.md"}',
+          call_id: "call_first",
+          name: "read",
+          type: "function_call",
+        }],
+        output_text: "",
+      },
+      { output: [], output_text: "first done" },
+      { output: [], output_text: "follow-up done" },
+    );
+    const transcript = {
+      finalAnswer: vi.fn(),
+      roundStart: vi.fn(),
+      toolCall: vi.fn(),
+      toolResult: vi.fn(),
+    };
+
+    const session = await createMinimalLoopSession({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      promptAssets: { skills: [] },
+      responseCreate,
+      task: "Keep helping in the same teammate session.",
+      toolRuntime,
+      transcript,
+    });
+
+    await expect(session.runTurn("Inspect the README.")).resolves.toEqual({
+      finalAnswer: "first done",
+      rounds: 2,
+    });
+    expect(toolRuntime.close).not.toHaveBeenCalled();
+
+    await expect(session.runTurn("What did you observe?")).resolves.toEqual({
+      finalAnswer: "follow-up done",
+      rounds: 1,
+    });
+
+    expect(transcript.roundStart.mock.calls.map(([round]) => round)).toEqual([1, 2, 3]);
+    expect(callsFor(responseCreate)[2]?.input).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        content: "What did you observe?",
+        role: "user",
+      }),
+      expect.objectContaining({
+        call_id: "call_first",
+        output: expect.stringContaining("first observation"),
+        type: "function_call_output",
+      }),
+    ]));
+
+    await session.close("completed");
+    await session.close("completed");
+
+    expect(toolRuntime.close).toHaveBeenCalledOnce();
+    expect(trace.events.filter((event) => event.type === "session_started")).toHaveLength(1);
+    expect(trace.events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ rounds: 3, status: "completed" }),
+    ]);
+  });
+
+  it("waits for team activity at the final gate without polling the model", async () => {
+    const activity = createDeferred<Awaited<ReturnType<TeammateManager["settleBeforeFinal"]>>>();
+    const responseCreate = createResponseCreate(
+      { output: [], output_text: "candidate before teammate result" },
+      { output: [], output_text: "final with teammate result" },
+    );
+    const teammateMessage = {
+      content: "research completed",
+      createdAt: "2026-07-27T08:00:00.000Z",
+      from: "researcher",
+      id: "msg_leader_000001",
+      kind: "turn_result" as const,
+      schemaVersion: 1 as const,
+      sequence: 1,
+      sessionId: "teammate-session",
+      to: "leader",
+    };
+    const teammates = {
+      drainLeaderMessages: vi.fn(async () => []),
+      settleBeforeFinal: vi.fn()
+        .mockImplementationOnce(async () => activity.promise)
+        .mockResolvedValueOnce([]),
+    } as unknown as TeammateManager;
+
+    const running = runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      maxToolRounds: 2,
+      promptAssets: { skills: [] },
+      responseCreate,
+      task: "wait for the teammate",
+      teammates,
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+    for (let attempt = 0; attempt < 20 && callsFor(responseCreate).length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    expect(callsFor(responseCreate)).toHaveLength(1);
+    activity.resolve([teammateMessage]);
+
+    await expect(running).resolves.toEqual({
+      finalAnswer: "final with teammate result",
+      rounds: 2,
+    });
+    expect(callsFor(responseCreate)[1]?.input).toContainEqual(expect.objectContaining({
+      content: expect.stringContaining("msg_leader_000001"),
+      role: "user",
+    }));
   });
 });

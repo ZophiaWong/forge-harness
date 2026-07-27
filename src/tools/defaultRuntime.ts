@@ -13,6 +13,8 @@ import type { ToolRuntime } from "./types.js";
 import { createWriteTool } from "./writeTool.js";
 import type { BackgroundTaskManager } from "../runtime/backgroundTasks.js";
 import type { CronScheduleStore } from "../runtime/cronStore.js";
+import type { TeammateManager } from "../extensions/teammates.js";
+import { createTeammateTools } from "./teammateTools.js";
 
 export interface DefaultToolRuntimeOptions {
   backgroundTasks?: BackgroundTaskManager;
@@ -23,6 +25,7 @@ export interface DefaultToolRuntimeOptions {
   parentCallId?: () => string;
   parentRound?: () => number;
   teamTasks?: TeamTaskToolRuntimeOptions;
+  teammates?: TeammateManager;
 }
 
 export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): ToolRuntime {
@@ -36,6 +39,9 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
     createWriteTool(options.cwd),
     createTodoTool(),
     ...(options.teamTasks ? createTeamTaskTools(options.teamTasks) : []),
+    ...(options.teammates
+      ? createTeammateTools({ actor: "leader", manager: options.teammates })
+      : []),
     ...(options.childSessionRunner
       ? [
           createDelegateTool({

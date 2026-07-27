@@ -19,6 +19,12 @@ export interface CreateGitWorktreeWorkspaceOptions {
   sessionId: string;
 }
 
+export interface CreateGitTeammateWorkspaceOptions {
+  baseCwd: string;
+  name: string;
+  rootSessionId: string;
+}
+
 export class WorkspaceSetupError extends Error {
   readonly baseCwd: string;
   readonly branch: string;
@@ -41,6 +47,32 @@ export function createWorktreeBranchName(sessionId: string): string {
   return `forge/run/${sessionId}`;
 }
 
+export function createTeammateWorktreePath(
+  baseCwd: string,
+  rootSessionId: string,
+  name: string,
+): string {
+  validateWorkspaceSegment(rootSessionId, "root session id");
+  validateWorkspaceSegment(name, "teammate name");
+  return path.join(
+    baseCwd,
+    ".forge",
+    "worktrees",
+    rootSessionId,
+    "teammates",
+    name,
+  );
+}
+
+export function createTeammateWorktreeBranchName(
+  rootSessionId: string,
+  name: string,
+): string {
+  validateWorkspaceSegment(rootSessionId, "root session id");
+  validateWorkspaceSegment(name, "teammate name");
+  return `forge/teammate/${rootSessionId}/${name}`;
+}
+
 export async function createGitWorktreeWorkspace(
   options: CreateGitWorktreeWorkspaceOptions,
 ): Promise<WorkspaceBinding> {
@@ -48,6 +80,29 @@ export async function createGitWorktreeWorkspace(
   const workspacePath = createWorktreePath(baseCwd, options.sessionId);
   const branch = createWorktreeBranchName(options.sessionId);
 
+  return createWorkspace({ baseCwd, branch, workspacePath });
+}
+
+export async function createGitTeammateWorkspace(
+  options: CreateGitTeammateWorkspaceOptions,
+): Promise<WorkspaceBinding> {
+  const baseCwd = path.resolve(options.baseCwd);
+  const workspacePath = createTeammateWorktreePath(
+    baseCwd,
+    options.rootSessionId,
+    options.name,
+  );
+  const branch = createTeammateWorktreeBranchName(options.rootSessionId, options.name);
+
+  return createWorkspace({ baseCwd, branch, workspacePath });
+}
+
+async function createWorkspace(options: {
+  baseCwd: string;
+  branch: string;
+  workspacePath: string;
+}): Promise<WorkspaceBinding> {
+  const { baseCwd, branch, workspacePath } = options;
   const fail = (message: string): WorkspaceSetupError =>
     new WorkspaceSetupError(message, { baseCwd, branch, workspacePath });
 
@@ -102,6 +157,12 @@ export async function createGitWorktreeWorkspace(
     mode: "git_worktree",
     path: workspacePath,
   };
+}
+
+function validateWorkspaceSegment(value: string, field: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(value)) {
+    throw new Error(`${field} must contain only letters, numbers, and hyphens`);
+  }
 }
 
 async function git(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
