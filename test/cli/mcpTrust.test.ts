@@ -1,8 +1,9 @@
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
 import { createCliMcpServerTrustApprover } from "../../src/cli/mcpTrust.js";
+import { createCliTerminalCoordinator } from "../../src/cli/terminal.js";
 import type { McpProjectConfig } from "../../src/extensions/mcpConfig.js";
 
 const config: McpProjectConfig = {
@@ -74,7 +75,43 @@ describe("createCliMcpServerTrustApprover", () => {
     });
     expect(text()).toBe("");
   });
+
+  it("uses the shared terminal coordinator while awaiting trust input", async () => {
+    const input = controlledInput();
+    const { output, text } = writableOutput();
+    const terminal = createCliTerminalCoordinator({
+      stderr: output,
+      stdout: output,
+    });
+    const approver = createCliMcpServerTrustApprover({ input, output, terminal });
+    const approval = approver.approve({ baseCwd: "/workspace", config });
+    await waitUntil(() => text().includes("[y/N]:"));
+
+    terminal.log("[mailbox] queued while MCP trust is active");
+    const outputBeforeAnswer = text();
+    input.write("yes\n");
+
+    await expect(approval).resolves.toEqual({ approved: true });
+    expect(outputBeforeAnswer).not.toContain("[mailbox]");
+    expect(text()).toContain("[mailbox] queued while MCP trust is active");
+  });
 });
+
+function controlledInput(): NodeJS.ReadStream {
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  Object.defineProperty(input, "isTTY", { value: true });
+  return input;
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("condition was not met");
+}
 
 function readableInput(text: string, isTTY = true): NodeJS.ReadStream {
   const input = Readable.from([text]) as NodeJS.ReadStream;

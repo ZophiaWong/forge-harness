@@ -183,6 +183,9 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
     state: TeammateLifecycleState,
     failure?: string,
   ): Promise<void> => {
+    if (member.runtime.state === state && member.runtime.failure === failure) {
+      return;
+    }
     const previousState = member.runtime.state;
     member.runtime = {
       name: member.definition.name,

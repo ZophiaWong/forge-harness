@@ -1,6 +1,10 @@
 import { createInterface } from "node:readline/promises";
 
 import type { ResolvedPluginDescriptor } from "../extensions/pluginDescriptors.js";
+import {
+  createCliTerminalCoordinator,
+  type CliTerminalCoordinator,
+} from "./terminal.js";
 
 export interface PluginTrustRequest {
   descriptor: ResolvedPluginDescriptor;
@@ -18,6 +22,7 @@ export interface PluginTrustApprover {
 export interface CliPluginTrustApproverOptions {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
+  terminal?: CliTerminalCoordinator;
 }
 
 export function createCliPluginTrustApprover(
@@ -25,6 +30,7 @@ export function createCliPluginTrustApprover(
 ): PluginTrustApprover {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
+  const terminal = options.terminal ?? createCliTerminalCoordinator({ stdout: output });
 
   return {
     async approve(request) {
@@ -35,23 +41,25 @@ export function createCliPluginTrustApprover(
         };
       }
 
-      const readline = createInterface({ input, output });
+      return terminal.withPrompt(async () => {
+        const readline = createInterface({ input, output });
 
-      try {
-        writePluginTrustPrompt(output, request.descriptor);
-        const answer = await readline.question("[y/N]: ");
+        try {
+          writePluginTrustPrompt(output, request.descriptor);
+          const answer = await readline.question("[y/N]: ");
 
-        if (/^(?:y|yes)$/i.test(answer.trim())) {
-          return { approved: true };
+          if (/^(?:y|yes)$/i.test(answer.trim())) {
+            return { approved: true };
+          }
+
+          return {
+            approved: false,
+            reason: "Plugin activation rejected by user",
+          };
+        } finally {
+          readline.close();
         }
-
-        return {
-          approved: false,
-          reason: "Plugin activation rejected by user",
-        };
-      } finally {
-        readline.close();
-      }
+      });
     },
   };
 }
