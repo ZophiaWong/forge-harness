@@ -24,6 +24,10 @@ import {
 import { loadRepoPromptAssets } from "../context/promptAssembly.js";
 import { DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_MODEL, runMinimalLoop } from "../core/minimalLoop.js";
 import { createChildSessionRunner } from "../extensions/childSessions.js";
+import {
+  createTeammateManager,
+  type TeammateManager,
+} from "../extensions/teammates.js";
 import { createCronWorker, type ScheduledRunResult } from "../extensions/cronWorker.js";
 import { createLifecycleEmitter, type LifecycleHook } from "../extensions/lifecycle.js";
 import { loadMcpProjectConfig } from "../extensions/mcpConfig.js";
@@ -76,6 +80,9 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
   let getRuntimeState: (() => RuntimeState) | undefined;
   let mcpSession: McpSession | undefined;
   let pluginMcpActivation: PluginMcpActivationResult | undefined;
+  let teammateManager: TeammateManager | undefined;
+  let rootRunCompleted = false;
+  let removeTeamSignalHandlers: (() => void) | undefined;
 
   if (!task) {
     console.error(usageText("forge-harness"));
@@ -244,6 +251,21 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       console.log(`[plugin] activation ${event.pluginName}@${event.version} status=${event.status}`);
     }
 
+    teammateManager = createTeammateManager({
+      approver,
+      baseCwd,
+      lifecycleEmitter,
+      model,
+      onLog(message) {
+        console.log(message);
+      },
+      rootSessionId: sessionTrace.metadata.id,
+      taskGraph,
+      teamRoot: path.join(sessionTrace.paths.sessionDir, "team"),
+    });
+    await teammateManager.initialize();
+    removeTeamSignalHandlers = installTeamSignalHandlers(teammateManager);
+
     await runMinimalLoop({
       ...(additionalToolRuntimes.length > 0 ? { additionalToolRuntimes } : {}),
       approver,
@@ -273,6 +295,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       runtimeState: runtimeStateTrace.getState,
       task,
       teamTasks,
+      teammates: teammateManager,
       transcript: {
         roundStart(round, modelName) {
           console.log(`\n[round ${round}] model=${modelName}`);
@@ -310,6 +333,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       },
       ...(verifier ? { verifier } : {}),
     });
+    rootRunCompleted = true;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     if (getRuntimeState) {
@@ -318,9 +342,36 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     console.error(`forge-harness failed: ${message}`);
     process.exitCode = 1;
   } finally {
+    removeTeamSignalHandlers?.();
+    if (teammateManager) {
+      if (rootRunCompleted) {
+        await teammateManager.close();
+      } else {
+        await teammateManager.terminateAll();
+      }
+    }
     await pluginMcpActivation?.close();
     await mcpSession?.close();
   }
+}
+
+function installTeamSignalHandlers(manager: TeammateManager): () => void {
+  const onSigint = () => {
+    void manager.terminateAll().finally(() => {
+      process.exitCode = 130;
+    });
+  };
+  const onSigterm = () => {
+    void manager.terminateAll().finally(() => {
+      process.exitCode = 143;
+    });
+  };
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  return () => {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  };
 }
 
 async function runCronWorkerCli(cliArgs: ParsedCliArgs): Promise<void> {

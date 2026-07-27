@@ -358,6 +358,72 @@ export type TraceEventPayload =
       answer: string;
     }
   | {
+      type: "teammate_registered";
+      name: string;
+      profile: ChildSessionProfile;
+      sessionId: string;
+      state: "starting";
+      tracePath: string;
+      unreadCount: number;
+      workspace?: {
+        branch: string;
+        path: string;
+      };
+    }
+  | {
+      type: "teammate_state_changed";
+      failure?: string;
+      name: string;
+      previousState: "starting" | "busy" | "idle" | "failed" | "stopped";
+      profile: ChildSessionProfile;
+      sessionId: string;
+      state: "starting" | "busy" | "idle" | "failed" | "stopped";
+      tracePath: string;
+      unreadCount: number;
+      workspace?: {
+        branch: string;
+        path: string;
+      };
+    }
+  | {
+      type: "team_mailbox_message_persisted";
+      from: string;
+      kind: "direct" | "broadcast" | "turn_result" | "failure_notice";
+      messageId: string;
+      to: string;
+    }
+  | {
+      type: "team_mailbox_claimed";
+      address: string;
+      messageIds: string[];
+    }
+  | {
+      type: "team_broadcast_result";
+      delivered: string[];
+      failed: Array<{ reason: string; to: string }>;
+    }
+  | {
+      type: "teammate_approval_brokered";
+      approved: boolean;
+      name: string;
+      requestId: string;
+      sessionId: string;
+      toolName: "edit" | "write";
+    }
+  | {
+      type: "teammate_rejoined";
+      name: string;
+      previousSessionId: string;
+      recoveryMessageId: string;
+      sessionId: string;
+      tracePath: string;
+    }
+  | {
+      type: "team_cleanup";
+      mode: "graceful" | "terminate";
+      stopped: string[];
+    }
+  | {
       type: "session_failed";
       message: string;
     }

@@ -7,7 +7,10 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import {
+  createGitTeammateWorkspace,
   createGitWorktreeWorkspace,
+  createTeammateWorktreeBranchName,
+  createTeammateWorktreePath,
   createWorktreeBranchName,
   createWorktreePath,
   WorkspaceSetupError,
@@ -23,6 +26,28 @@ describe("git worktree workspace", () => {
     expect(createWorktreeBranchName("20260713-101500-a1b2c3d4")).toBe(
       "forge/run/20260713-101500-a1b2c3d4",
     );
+  });
+
+  it("derives and creates the stable root-session teammate workspace", async () => {
+    const repo = await createGitRepo();
+
+    expect(createTeammateWorktreePath(repo, "root-session", "docs-editor")).toBe(
+      path.join(repo, ".forge", "worktrees", "root-session", "teammates", "docs-editor"),
+    );
+    expect(createTeammateWorktreeBranchName("root-session", "docs-editor")).toBe(
+      "forge/teammate/root-session/docs-editor",
+    );
+
+    const binding = await createGitTeammateWorkspace({
+      baseCwd: repo,
+      name: "docs-editor",
+      rootSessionId: "root-session",
+    });
+
+    expect(binding).toMatchObject({
+      branch: "forge/teammate/root-session/docs-editor",
+      path: path.join(repo, ".forge", "worktrees", "root-session", "teammates", "docs-editor"),
+    });
   });
 
   it("creates a session branch and worktree from a clean git repo", async () => {
