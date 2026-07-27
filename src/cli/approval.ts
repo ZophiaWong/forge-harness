@@ -1,15 +1,21 @@
 import { createInterface } from "node:readline/promises";
 
 import type { ApprovalRequest, PermissionApprover } from "../governance/types.js";
+import {
+  createCliTerminalCoordinator,
+  type CliTerminalCoordinator,
+} from "./terminal.js";
 
 export interface CliApproverOptions {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
+  terminal?: CliTerminalCoordinator;
 }
 
 export function createCliApprover(options: CliApproverOptions = {}): PermissionApprover {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
+  const terminal = options.terminal ?? createCliTerminalCoordinator({ stdout: output });
 
   return {
     async approve(request) {
@@ -20,24 +26,26 @@ export function createCliApprover(options: CliApproverOptions = {}): PermissionA
         };
       }
 
-      const readline = createInterface({ input, output });
+      return terminal.withPrompt(async () => {
+        const readline = createInterface({ input, output });
 
-      try {
-        writeApprovalPrompt(output, request);
-        const answer = await readline.question("[y/N]: ");
-        const approved = /^(?:y|yes)$/i.test(answer.trim());
+        try {
+          writeApprovalPrompt(output, request);
+          const answer = await readline.question("[y/N]: ");
+          const approved = /^(?:y|yes)$/i.test(answer.trim());
 
-        if (approved) {
-          return { approved: true };
+          if (approved) {
+            return { approved: true };
+          }
+
+          return {
+            approved: false,
+            reason: "approval rejected by user",
+          };
+        } finally {
+          readline.close();
         }
-
-        return {
-          approved: false,
-          reason: "approval rejected by user",
-        };
-      } finally {
-        readline.close();
-      }
+      });
     },
   };
 }

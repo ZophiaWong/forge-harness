@@ -155,7 +155,9 @@ message_request, list_request, approval_request
 
 research worker 只有 `read`、`ls`、`grep`、`find`、`todo`、允许的 `task_*` 读取/证据工具，以及 `teammate_list`、`message_send`。edit worker 在此基础上得到 `edit`、`write`，不获得 `bash`、delegate、cron、MCP 或 plugin tools。
 
-worker 的 `edit` / `write` approval request 回到 Leader 的 FIFO approval queue。CLI approval 文本带 teammate name，Leader 可以逐项判断；approval result 再通过 IPC 返回原 worker。
+worker 的 `edit` / `write` approval request 会回到 Leader。root loop、child session 和 worker broker 共用一个 CLI FIFO；即使几处同时要求确认，终端也只显示一个 prompt。Leader 逐项判断后，approval result 再通过 IPC 返回原 worker。
+
+等待输入时，mailbox 持久化、IPC 和 lifecycle 处理不会停。此时产生的 `[mailbox]`、`[team]` 等 CLI 摘要先缓存在内存里，readline 关闭后再按顺序打印。这样后台结果不会插进 `[y/N]:`，也不会让两个 approval 同时读取 stdin。MCP 与 plugin trust prompt 使用同一个终端协调器。
 
 每个 mailbox message 都独立投影：
 
@@ -227,7 +229,7 @@ npm run start -- 'Run a c17b long-lived research smoke. First call teammate_star
 npm run start -- 'Run a c17b broadcast and edit-preview smoke. Start research teammate repo-researcher with instructions="Answer mailbox messages briefly.", message="List the top-level docs directory and summarize it.", taskId=null, maxToolRounds=3. Then start edit teammate docs-editor with instructions="Work only in your stable worktree. On the first message create c17b-smoke.txt containing exactly c17b edit preview followed by a newline. On later messages answer briefly without another edit.", message="Create the requested preview file.", taskId=null, maxToolRounds=3. Approve the edit/write prompt. Then call message_broadcast with content="Reply with your name, profile, and whether your first task is done." Wait for all turn results. Report both session IDs plus docs-editor workspace branch, path, and changedFiles.'
 ```
 
-edit start 会触发 Leader approval。最终回执应列出 `c17b-smoke.txt`，文件位于 teammate worktree，不在当前 checkout。broadcast 若在成员 busy 时到达，会显示 `queued_busy`，并在下一批处理。
+edit start 会触发 Leader approval。如果 research 的 `turn_result` 恰好在此时到达，输入一次 `y` 并回车即可；`[mailbox]` 和 `[team]` 摘要会在 prompt 结束后出现，`repo-researcher` 只打印一次 `idle`。最终回执应列出 `c17b-smoke.txt`，文件位于 teammate worktree，不在当前 checkout。broadcast 若在成员 busy 时到达，会显示 `queued_busy`，并在下一批处理。
 
 ### 3. failure、offline queue 与 explicit rejoin
 

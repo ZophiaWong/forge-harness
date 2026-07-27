@@ -1,6 +1,10 @@
 import { createInterface } from "node:readline/promises";
 
 import type { McpProjectConfig } from "../extensions/mcpConfig.js";
+import {
+  createCliTerminalCoordinator,
+  type CliTerminalCoordinator,
+} from "./terminal.js";
 
 export interface McpServerTrustRequest {
   baseCwd: string;
@@ -19,6 +23,7 @@ export interface McpServerTrustApprover {
 export interface CliMcpServerTrustApproverOptions {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
+  terminal?: CliTerminalCoordinator;
 }
 
 export function createCliMcpServerTrustApprover(
@@ -26,6 +31,7 @@ export function createCliMcpServerTrustApprover(
 ): McpServerTrustApprover {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
+  const terminal = options.terminal ?? createCliTerminalCoordinator({ stdout: output });
 
   return {
     async approve(request) {
@@ -36,23 +42,25 @@ export function createCliMcpServerTrustApprover(
         };
       }
 
-      const readline = createInterface({ input, output });
+      return terminal.withPrompt(async () => {
+        const readline = createInterface({ input, output });
 
-      try {
-        writeTrustPrompt(output, request);
-        const answer = await readline.question("[y/N]: ");
+        try {
+          writeTrustPrompt(output, request);
+          const answer = await readline.question("[y/N]: ");
 
-        if (/^(?:y|yes)$/i.test(answer.trim())) {
-          return { approved: true };
+          if (/^(?:y|yes)$/i.test(answer.trim())) {
+            return { approved: true };
+          }
+
+          return {
+            approved: false,
+            reason: "MCP server startup rejected by user",
+          };
+        } finally {
+          readline.close();
         }
-
-        return {
-          approved: false,
-          reason: "MCP server startup rejected by user",
-        };
-      } finally {
-        readline.close();
-      }
+      });
     },
   };
 }

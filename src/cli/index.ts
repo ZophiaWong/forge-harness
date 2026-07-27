@@ -6,6 +6,7 @@ import path from "node:path";
 import { createCliApprover } from "./approval.js";
 import { createCliMcpServerTrustApprover } from "./mcpTrust.js";
 import { createCliPluginTrustApprover } from "./pluginTrust.js";
+import { createCliTerminalCoordinator } from "./terminal.js";
 import { type ParsedCliArgs, parseCliArgs, usageText } from "./args.js";
 import {
   formatContextCompactionTranscript,
@@ -83,9 +84,10 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
   let teammateManager: TeammateManager | undefined;
   let rootRunCompleted = false;
   let removeTeamSignalHandlers: (() => void) | undefined;
+  const terminal = createCliTerminalCoordinator();
 
   if (!task) {
-    console.error(usageText("forge-harness"));
+    terminal.error(usageText("forge-harness"));
     process.exitCode = 1;
     return;
   }
@@ -127,7 +129,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
           {
             name: "event-log",
             handle(event) {
-              console.log(formatHookLogTranscript(event));
+              terminal.log(formatHookLogTranscript(event));
             },
           },
         ]
@@ -139,9 +141,9 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     });
     getRuntimeState = runtimeStateTrace.getState;
     const displayTracePath = path.relative(baseCwd, sessionTrace.paths.tracePath);
-    const approver = createCliApprover();
+    const approver = createCliApprover({ terminal });
 
-    console.log(formatSessionTranscript(sessionTrace.metadata.id, displayTracePath));
+    terminal.log(formatSessionTranscript(sessionTrace.metadata.id, displayTracePath));
 
     const workspace = cliArgs.worktree
       ? await prepareWorktreeSession({
@@ -163,12 +165,12 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       : undefined;
 
     if (workspace) {
-      console.log(formatWorkspaceTranscript(toDisplayWorkspace(workspace, baseCwd)));
+      terminal.log(formatWorkspaceTranscript(toDisplayWorkspace(workspace, baseCwd)));
     }
 
     const resolvedPlugins = resolvePluginDescriptors(pluginPreflight.plugins, executionCwd);
     const standaloneTrust = mcpConfig
-      ? await createCliMcpServerTrustApprover().approve({ baseCwd, config: mcpConfig })
+      ? await createCliMcpServerTrustApprover({ terminal }).approve({ baseCwd, config: mcpConfig })
       : undefined;
 
     if (mcpConfig && standaloneTrust) {
@@ -181,7 +183,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     }
 
     const pluginTrustDecisions = await collectPluginTrustDecisions({
-      approver: createCliPluginTrustApprover(),
+      approver: createCliPluginTrustApprover({ terminal }),
       descriptors: resolvedPlugins,
       lifecycleEmitter: startupEmitter,
     });
@@ -200,14 +202,14 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
             lifecycleEmitter,
             server: mcpConfig.server,
           });
-          console.log(formatMcpSessionTranscript(mcpConfig.server.id, mcpSession.diagnostics));
+          terminal.log(formatMcpSessionTranscript(mcpConfig.server.id, mcpSession.diagnostics));
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           const phase = error instanceof McpSessionStartError ? ` phase=${error.phase}` : "";
-          console.error(formatMcpDisabledTranscript(mcpConfig.server.id, `${reason}${phase}`));
+          terminal.error(formatMcpDisabledTranscript(mcpConfig.server.id, `${reason}${phase}`));
         }
       } else {
-        console.error(formatMcpDisabledTranscript(
+        terminal.error(formatMcpDisabledTranscript(
           mcpConfig.server.id,
           standaloneTrust.reason ?? "startup rejected",
         ));
@@ -220,9 +222,15 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     });
     for (const serverResult of pluginMcpActivation.servers) {
       if (serverResult.status === "active") {
-        console.log(formatMcpSessionTranscript(serverResult.descriptor.server.id, serverResult.diagnostics));
+        terminal.log(formatMcpSessionTranscript(
+          serverResult.descriptor.server.id,
+          serverResult.diagnostics,
+        ));
       } else {
-        console.error(formatMcpDisabledTranscript(serverResult.descriptor.server.id, serverResult.reason));
+        terminal.error(formatMcpDisabledTranscript(
+          serverResult.descriptor.server.id,
+          serverResult.reason,
+        ));
       }
     }
 
@@ -248,7 +256,9 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
     });
     for (const event of activationEvents) {
       await lifecycleEmitter.emit(event);
-      console.log(`[plugin] activation ${event.pluginName}@${event.version} status=${event.status}`);
+      terminal.log(
+        `[plugin] activation ${event.pluginName}@${event.version} status=${event.status}`,
+      );
     }
 
     teammateManager = createTeammateManager({
@@ -257,7 +267,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       lifecycleEmitter,
       model,
       onLog(message) {
-        console.log(message);
+        terminal.log(message);
       },
       rootSessionId: sessionTrace.metadata.id,
       taskGraph,
@@ -298,37 +308,37 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       teammates: teammateManager,
       transcript: {
         roundStart(round, modelName) {
-          console.log(`\n[round ${round}] model=${modelName}`);
+          terminal.log(`\n[round ${round}] model=${modelName}`);
         },
         promptAssembly(round, summary) {
-          console.log(formatPromptAssemblyTranscript(round, summary));
+          terminal.log(formatPromptAssemblyTranscript(round, summary));
         },
         contextCompaction(compaction) {
-          console.log(formatContextCompactionTranscript(compaction));
+          terminal.log(formatContextCompactionTranscript(compaction));
         },
         roundState(round, state) {
-          console.log(formatRuntimeStateTranscript(state, round));
+          terminal.log(formatRuntimeStateTranscript(state, round));
         },
         toolCall(round, toolName, argumentsText) {
-          console.log(formatFunctionCallTranscript(round, toolName, argumentsText));
+          terminal.log(formatFunctionCallTranscript(round, toolName, argumentsText));
         },
         permissionDecision(round, decision) {
-          console.log(formatPermissionDecisionTranscript(round, decision));
+          terminal.log(formatPermissionDecisionTranscript(round, decision));
         },
         recoveryAttempt(_round, attempt, maxAttempts) {
-          console.log(formatRecoveryTranscript(attempt, maxAttempts));
+          terminal.log(formatRecoveryTranscript(attempt, maxAttempts));
         },
         toolResult(round, resultText) {
-          console.log(`[round ${round}] tool_result:\n${resultText}`);
+          terminal.log(`[round ${round}] tool_result:\n${resultText}`);
         },
         verificationResult(_round, result) {
-          console.log(formatVerificationTranscript(result));
+          terminal.log(formatVerificationTranscript(result));
         },
         finalAnswer(answer) {
-          console.log(`\n[final]\n${answer}`);
+          terminal.log(`\n[final]\n${answer}`);
         },
         finalState(state) {
-          console.log(formatRuntimeStateTranscript(state));
+          terminal.log(formatRuntimeStateTranscript(state));
         },
       },
       ...(verifier ? { verifier } : {}),
@@ -337,9 +347,9 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     if (getRuntimeState) {
-      console.error(formatRuntimeStateTranscript(getRuntimeState()));
+      terminal.error(formatRuntimeStateTranscript(getRuntimeState()));
     }
-    console.error(`forge-harness failed: ${message}`);
+    terminal.error(`forge-harness failed: ${message}`);
     process.exitCode = 1;
   } finally {
     removeTeamSignalHandlers?.();

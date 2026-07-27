@@ -13,7 +13,11 @@ import {
   type TeammateProcessAdapter,
   type TeammateToLeaderMessage,
 } from "../../src/extensions/teammates.js";
-import { createNoopTraceRecorder } from "../../src/runtime/trace.js";
+import {
+  createNoopTraceRecorder,
+  type TraceEventPayload,
+  type TraceRecorder,
+} from "../../src/runtime/trace.js";
 import {
   createFileMailboxStore,
   type MailboxStore,
@@ -120,6 +124,53 @@ describe("TeammateManager", () => {
     });
     await fixture.manager.flushEvents();
     expect(await fixture.manager.drainLeaderMessages()).toEqual([]);
+  });
+
+  it("emits one idle transition when a completed turn has no unread follow-up", async () => {
+    const events: TraceEventPayload[] = [];
+    const logs: string[] = [];
+    const recorder: TraceRecorder = {
+      async record(event) {
+        events.push(event);
+      },
+    };
+    const fixture = await createFixture(["session-a"], {
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      onLog(message) {
+        logs.push(message);
+      },
+    });
+    const started = fixture.manager.start({
+      instructions: "Keep researching.",
+      message: "first",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+
+    process.emit({
+      finalAnswer: "first result",
+      sessionId: "session-a",
+      type: "turn_result",
+    });
+    await fixture.manager.flushEvents();
+
+    expect(events.filter(
+      (event) => event.type === "teammate_state_changed" && event.state === "idle",
+    )).toEqual([
+      expect.objectContaining({
+        previousState: "busy",
+        state: "idle",
+      }),
+    ]);
+    expect(logs.filter((message) => message.includes("state=idle"))).toEqual([
+      "[team] name=researcher state=idle session=session-a",
+    ]);
+    await expect(fixture.manager.list()).resolves.toEqual([
+      expect.objectContaining({ name: "researcher", state: "idle" }),
+    ]);
   });
 
   it("keeps a failed member offline, does not replay its claimed batch, and rejoin uses recovery first", async () => {
@@ -582,7 +633,7 @@ async function createFixture(
   sessionIds: string[],
   overrides: Partial<Pick<
     CreateTeammateManagerOptions,
-    "approver" | "mailboxStore" | "workspaceFactory"
+    "approver" | "lifecycleEmitter" | "mailboxStore" | "onLog" | "workspaceFactory"
   >> = {},
 ) {
   const baseCwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammates-"));

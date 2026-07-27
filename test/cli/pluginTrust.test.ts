@@ -1,8 +1,9 @@
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
 import { createCliPluginTrustApprover } from "../../src/cli/pluginTrust.js";
+import { createCliTerminalCoordinator } from "../../src/cli/terminal.js";
 import { resolvePluginDescriptors } from "../../src/extensions/pluginDescriptors.js";
 import type { PluginDescriptor } from "../../src/extensions/pluginPreflight.js";
 
@@ -73,7 +74,47 @@ describe("createCliPluginTrustApprover", () => {
     });
     expect(text()).toBe("");
   });
+
+  it("uses the shared terminal coordinator while awaiting trust input", async () => {
+    const input = controlledInput();
+    const { output, text } = writableOutput();
+    const terminal = createCliTerminalCoordinator({
+      stderr: output,
+      stdout: output,
+    });
+    const descriptor = resolvePluginDescriptors([plugin()], "/worktrees/session-1")[0]!;
+    const approver = createCliPluginTrustApprover({ input, output, terminal });
+    const approval = approver.approve({ descriptor });
+    await waitUntil(() => text().includes("[y/N]:"));
+
+    terminal.error("[team] queued while plugin trust is active");
+    const outputBeforeAnswer = text();
+    input.write("no\n");
+
+    await expect(approval).resolves.toEqual({
+      approved: false,
+      reason: "Plugin activation rejected by user",
+    });
+    expect(outputBeforeAnswer).not.toContain("[team]");
+    expect(text()).toContain("[team] queued while plugin trust is active");
+  });
 });
+
+function controlledInput(): NodeJS.ReadStream {
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  Object.defineProperty(input, "isTTY", { value: true });
+  return input;
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("condition was not met");
+}
 
 function plugin(): PluginDescriptor {
   return {
