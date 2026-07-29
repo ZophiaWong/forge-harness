@@ -503,17 +503,18 @@ describe("TeammateManager", () => {
     ]);
   });
 
-  it("binds an immutable taskId only when the shared task is in progress", async () => {
+  it("keeps teammate startup independent from task ownership and shuts down explicitly", async () => {
     const baseCwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammate-task-"));
     const teamRoot = path.join(baseCwd, "team");
     const graphPath = path.join(baseCwd, "task-graph.json");
     const taskStore = createFileTeamTaskStore({ graphPath });
     await taskStore.initialize();
-    const created = await taskStore.create(
+    await taskStore.create(
       { role: "leader", sessionId: "root-session" },
       {
         acceptance: ["evidence exists"],
         description: "research task",
+        kind: "research",
         title: "Research",
       },
     );
@@ -532,25 +533,11 @@ describe("TeammateManager", () => {
     });
     await manager.initialize();
 
-    await expect(manager.start({
-      instructions: "research",
-      message: "initial",
-      name: "researcher",
-      profile: "research",
-      taskId: created.task.id,
-    })).rejects.toThrow("must reference an in_progress team task");
-
-    await taskStore.update(
-      { role: "leader", sessionId: "root-session" },
-      created.task.id,
-      { status: "in_progress" },
-    );
     const started = manager.start({
       instructions: "research",
       message: "initial",
       name: "researcher",
       profile: "research",
-      taskId: created.task.id,
     });
     const process = await adapter.nextProcess();
     process.emit({ sessionId: "session-a", type: "ready" });
@@ -558,12 +545,201 @@ describe("TeammateManager", () => {
 
     expect(process.sent[0]).toMatchObject({
       config: {
-        definition: { taskId: created.task.id },
-        taskGraph: { delegatedTaskId: created.task.id },
+        definition: expect.not.objectContaining({ taskId: expect.anything() }),
+        taskGraph: {
+          rootSessionId: "root-session",
+          taskGraphPath: graphPath,
+        },
       },
     });
+    expect(process.sent[0]).not.toHaveProperty("config.taskGraph.delegatedTaskId");
+
+    process.emit({
+      finalAnswer: "idle",
+      sessionId: "session-a",
+      type: "turn_result",
+    });
+    await manager.flushEvents();
+    await taskStore.transition(
+      { role: "leader", sessionId: "root-session" },
+      {
+        action: "assign",
+        assignee: { name: "researcher", profile: "research", role: "teammate" },
+        id: "task_001",
+      },
+    );
+    await expect(
+      manager.shutdown({ mode: "shutdown", name: "researcher" }),
+    ).rejects.toThrow('owns unfinished task "task_001"');
+    const teammate = {
+      name: "researcher",
+      profile: "research" as const,
+      role: "teammate" as const,
+      sessionId: "session-a",
+    };
+    await taskStore.addEvidence(teammate, "task_001", {
+      callId: "research",
+      round: 1,
+      summary: "Research complete",
+    });
+    await taskStore.transition(teammate, {
+      action: "submit_result",
+      id: "task_001",
+      summary: "Research complete",
+    });
+    await taskStore.transition(
+      { role: "leader", sessionId: "root-session" },
+      {
+        action: "review_result",
+        decision: "pass",
+        id: "task_001",
+        reason: "Accepted",
+      },
+    );
+    const shutdown = manager.shutdown({ mode: "shutdown", name: "researcher" });
+    await waitUntil(() => process.sent.some((message) => message.type === "shutdown"));
+    process.exit(0, null);
+    await expect(shutdown).resolves.toMatchObject({ state: "stopped" });
+  });
+
+  it("retires an idle teammate without sending a graceful shutdown request", async () => {
+    const fixture = await createFixture(["session-a"], {
+      shutdownTimeoutMs: 0,
+      terminateTimeoutMs: 0,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    process.emit({
+      finalAnswer: "idle",
+      sessionId: "session-a",
+      type: "turn_result",
+    });
+    await fixture.manager.flushEvents();
+
+    await expect(
+      fixture.manager.shutdown({ mode: "retire", name: "researcher" }),
+    ).resolves.toMatchObject({ state: "stopped" });
+
+    expect(process.sent).not.toContainEqual(expect.objectContaining({ type: "shutdown" }));
+    expect(process.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+  });
+
+  it("brokers edit/write approval only for an owned edit task with a current approved plan and no handoff", async () => {
+    const baseCwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammate-plan-gate-"));
+    const graphPath = path.join(baseCwd, "task-graph.json");
+    const taskStore = createFileTeamTaskStore({ graphPath });
+    const leader = { role: "leader", sessionId: "root-session" } as const;
+    const editor = {
+      name: "editor",
+      profile: "edit" as const,
+      role: "teammate" as const,
+      sessionId: "session-a",
+    };
+    await taskStore.initialize();
+    await taskStore.create(leader, {
+      acceptance: ["artifact changed"],
+      description: "edit task",
+      kind: "edit",
+      title: "Edit",
+      verificationCommand: "npm test",
+    });
+    await taskStore.transition(leader, {
+      action: "assign",
+      assignee: { name: "editor", profile: "edit", role: "teammate" },
+      id: "task_001",
+    });
+    const adapter = new FakeProcessAdapter();
+    const approver = { approve: vi.fn(async () => ({ approved: true })) };
+    const manager = createTeammateManager({
+      approver,
+      baseCwd,
+      lifecycleEmitter: createLifecycleEmitter({ recorder: createNoopTraceRecorder() }),
+      processAdapter: adapter,
+      rootSessionId: "root-session",
+      sessionId: () => "session-a",
+      taskGraph: { rootSessionId: "root-session", taskGraphPath: graphPath },
+      teamRoot: path.join(baseCwd, "team"),
+      workspaceFactory: {
+        async create() {
+          return { branch: "editor-branch", path: "/registered/editor" };
+        },
+      },
+    });
+    await manager.initialize();
+    const started = manager.start({
+      instructions: "edit",
+      message: "initial",
+      name: "editor",
+      profile: "edit",
+    });
+    const process = await adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+
+    process.emit(approvalRequest("before-plan"));
+    await manager.flushEvents();
+    expect(approver.approve).not.toHaveBeenCalled();
+    expect(process.sent).toContainEqual(expect.objectContaining({
+      approved: false,
+      requestId: "before-plan",
+      type: "approval_result",
+    }));
+
+    await taskStore.transition(editor, {
+      action: "submit_plan",
+      id: "task_001",
+      steps: ["edit the artifact"],
+      summary: "small edit",
+    });
+    await taskStore.transition(leader, {
+      action: "review_plan",
+      decision: "approve",
+      id: "task_001",
+      reason: "scoped",
+    });
+    process.emit(approvalRequest("approved-plan"));
+    await manager.flushEvents();
+    expect(approver.approve).toHaveBeenCalledOnce();
+    expect(process.sent).toContainEqual(expect.objectContaining({
+      approved: true,
+      requestId: "approved-plan",
+      type: "approval_result",
+    }));
+
+    await taskStore.transition(editor, {
+      action: "submit_handoff",
+      id: "task_001",
+      summary: "cooperative handoff",
+    });
+    process.emit(approvalRequest("after-handoff"));
+    await manager.flushEvents();
+    expect(approver.approve).toHaveBeenCalledOnce();
+    expect(process.sent).toContainEqual(expect.objectContaining({
+      approved: false,
+      requestId: "after-handoff",
+      type: "approval_result",
+    }));
   });
 });
+
+function approvalRequest(requestId: string): TeammateToLeaderMessage {
+  return {
+    argumentsText: '{"path":"demo.txt"}',
+    reason: "edit request",
+    requestId,
+    risk: "mutating",
+    sessionId: "session-a",
+    toolName: "edit",
+    type: "approval_request",
+  };
+}
 
 class FakeTeammateProcess implements TeammateProcess {
   readonly sent: LeaderToTeammateMessage[] = [];
@@ -633,7 +809,13 @@ async function createFixture(
   sessionIds: string[],
   overrides: Partial<Pick<
     CreateTeammateManagerOptions,
-    "approver" | "lifecycleEmitter" | "mailboxStore" | "onLog" | "workspaceFactory"
+    | "approver"
+    | "lifecycleEmitter"
+    | "mailboxStore"
+    | "onLog"
+    | "shutdownTimeoutMs"
+    | "terminateTimeoutMs"
+    | "workspaceFactory"
   >> = {},
 ) {
   const baseCwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammates-"));

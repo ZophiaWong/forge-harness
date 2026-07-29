@@ -431,6 +431,7 @@ describe("runMinimalLoop", () => {
             arguments: JSON.stringify({
               acceptance: ["The integration is verified"],
               description: "Wire team tasks into the root loop.",
+              kind: "research",
               title: "Wire root loop",
             }),
             call_id: "call_task_create",
@@ -441,8 +442,68 @@ describe("runMinimalLoop", () => {
         output_text: "",
       },
       {
+        output: [
+          {
+            arguments: JSON.stringify({
+              action: "assign",
+              assignee: "leader",
+              id: "task_001",
+            }),
+            call_id: "call_task_assign",
+            name: "task_transition",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              id: "task_001",
+              summary: "The runtime is wired.",
+            }),
+            call_id: "call_task_evidence",
+            name: "task_add_evidence",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              action: "submit_result",
+              id: "task_001",
+              summary: "The runtime is wired.",
+            }),
+            call_id: "call_task_submit",
+            name: "task_transition",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              action: "review_result",
+              decision: "pass",
+              id: "task_001",
+              reason: "Accepted.",
+            }),
+            call_id: "call_task_review",
+            name: "task_transition",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
         output: [],
-        output_text: "Created the team task.",
+        output_text: "Completed the team task.",
       },
     );
 
@@ -464,23 +525,30 @@ describe("runMinimalLoop", () => {
       "task_create",
       "task_update",
       "task_add_evidence",
+      "task_transition",
+      "task_verify",
+      "task_integrate",
     ]));
     await expect(store.get("task_001")).resolves.toMatchObject({
-      revision: 1,
+      revision: 5,
       task: {
-        status: "pending",
+        status: "completed",
         title: "Wire root loop",
       },
     });
     const mutationEvents = trace.events.filter((event) => event.type === "task_graph_mutated");
     expect(mutationEvents).toEqual([
-      {
+      expect.objectContaining({
         nextStatus: "pending",
         operation: "create",
         revision: 1,
         taskId: "task_001",
         type: "task_graph_mutated",
-      },
+      }),
+      expect.objectContaining({ nextStatus: "in_progress", operation: "transition", revision: 2 }),
+      expect.objectContaining({ operation: "add_evidence", revision: 3 }),
+      expect.objectContaining({ nextStatus: "submitted", operation: "transition", revision: 4 }),
+      expect.objectContaining({ nextStatus: "completed", operation: "transition", revision: 5 }),
     ]);
     expect(Object.keys(mutationEvents[0]!).sort()).toEqual([
       "nextStatus",
@@ -514,6 +582,7 @@ describe("runMinimalLoop", () => {
             arguments: JSON.stringify({
               acceptance: ["The committed revision is observable"],
               description: "Commit before cleanup fails.",
+              kind: "research",
               title: "Cleanup warning",
             }),
             call_id: "call_task_warning",
@@ -529,15 +598,16 @@ describe("runMinimalLoop", () => {
       },
     );
 
-    await runMinimalLoop({
+    await expect(runMinimalLoop({
       apiKey: "test-key",
       cwd: process.cwd(),
+      maxToolRounds: 2,
       permissionPolicy: allowPolicy(),
       responseCreate,
       task: "Exercise the cleanup warning.",
       teamTasks: { actor, store },
       lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
-    });
+    })).rejects.toThrow("without a final answer");
 
     expect(trace.events.filter((event) => event.type === "task_graph_mutated")).toEqual([
       {
@@ -580,6 +650,7 @@ describe("runMinimalLoop", () => {
             arguments: JSON.stringify({
               acceptance: ["The busy result is projected"],
               description: "Exercise lock contention.",
+              kind: "research",
               title: "Busy graph",
             }),
             call_id: "call_task_busy",
@@ -625,7 +696,29 @@ describe("runMinimalLoop", () => {
     await store.create(actor, {
       acceptance: ["The sentinel stays in the graph only"],
       description: "Graph snapshot sentinel description.",
+      kind: "research",
       title: "Graph snapshot sentinel title",
+    });
+    await store.transition(actor, {
+      action: "assign",
+      assignee: { role: "leader" },
+      id: "task_001",
+    });
+    await store.addEvidence(actor, "task_001", {
+      callId: "setup",
+      round: 1,
+      summary: "Sentinel completed before the loop",
+    });
+    await store.transition(actor, {
+      action: "submit_result",
+      id: "task_001",
+      summary: "Sentinel",
+    });
+    await store.transition(actor, {
+      action: "review_result",
+      decision: "pass",
+      id: "task_001",
+      reason: "Setup complete",
     });
     const graphBefore = await store.read();
     const trace = createTraceRecorder();
@@ -692,7 +785,7 @@ describe("runMinimalLoop", () => {
     });
     expect(statefulTrace.getState().taskGraph).toEqual({
       health: "healthy",
-      lastSeenRevision: 1,
+      lastSeenRevision: 5,
     });
     expect(await store.read()).toEqual(graphBefore);
     for (const call of callsFor(responseCreate)) {
@@ -700,11 +793,69 @@ describe("runMinimalLoop", () => {
         "todo is session-local execution planning; task_* tools operate on the root-session shared TaskGraph.",
       );
       expect(call.instructions).toContain(
-        "Leader flow: create a task with task_create, explicitly start it with task_update status in_progress",
+        "Leader flow: create a task with task_create, acquire it with task_transition",
       );
       expect(call.instructions).not.toContain("Graph snapshot sentinel title");
       expect(call.instructions).not.toContain("Graph snapshot sentinel description");
     }
+  });
+
+  it("records blocked completion as a structured runtime problem and fails the session", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-loop-completion-failed-"));
+    const store = createFileTeamTaskStore({
+      graphPath: path.join(directory, "task-graph.json"),
+    });
+    const actor = { role: "leader", sessionId: "root-session" } as const;
+    await store.initialize();
+    await store.create(actor, {
+      acceptance: ["The dependency is available"],
+      description: "Blocked task",
+      kind: "research",
+      title: "Blocked",
+    });
+    await store.transition(actor, {
+      action: "assign",
+      assignee: { role: "leader" },
+      id: "task_001",
+    });
+    await store.transition(actor, {
+      action: "block",
+      code: "external_dependency",
+      id: "task_001",
+      reason: "The fixture is unavailable",
+    });
+    const trace = createTraceRecorder();
+    const statefulTrace = createRuntimeStateRecorder(trace.recorder);
+
+    await expect(runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
+      responseCreate: createResponseCreate({
+        output: [],
+        output_text: "premature final",
+      }),
+      task: "Exercise blocked completion.",
+      teamTasks: { actor, store },
+    })).rejects.toThrow("Completion gate failed");
+
+    expect(trace.events).toContainEqual({
+      problems: [{
+        code: "external_dependency",
+        message: "The fixture is unavailable",
+        taskId: "task_001",
+      }],
+      type: "completion_gate_failed",
+    });
+    expect(statefulTrace.getState().lastProblem).toEqual({
+      kind: "completion_gate_failed",
+      problems: [{
+        code: "external_dependency",
+        message: "The fixture is unavailable",
+        taskId: "task_001",
+      }],
+    });
+    expect(statefulTrace.getState().status).toBe("failed");
   });
 
   it("records workspace evidence before model work begins", async () => {
@@ -1697,7 +1848,7 @@ describe("runMinimalLoop", () => {
         output: [
           {
             arguments: JSON.stringify({
-              command: "sleep 5 && printf late",
+              command: "sleep 0 && printf late",
               runInBackground: true,
             }),
             call_id: "call_bg",
@@ -1712,6 +1863,20 @@ describe("runMinimalLoop", () => {
         output_text: "premature final",
       },
       {
+        output: [
+          {
+            arguments: JSON.stringify({
+              command: "sleep 0.05",
+              runInBackground: false,
+            }),
+            call_id: "call_wait_for_bg",
+            name: "bash",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
         output: [],
         output_text: "final after warning",
       },
@@ -1721,31 +1886,31 @@ describe("runMinimalLoop", () => {
       apiKey: "test-key",
       cwd: process.cwd(),
       lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
-      maxToolRounds: 3,
+      maxToolRounds: 4,
       permissionPolicy: allowPolicy(),
       responseCreate,
       task: "run a background command",
     });
 
-    expect(result).toEqual({ finalAnswer: "final after warning", rounds: 3 });
+    expect(result).toEqual({ finalAnswer: "final after warning", rounds: 4 });
     expect(JSON.stringify(callsFor(responseCreate)[2]?.input)).toContain("<task_notification>");
-    expect(JSON.stringify(callsFor(responseCreate)[2]?.input)).toContain("status: running");
+    expect(JSON.stringify(callsFor(responseCreate)[2]?.input)).toContain("status: completed");
     expect(trace.events).not.toContainEqual({
       answer: "premature final",
       round: 2,
       type: "candidate_answer",
     });
 
-    const canceledIndex = trace.events.findIndex(
+    const completedIndex = trace.events.findIndex(
       (event) =>
         event.type === "background_task_finished" &&
         event.taskId === "bg_001" &&
-        event.status === "canceled",
+        event.status === "completed",
     );
     const sessionEndedIndex = trace.events.findIndex((event) => event.type === "session_ended");
 
-    expect(canceledIndex).toBeGreaterThan(-1);
-    expect(sessionEndedIndex).toBeGreaterThan(canceledIndex);
+    expect(completedIndex).toBeGreaterThan(-1);
+    expect(sessionEndedIndex).toBeGreaterThan(completedIndex);
   });
 
   it("lets the parent continue after async delegation and gates final until child handoff returns", async () => {
@@ -1805,6 +1970,15 @@ describe("runMinimalLoop", () => {
       }
 
       if (callCount === 3) {
+        setTimeout(() => {
+          childResult.resolve({
+            childSessionId: "child-async-1",
+            finalAnswer: "Async research complete.",
+            profile: "research",
+            status: "completed",
+            tracePath: "/repo/.forge/sessions/child-async-1/trace.jsonl",
+          });
+        }, 0);
         return {
           output: [],
           output_text: "premature final",
@@ -1813,26 +1987,14 @@ describe("runMinimalLoop", () => {
 
       if (callCount === 4) {
         expect(JSON.stringify(request.input)).toContain("<child_session_notification>");
-        expect(JSON.stringify(request.input)).toContain("status: running");
-        childResult.resolve({
-          childSessionId: "child-async-1",
-          finalAnswer: "Async research complete.",
-          profile: "research",
-          status: "completed",
-          tracePath: "/repo/.forge/sessions/child-async-1/trace.jsonl",
-        });
-        await flushPromises();
+        expect(JSON.stringify(request.input)).toContain("status: completed");
         return {
           output: [],
-          output_text: "second premature final",
+          output_text: "final after child handoff",
         };
       }
 
-      expect(JSON.stringify(request.input)).toContain("Async research complete.");
-      return {
-        output: [],
-        output_text: "final after child handoff",
-      };
+      throw new Error(`unexpected model call ${callCount}`);
     }) as unknown as ResponseCreate;
 
     const result = await runMinimalLoop({
@@ -1840,13 +2002,13 @@ describe("runMinimalLoop", () => {
       childSessionRunner,
       cwd: process.cwd(),
       lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
-      maxToolRounds: 5,
+      maxToolRounds: 4,
       permissionPolicy: allowPolicy(),
       responseCreate,
       task: "use async delegation",
     });
 
-    expect(result).toEqual({ finalAnswer: "final after child handoff", rounds: 5 });
+    expect(result).toEqual({ finalAnswer: "final after child handoff", rounds: 4 });
     expect(childSessionRunner.start).toHaveBeenCalledWith({
       maxToolRounds: 3,
       parentCallId: "call_delegate",
@@ -1860,14 +2022,6 @@ describe("runMinimalLoop", () => {
       round: 3,
       type: "final_answer",
     });
-    expect(trace.events).toContainEqual(
-      expect.objectContaining({
-        childSessionId: "child-async-1",
-        profile: "research",
-        status: "running",
-        type: "child_session_notification",
-      }),
-    );
     expect(trace.events).toContainEqual(
       expect.objectContaining({
         childSessionId: "child-async-1",
@@ -2381,6 +2535,7 @@ describe("createMinimalLoopSession", () => {
     };
     const teammates = {
       drainLeaderMessages: vi.fn(async () => []),
+      list: vi.fn(async () => []),
       settleBeforeFinal: vi.fn()
         .mockImplementationOnce(async () => activity.promise)
         .mockResolvedValueOnce([]),

@@ -55,13 +55,22 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
   if (
     toolCall.name === "task_create" ||
     toolCall.name === "task_update" ||
-    toolCall.name === "task_add_evidence"
+    toolCall.name === "task_add_evidence" ||
+    toolCall.name === "task_transition"
   ) {
     return {
       action: "allow",
       reason: "team task graph update",
       risk: "mutating",
     };
+  }
+
+  if (toolCall.name === "task_verify") {
+    return ask("mutating", "task verification runs the task contract command in its registered source worktree");
+  }
+
+  if (toolCall.name === "task_integrate") {
+    return ask("mutating", "task integration creates a source commit and cherry-picks it into the Leader target");
   }
 
   if (toolCall.name === "teammate_start") {
@@ -81,6 +90,7 @@ export function decideDefaultPermission(toolCall: ToolCallRequest): PermissionDe
 
   if (
     toolCall.name === "teammate_list"
+    || toolCall.name === "teammate_shutdown"
     || toolCall.name === "message_send"
     || toolCall.name === "message_broadcast"
   ) {

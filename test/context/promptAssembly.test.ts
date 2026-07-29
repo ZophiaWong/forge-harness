@@ -193,19 +193,19 @@ describe("prompt assembly", () => {
       "todo is session-local execution planning; task_* tools operate on the root-session shared TaskGraph.",
     );
     expect(assembly.instructions).toContain(
-      "Leader flow: create a task with task_create, explicitly start it with task_update status in_progress, delegate with taskId",
+      "Leader flow: create a task with task_create, acquire it with task_transition",
     );
     expect(assembly.instructions).toContain(
-      "record evidence with task_add_evidence, then have the Leader complete it with task_update.",
+      "task_update changes or deletes only an unacquired pending contract.",
     );
     expect(assembly.instructions).toContain(
-      "Every root-linked child may use task_list and task_get; only a child linked with taskId may add evidence to that task",
+      "A one-shot child never owns a task. The Leader submits its registered terminal handoff by childSessionId",
     );
     expect(assembly.instructions).toContain(
-      "Only the Leader may create or delete team tasks and change their contracts, topology, or status (including completion); a linked child may only append evidence to its bound in-progress task.",
+      "Long-lived edit teammates must own the task, submit a plan, and receive plan approval before edit/write.",
     );
-    expect(assembly.instructions).not.toContain(
-      "Only the Leader may create, change, complete, or delete team tasks.",
+    expect(assembly.instructions).toContain(
+      "Edit work completes only after task_verify passes and task_integrate records a receipt.",
     );
   });
 });

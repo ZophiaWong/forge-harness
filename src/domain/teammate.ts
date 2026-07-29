@@ -4,7 +4,7 @@ import type {
   TeammateWorkspaceReference,
 } from "../runtime/teamMailbox.js";
 
-export const TEAM_DEFINITION_SCHEMA_VERSION = 1;
+export const TEAM_DEFINITION_SCHEMA_VERSION = 2;
 export const TEAM_RUNTIME_SCHEMA_VERSION = 1;
 export const MAX_TEAMMATES_PER_ROOT = 8;
 export const TEAMMATE_READY_TIMEOUT_MS = 5_000;
@@ -25,7 +25,6 @@ export interface TeammateDefinition {
   name: string;
   profile: ChildSessionProfile;
   schemaVersion: typeof TEAM_DEFINITION_SCHEMA_VERSION;
-  taskId?: string;
   workspace?: TeammateWorkspaceReference;
 }
 
@@ -56,7 +55,11 @@ export interface TeammateStartInput {
   message: string;
   name: string;
   profile: ChildSessionProfile;
-  taskId?: string;
+}
+
+export interface TeammateShutdownInput {
+  name: string;
+  mode: "shutdown" | "retire";
 }
 
 export interface TeammateRejoinInput {

@@ -88,6 +88,30 @@ describe("BackgroundTaskManager", () => {
     ]);
   });
 
+  it("waits for background activity at the final gate and returns terminal notifications", async () => {
+    const executor = createFakeExecutor();
+    const manager = createBackgroundTaskManager({ executor });
+    manager.startBash({ command: "sleep 5", cwd: "/workspace", timeoutMs: 120_000 });
+
+    let settled = false;
+    const finalGate = manager.settleBeforeFinal().then((notifications) => {
+      settled = true;
+      return notifications;
+    });
+    await flushPromises();
+    expect(settled).toBe(false);
+
+    executor.calls[0]?.deferred.resolve(bashResult("sleep 5", "completed", "done"));
+
+    await expect(finalGate).resolves.toEqual([
+      expect.objectContaining({
+        id: "bg_001",
+        status: "completed",
+      }),
+    ]);
+    expect(manager.pendingCount()).toBe(0);
+  });
+
   it("cancels running tasks and emits finished callbacks without model notifications", async () => {
     const executor = createFakeExecutor();
     const finished = vi.fn();

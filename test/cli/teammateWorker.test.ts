@@ -227,7 +227,7 @@ function workerConfig(root: string): TeammateWorkerConfig {
       maxToolRounds: 2,
       name: "researcher",
       profile: "research",
-      schemaVersion: 1,
+      schemaVersion: 2,
     },
     model: "test-model",
     rootSessionId: "root-session",

@@ -15,6 +15,7 @@ describe("teammate tools", () => {
       "teammate_start",
       "teammate_list",
       "teammate_rejoin",
+      "teammate_shutdown",
       "message_send",
       "message_broadcast",
     ]);
@@ -38,7 +39,6 @@ describe("teammate tools", () => {
         message: "Inspect c17a.",
         name: "repo-researcher",
         profile: "research",
-        taskId: null,
       }),
       name: "teammate_start",
     });
@@ -76,7 +76,7 @@ describe("teammate tools", () => {
       arguments: "{}",
       name: "teammate_rejoin",
     })).toMatchObject({ action: "ask" });
-    for (const name of ["teammate_list", "message_send", "message_broadcast"]) {
+    for (const name of ["teammate_list", "teammate_shutdown", "message_send", "message_broadcast"]) {
       expect(decideDefaultPermission({ arguments: "{}", name })).toMatchObject({
         action: "allow",
       });
@@ -100,12 +100,28 @@ function createManager(): TeammateManager {
       tracePath: "/trace",
       unreadCount: 0,
     })),
+    resolveAssignee: vi.fn(async (name) => ({
+      name,
+      profile: "research" as const,
+      role: "teammate" as const,
+    })),
+    resolveEditSource: vi.fn(async () => {
+      throw new Error("not used");
+    }),
     sendMessage: vi.fn(async (input) => ({
       delivery: "woken" as const,
       messageId: "msg_leader_000001",
       to: input.to,
     })),
     settleBeforeFinal: vi.fn(async () => []),
+    shutdown: vi.fn(async (input) => ({
+      name: input.name,
+      profile: "research" as const,
+      sessionId: "session-a",
+      state: "stopped" as const,
+      tracePath: "/trace",
+      unreadCount: 0,
+    })),
     start: vi.fn(async (input) => ({
       name: input.name,
       profile: input.profile,

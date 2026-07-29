@@ -12,6 +12,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "smoke:c17c-capstone": "vitest run test/smoke/c17cCapstone.test.ts",
+    "smoke:c17c-child": "vitest run test/smoke/c17cChildIntegration.test.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "start": "node dist/cli/index.js"

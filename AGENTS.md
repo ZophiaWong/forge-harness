@@ -6,7 +6,7 @@ Instructions for coding agents working in this repository.
 
 Forge Harness is a tutorial-driven TypeScript project for building a coding agent harness from scratch.
 
-Current phase: `c17b Long-Lived Teammates / Mailbox` is integrated. The repository now has the first twenty-one runnable TypeScript checkpoints.
+Current phase: `c17c Coordination / Completion Protocol` is integrated. The repository now has the first twenty-two runnable TypeScript checkpoints.
 
 Do not turn this repo into a full platform ahead of the course. Each chapter should add the smallest mechanism needed to solve the current problem.
 

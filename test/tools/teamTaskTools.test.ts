@@ -1,787 +1,427 @@
-import { mkdirSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { TeamTaskActor } from "../../src/domain/teamTask.js";
+import type { TeamTaskActor, TeamTaskResultSource } from "../../src/domain/teamTask.js";
+import type { AsyncChildSessionManager } from "../../src/extensions/childSessions.js";
+import {
+  GitIntegrationError,
+  type GitIntegrationService,
+} from "../../src/runtime/gitIntegration.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import {
   createTeamTaskToolRuntime,
-  taskAddEvidenceToolDefinition,
   taskCreateToolDefinition,
-  taskGetToolDefinition,
-  taskListToolDefinition,
+  taskIntegrateToolDefinition,
+  taskTransitionToolDefinition,
   taskUpdateToolDefinition,
+  taskVerifyToolDefinition,
 } from "../../src/tools/teamTaskTools.js";
 
-describe("team task tool definitions", () => {
-  it("declare narrow object schemas for the five task operations", () => {
-    expect(taskListToolDefinition).toMatchObject({
-      name: "task_list",
-      parameters: {
-        additionalProperties: false,
-        properties: {},
-        required: [],
-        type: "object",
-      },
-      strict: true,
-      type: "function",
-    });
-    expect(taskGetToolDefinition).toMatchObject({
-      name: "task_get",
-      parameters: {
-        additionalProperties: false,
-        required: ["id"],
-        type: "object",
-      },
-      strict: true,
-    });
+const leader: TeamTaskActor = { role: "leader", sessionId: "leader-session" };
+
+describe("team task tool contract", () => {
+  it("declares v2 contract, transition, verify, and integrate schemas", () => {
     expect(taskCreateToolDefinition).toMatchObject({
       name: "task_create",
       parameters: {
         additionalProperties: false,
-        required: ["title", "description", "acceptance"],
-        type: "object",
-      },
-      strict: false,
-    });
-    expect(taskUpdateToolDefinition).toMatchObject({
-      name: "task_update",
-      parameters: {
-        additionalProperties: false,
-        required: ["id"],
-        type: "object",
-      },
-      strict: false,
-    });
-    expect(taskUpdateToolDefinition.parameters.properties).toMatchObject({
-      delete: { type: "boolean" },
-      status: {
-        enum: ["pending", "in_progress", "blocked", "completed"],
-        type: "string",
+        required: ["title", "description", "acceptance", "kind"],
       },
     });
-    expect(taskAddEvidenceToolDefinition).toMatchObject({
-      name: "task_add_evidence",
-      parameters: {
-        additionalProperties: false,
-        required: ["id", "summary"],
-        type: "object",
-      },
-      strict: false,
+    expect(taskUpdateToolDefinition.parameters).not.toHaveProperty("properties.status");
+    expect(taskTransitionToolDefinition).toMatchObject({ name: "task_transition" });
+    expect(taskVerifyToolDefinition).toMatchObject({
+      name: "task_verify",
+      parameters: { required: ["id", "command"] },
     });
-    expect(taskAddEvidenceToolDefinition.parameters.properties).toMatchObject({
-      references: {
-        items: {
-          additionalProperties: false,
-          properties: {
-            kind: {
-              enum: ["artifact", "trace", "external"],
-              type: "string",
-            },
-            value: { type: "string" },
-          },
-          required: ["kind", "value"],
-          type: "object",
-        },
-        type: "array",
-      },
-    });
-
-    expect(Object.keys(
-      taskListToolDefinition.parameters.properties as Record<string, unknown>,
-    )).toEqual([]);
-    expect(taskListToolDefinition.parameters.required).toEqual([]);
-    expect(Object.keys(
-      taskGetToolDefinition.parameters.properties as Record<string, unknown>,
-    ).sort()).toEqual(["id"]);
-    expect(taskGetToolDefinition.parameters.required).toEqual(["id"]);
-    expect(Object.keys(
-      taskCreateToolDefinition.parameters.properties as Record<string, unknown>,
-    ).sort()).toEqual(["acceptance", "dependencies", "description", "title"]);
-    expect(taskCreateToolDefinition.parameters.required).toEqual([
-      "title",
-      "description",
-      "acceptance",
-    ]);
-    expect(Object.keys(
-      taskUpdateToolDefinition.parameters.properties as Record<string, unknown>,
-    ).sort()).toEqual([
-      "acceptance",
-      "blockedReason",
-      "delete",
-      "dependencies",
-      "description",
-      "id",
-      "status",
-      "title",
-    ]);
-    expect(taskUpdateToolDefinition.parameters.required).toEqual(["id"]);
-    const addEvidenceProperties =
-      taskAddEvidenceToolDefinition.parameters.properties as Record<string, unknown>;
-    expect(Object.keys(addEvidenceProperties).sort()).toEqual(["id", "references", "summary"]);
-    expect(taskAddEvidenceToolDefinition.parameters.required).toEqual(["id", "summary"]);
-    const referencesSchema = addEvidenceProperties.references as {
-      items: {
-        properties: Record<string, unknown>;
-        required: string[];
-      };
-    };
-    expect(Object.keys(referencesSchema.items.properties).sort()).toEqual(["kind", "value"]);
-    expect(referencesSchema.items.required).toEqual(["kind", "value"]);
+    expect(taskIntegrateToolDefinition).toMatchObject({ name: "task_integrate" });
   });
-});
 
-describe("createTeamTaskToolRuntime role matrix", () => {
-  it.each([
-    {
-      actor: { role: "leader", sessionId: "root-session" } as const,
-      expected: [
+  it("uses a role-level static tool facet", async () => {
+    const { store } = await fixture();
+    const teammate: TeamTaskActor = {
+      name: "researcher",
+      profile: "research",
+      role: "teammate",
+      sessionId: "teammate-session",
+    };
+    const child: TeamTaskActor = {
+      delegatedTaskId: "task_001",
+      profile: "research",
+      role: "child",
+      sessionId: "child-session",
+    };
+
+    expect(createTeamTaskToolRuntime({ actor: leader, store }).toolDefinitions().map((tool) => tool.name))
+      .toEqual([
         "task_list",
         "task_get",
         "task_create",
         "task_update",
         "task_add_evidence",
-      ],
-      label: "leader",
-    },
-    {
-      actor: { role: "child", sessionId: "child-ad-hoc" } as const,
-      expected: ["task_list", "task_get"],
-      label: "root-linked child without a delegated task",
-    },
-    {
-      actor: {
-        delegatedTaskId: "task_001",
-        role: "child",
-        sessionId: "child-linked",
-      } as const,
-      expected: ["task_list", "task_get", "task_add_evidence"],
-      label: "root-linked child with a delegated task",
-    },
-  ])("exposes the $label tools", ({ actor, expected }) => {
-    const runtime = roleRuntime(actor);
-
-    expect(runtime.toolDefinitions().map((definition) => definition.name)).toEqual(expected);
-  });
-});
-
-describe("team task inspection tools", () => {
-  it("lists the current revision and compact ID-sorted task summaries", async () => {
-    const { actor, runtime, store } = await initializedRuntime();
-    await store.create(actor, {
-      acceptance: ["First result is reviewed"],
-      description: "Complete the first slice.",
-      title: "First task",
-    });
-    await store.create(actor, {
-      acceptance: ["Second result is reviewed"],
-      dependencies: ["task_001"],
-      description: "Complete the dependent slice.",
-      title: "Second task",
-    });
-
-    const result = await runtime.execute({
-      arguments: "{}",
-      name: "task_list",
-    });
-
-    expect(result).toEqual({
-      content: [
-        "revision: 2",
-        "tasks:",
-        "- task_001 | status=pending | ready=true | dependencies=(none) | evidence=0 | First task",
-        "- task_002 | status=pending | ready=false | dependencies=task_001 | evidence=0 | Second task",
-      ].join("\n"),
-      metadata: {
-        observationSummary: "listed 2 team tasks at revision 2",
-        revision: 2,
-        tasks: [
-          {
-            dependencies: [],
-            evidenceCount: 0,
-            id: "task_001",
-            ready: true,
-            status: "pending",
-            title: "First task",
-          },
-          {
-            dependencies: ["task_001"],
-            evidenceCount: 0,
-            id: "task_002",
-            ready: false,
-            status: "pending",
-            title: "Second task",
-          },
-        ],
-      },
-      status: "completed",
-      toolName: "task_list",
-    });
+        "task_transition",
+        "task_verify",
+        "task_integrate",
+      ]);
+    expect(createTeamTaskToolRuntime({ actor: teammate, store }).toolDefinitions().map((tool) => tool.name))
+      .toEqual(["task_list", "task_get", "task_add_evidence", "task_transition"]);
+    expect(createTeamTaskToolRuntime({ actor: child, store }).toolDefinitions().map((tool) => tool.name))
+      .toEqual(["task_list", "task_get", "task_add_evidence"]);
   });
 
-  it("gets the full contract, blocked reason, evidence, and reporter provenance", async () => {
-    const { actor, runtime, store } = await initializedRuntime();
-    await store.create(actor, {
-      acceptance: ["Build exits 0", "Focused test passes"],
-      description: "Implement the tool projection.",
-      title: "Implement tools",
+  it("creates and updates only pending contract fields", async () => {
+    const { runtime, store } = await leaderFixture();
+    const created = await execute(runtime, "task_create", {
+      acceptance: ["Reviewed"],
+      description: "Research",
+      kind: "research",
+      title: "Research task",
     });
-    await store.update(actor, "task_001", { status: "in_progress" });
-    await store.addEvidence(actor, "task_001", {
-      callId: "call_store_setup",
-      references: [
-        { kind: "artifact", value: "src/tools/teamTaskTools.ts" },
-        { kind: "trace", value: ".forge/sessions/root/trace.jsonl" },
-      ],
-      round: 3,
-      summary: "Focused tool tests pass.",
-    });
-    await store.update(actor, "task_001", {
-      blockedReason: "Waiting for review",
-      status: "blocked",
-    });
-
-    const result = await runtime.execute({
-      arguments: JSON.stringify({ id: "task_001" }),
-      name: "task_get",
-    });
-
-    expect(result.status).toBe("completed");
-    expect(result.toolName).toBe("task_get");
-    expect(result.metadata).toMatchObject({
-      observationSummary: "read team task task_001 at revision 4",
-      ready: false,
-      revision: 4,
-      task: {
-        acceptance: ["Build exits 0", "Focused test passes"],
-        blockedReason: "Waiting for review",
-        dependencies: [],
-        description: "Implement the tool projection.",
-        id: "task_001",
-        status: "blocked",
-        title: "Implement tools",
-      },
-    });
-    expect(result.content).toContain("revision: 4");
-    expect(result.content).toContain("id: task_001");
-    expect(result.content).toContain("title: Implement tools");
-    expect(result.content).toContain("description: Implement the tool projection.");
-    expect(result.content).toContain("status: blocked");
-    expect(result.content).toContain("ready: false");
-    expect(result.content).toContain("blocked_reason: Waiting for review");
-    expect(result.content).toContain("dependencies: (none)");
-    expect(result.content).toContain("acceptance:\n- Build exits 0\n- Focused test passes");
-    expect(result.content).toContain("evidence:\n- summary: Focused tool tests pass.");
-    expect(result.content).toContain("  reported_by_role: leader");
-    expect(result.content).toContain("  reported_by_session_id: root-session");
-    expect(result.content).toContain("  call_id: call_store_setup");
-    expect(result.content).toContain("  round: 3");
-    expect(result.content).toContain("  reported_at:");
-    expect(result.content).toContain("  references:");
-    expect(result.content).toContain("  - artifact: src/tools/teamTaskTools.ts");
-    expect(result.content).toContain("  - trace: .forge/sessions/root/trace.jsonl");
-  });
-});
-
-describe("team task mutation tools", () => {
-  it("creates, updates, and appends contextual evidence with revision metadata", async () => {
-    const { runtime, store } = await initializedRuntime();
-
-    const created = await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["Focused test passes"],
-        description: "Implement the task tools.",
-        title: "Task tools",
-      }),
-      name: "task_create",
-    });
-
     expect(created).toMatchObject({
-      content: expect.stringContaining(
-        "revision: 1\noperation: create\nnext_status: pending\ntask:\nid: task_001",
-      ),
       metadata: {
-        observationSummary: "created team task task_001 at revision 1",
-        revision: 1,
-        task: {
-          acceptance: ["Focused test passes"],
-          dependencies: [],
-          description: "Implement the task tools.",
-          evidence: [],
-          id: "task_001",
-          status: "pending",
-          title: "Task tools",
-        },
-        taskGraphMutation: {
-          nextStatus: "pending",
-          operation: "create",
-          revision: 1,
-          taskId: "task_001",
-        },
+        task: { kind: "research", status: "pending" },
+        taskGraphMutation: { operation: "create", taskId: "task_001" },
       },
       status: "completed",
-      toolName: "task_create",
     });
 
-    const updated = await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["Focused test passes", "Build passes"],
-        description: "Implement and verify the task tools.",
-        id: "task_001",
-        status: "in_progress",
-        title: "Team task tools",
-      }),
-      name: "task_update",
-    });
-
-    expect(updated).toMatchObject({
-      content: expect.stringContaining(
-        "revision: 2\noperation: update\nprevious_status: pending\nnext_status: in_progress",
-      ),
-      metadata: {
-        observationSummary: "updated team task task_001 at revision 2",
-        revision: 2,
-        task: {
-          acceptance: ["Focused test passes", "Build passes"],
-          description: "Implement and verify the task tools.",
-          id: "task_001",
-          status: "in_progress",
-          title: "Team task tools",
-        },
-        taskGraphMutation: {
-          nextStatus: "in_progress",
-          operation: "update",
-          previousStatus: "pending",
-          revision: 2,
-          taskId: "task_001",
-        },
-      },
+    await expect(execute(runtime, "task_update", {
+      id: "task_001",
       status: "completed",
-      toolName: "task_update",
+    })).resolves.toMatchObject({
+      metadata: { reasonCode: "invalid_input" },
+      status: "failed",
+    });
+    await execute(runtime, "task_update", {
+      id: "task_001",
+      title: "Updated task",
+    });
+    expect((await store.get("task_001")).task.title).toBe("Updated task");
+  });
+
+  it("drives the research acquire, evidence, submit, and review protocol", async () => {
+    const { runtime, store } = await leaderFixture();
+    await execute(runtime, "task_create", {
+      acceptance: ["Reviewed"],
+      description: "Research",
+      kind: "research",
+      title: "Research task",
+    });
+    await execute(runtime, "task_transition", {
+      action: "assign",
+      assignee: "leader",
+      id: "task_001",
+    });
+    await execute(runtime, "task_add_evidence", {
+      id: "task_001",
+      summary: "Found evidence",
+    });
+    await execute(runtime, "task_transition", {
+      action: "submit_result",
+      id: "task_001",
+      summary: "Answer",
+    });
+    const reviewed = await execute(runtime, "task_transition", {
+      action: "review_result",
+      decision: "pass",
+      id: "task_001",
+      reason: "Accepted",
     });
 
-    const evidence = await runtime.execute(
-      {
-        arguments: JSON.stringify({
-          id: "task_001",
-          references: [
-            { kind: "artifact", value: "src/tools/teamTaskTools.ts" },
-          ],
-          summary: "The focused suite passes.",
-        }),
-        name: "task_add_evidence",
-      },
-      { callId: "call_evidence", round: 7 },
-    );
-
-    expect(evidence).toMatchObject({
-      content: expect.stringContaining("revision: 3\noperation: add_evidence"),
+    expect(reviewed).toMatchObject({
       metadata: {
-        observationSummary: "added evidence to team task task_001 at revision 3",
-        revision: 3,
-        task: {
-          evidence: [
-            {
-              references: [
-                { kind: "artifact", value: "src/tools/teamTaskTools.ts" },
-              ],
-              callId: "call_evidence",
-              reportedByRole: "leader",
-              reportedBySessionId: "root-session",
-              round: 7,
-              summary: "The focused suite passes.",
-            },
-          ],
-          id: "task_001",
-          status: "in_progress",
-        },
-        taskGraphMutation: {
-          operation: "add_evidence",
-          revision: 3,
-          taskId: "task_001",
-        },
-      },
-      status: "completed",
-      toolName: "task_add_evidence",
-    });
-
-    const completed = await runtime.execute({
-      arguments: JSON.stringify({ id: "task_001", status: "completed" }),
-      name: "task_update",
-    });
-
-    expect(completed).toMatchObject({
-      metadata: {
-        revision: 4,
-        task: {
-          id: "task_001",
-          status: "completed",
-        },
+        task: { status: "completed" },
         taskGraphMutation: {
           nextStatus: "completed",
-          operation: "update",
-          previousStatus: "in_progress",
-          revision: 4,
-          taskId: "task_001",
+          previousStatus: "submitted",
         },
       },
       status: "completed",
-      toolName: "task_update",
     });
-    await expect(store.get("task_001")).resolves.toMatchObject({
-      revision: 4,
-      task: {
-        evidence: [
-          expect.objectContaining({
-            callId: "call_evidence",
-            reportedBySessionId: "root-session",
-            round: 7,
-          }),
-        ],
-        status: "completed",
-      },
-    });
+    expect((await store.get("task_001")).task.verdict).toMatchObject({ status: "passed" });
   });
 
-  it("deletes through task_update and returns the removed task at the new revision", async () => {
-    const { runtime, store } = await initializedRuntime();
-    await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["No longer needed"],
-        description: "A disposable task.",
-        title: "Disposable",
-      }),
-      name: "task_create",
+  it("exposes actor-filtered availableActions", async () => {
+    const { runtime } = await leaderFixture();
+    await execute(runtime, "task_create", {
+      acceptance: ["Reviewed"],
+      description: "Research",
+      kind: "research",
+      title: "Research task",
     });
-
-    const result = await runtime.execute({
-      arguments: JSON.stringify({ delete: true, id: "task_001" }),
-      name: "task_update",
-    });
+    const result = await execute(runtime, "task_get", { id: "task_001" });
 
     expect(result).toMatchObject({
-      content: expect.stringContaining("revision: 2\noperation: delete\ntask:\nid: task_001"),
       metadata: {
-        observationSummary: "deleted team task task_001 at revision 2",
-        revision: 2,
-        task: {
-          id: "task_001",
-          status: "pending",
-          title: "Disposable",
-        },
-        taskGraphMutation: {
-          operation: "delete",
-          revision: 2,
-          taskId: "task_001",
-        },
+        availableActions: expect.arrayContaining(["assign", "update", "delete"]),
+        ready: true,
       },
       status: "completed",
-      toolName: "task_update",
     });
-    await expect(store.list()).resolves.toEqual({ revision: 2, tasks: [] });
-  });
-});
-
-describe("team task tool failures", () => {
-  it("rejects malformed argument shapes with stable metadata and no graph mutation", async () => {
-    const { runtime, store } = await initializedRuntime();
-    const malformedCalls = [
-      { arguments: JSON.stringify({ extra: true }), name: "task_list" },
-      { arguments: "[]", name: "task_get" },
-      {
-        arguments: JSON.stringify({
-          acceptance: ["Pass"],
-          description: "Description",
-          extra: true,
-          title: "Title",
-        }),
-        name: "task_create",
-      },
-      { arguments: JSON.stringify({ id: "task_001" }), name: "task_update" },
-      {
-        arguments: JSON.stringify({
-          delete: true,
-          id: "task_001",
-          title: "Conflicting patch",
-        }),
-        name: "task_update",
-      },
-      { arguments: "{bad json", name: "task_add_evidence" },
-    ];
-
-    for (const call of malformedCalls) {
-      const result = await runtime.execute(call);
-
-      expect(result).toMatchObject({
-        content: expect.stringContaining("reason_code: invalid_input\ngraph_health: healthy"),
-        metadata: {
-          graphHealth: "healthy",
-          observationSummary: `${call.name} failed: invalid_input`,
-          reasonCode: "invalid_input",
-        },
-        status: "failed",
-        toolName: call.name,
-      });
-    }
-
-    await expect(store.list()).resolves.toEqual({ revision: 0, tasks: [] });
+    expect(result.content).toContain("available_actions:");
   });
 
-  it("rejects missing handler call provenance without appending evidence", async () => {
-    const { runtime, store } = await initializedRuntime();
-    await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["Pass"],
-        description: "Collect evidence.",
-        title: "Evidence task",
-      }),
-      name: "task_create",
-    });
-    await runtime.execute({
-      arguments: JSON.stringify({ id: "task_001", status: "in_progress" }),
-      name: "task_update",
-    });
-
-    const result = await runtime.execute({
-      arguments: JSON.stringify({
-        id: "task_001",
-        summary: "Missing runtime context.",
-      }),
-      name: "task_add_evidence",
-    });
-
-    expect(result).toMatchObject({
-      metadata: {
-        graphHealth: "healthy",
-        observationSummary: "task_add_evidence failed: invalid_input",
-        reasonCode: "invalid_input",
-      },
-      status: "failed",
-      toolName: "task_add_evidence",
-    });
-    await expect(store.get("task_001")).resolves.toMatchObject({
-      revision: 2,
-      task: {
-        evidence: [],
-        status: "in_progress",
-      },
-    });
-  });
-
-  it("preserves stable healthy store failures and the current revision", async () => {
-    const { runtime, store } = await initializedRuntime();
-    await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["First passes"],
-        description: "Complete first.",
-        title: "First",
-      }),
-      name: "task_create",
-    });
-    await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["Second passes"],
-        dependencies: ["task_001"],
-        description: "Complete second.",
-        title: "Second",
-      }),
-      name: "task_create",
-    });
-
-    const result = await runtime.execute({
-      arguments: JSON.stringify({ id: "task_002", status: "in_progress" }),
-      name: "task_update",
-    });
-
-    expect(result).toEqual({
-      content: [
-        'failed_reason: task "task_002" is not ready',
-        "reason_code: task_not_ready",
-        "graph_health: healthy",
-      ].join("\n"),
-      metadata: {
-        graphHealth: "healthy",
-        observationSummary: "task_update failed: task_not_ready",
-        reasonCode: "task_not_ready",
-      },
-      status: "failed",
-      toolName: "task_update",
-    });
-    await expect(store.list()).resolves.toMatchObject({
-      revision: 2,
-      tasks: [
-        { id: "task_001", status: "pending" },
-        { id: "task_002", status: "pending" },
-      ],
-    });
-  });
-
-  it("preserves stable degraded graph failures", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-team-task-missing-"));
-    const actor = { role: "leader", sessionId: "root-session" } as const;
+  it("resolves a one-shot edit child by childSessionId and never accepts a workspace path", async () => {
+    const { store } = await fixture();
+    const source: TeamTaskResultSource = {
+      childSessionId: "child-session",
+      kind: "child",
+      profile: "edit",
+      workspace: { branch: "child-branch", path: "/registered/source" },
+    };
+    const childSessions = {
+      resolveEditSource: vi.fn(() => source),
+    } as unknown as AsyncChildSessionManager;
+    const gitIntegration = createGitMock(source);
     const runtime = createTeamTaskToolRuntime({
-      actor,
-      store: createFileTeamTaskStore({
-        graphPath: path.join(directory, "task-graph.json"),
-      }),
+      actor: leader,
+      childSessions,
+      gitIntegration,
+      store,
+    });
+    await execute(runtime, "task_create", {
+      acceptance: ["Integrated"],
+      description: "Edit",
+      kind: "edit",
+      title: "Edit task",
+      verificationCommand: "npm test",
+    });
+    await execute(runtime, "task_transition", {
+      action: "assign",
+      assignee: "leader",
+      id: "task_001",
+    });
+    await execute(runtime, "task_add_evidence", {
+      id: "task_001",
+      summary: "Child changed the file",
     });
 
-    const result = await runtime.execute({ arguments: "{}", name: "task_list" });
+    const submitted = await execute(runtime, "task_transition", {
+      action: "submit_result",
+      childSessionId: "child-session",
+      id: "task_001",
+      summary: "Ready",
+    });
 
-    expect(result).toMatchObject({
-      content: expect.stringContaining(
-        "reason_code: graph_missing\ngraph_health: degraded",
-      ),
+    expect(childSessions.resolveEditSource).toHaveBeenCalledWith("child-session", "task_001");
+    expect(gitIntegration.capture).toHaveBeenCalledWith(source);
+    expect(submitted).toMatchObject({
+      metadata: { task: { status: "submitted", submission: { source } } },
+      status: "completed",
+    });
+    await expect(execute(runtime, "task_transition", {
+      action: "submit_result",
+      id: "task_001",
+      summary: "workspace: /model/chosen/path",
+      workspace: "/model/chosen/path",
+    })).resolves.toMatchObject({
+      metadata: { reasonCode: "invalid_input" },
+      status: "failed",
+    });
+  });
+
+  it("records verify and integration receipts through their dedicated tools", async () => {
+    const { store } = await fixture();
+    const source: TeamTaskResultSource = {
+      childSessionId: "child-session",
+      kind: "child",
+      profile: "edit",
+      workspace: { branch: "child-branch", path: "/registered/source" },
+    };
+    const gitIntegration = createGitMock(source);
+    const runtime = createTeamTaskToolRuntime({
+      actor: leader,
+      childSessions: {
+        resolveEditSource: () => source,
+      } as unknown as AsyncChildSessionManager,
+      gitIntegration,
+      store,
+    });
+    await execute(runtime, "task_create", {
+      acceptance: ["Integrated"],
+      description: "Edit",
+      kind: "edit",
+      title: "Edit task",
+      verificationCommand: "npm test",
+    });
+    await execute(runtime, "task_transition", {
+      action: "assign",
+      assignee: "leader",
+      id: "task_001",
+    });
+    await execute(runtime, "task_add_evidence", { id: "task_001", summary: "Ready" });
+    await execute(runtime, "task_transition", {
+      action: "submit_result",
+      childSessionId: "child-session",
+      id: "task_001",
+      summary: "Ready",
+    });
+
+    expect(await execute(runtime, "task_verify", {
+      command: "npm test",
+      id: "task_001",
+    })).toMatchObject({ status: "completed" });
+    expect(await execute(runtime, "task_integrate", {
+      id: "task_001",
+    })).toMatchObject({
+      metadata: { task: { status: "completed" } },
+      status: "completed",
+    });
+  });
+
+  it("clears a stale verified submission when integration detects source drift", async () => {
+    const { store } = await fixture();
+    const source: TeamTaskResultSource = {
+      childSessionId: "child-session",
+      kind: "child",
+      profile: "edit",
+      workspace: { branch: "child-branch", path: "/registered/source" },
+    };
+    const gitIntegration = createGitMock(source);
+    vi.mocked(gitIntegration.integrate).mockRejectedValueOnce(
+      new GitIntegrationError("source_drift", "source changed after verification"),
+    );
+    const runtime = createTeamTaskToolRuntime({
+      actor: leader,
+      childSessions: {
+        resolveEditSource: () => source,
+      } as unknown as AsyncChildSessionManager,
+      gitIntegration,
+      store,
+    });
+    await execute(runtime, "task_create", {
+      acceptance: ["Integrated"],
+      description: "Edit",
+      kind: "edit",
+      title: "Edit task",
+      verificationCommand: "npm test",
+    });
+    await execute(runtime, "task_transition", {
+      action: "assign",
+      assignee: "leader",
+      id: "task_001",
+    });
+    await execute(runtime, "task_add_evidence", { id: "task_001", summary: "Ready" });
+    await execute(runtime, "task_transition", {
+      action: "submit_result",
+      childSessionId: "child-session",
+      id: "task_001",
+      summary: "Ready",
+    });
+    await execute(runtime, "task_verify", {
+      command: "npm test",
+      id: "task_001",
+    });
+
+    expect(await execute(runtime, "task_integrate", {
+      id: "task_001",
+    })).toMatchObject({
       metadata: {
-        graphHealth: "degraded",
-        observationSummary: "task_list failed: graph_missing",
-        reasonCode: "graph_missing",
+        reasonCode: "source_drift",
+        task: { status: "in_progress" },
       },
       status: "failed",
-      toolName: "task_list",
     });
+    expect((await store.get("task_001")).task).not.toHaveProperty("submission");
+    expect((await store.get("task_001")).task).not.toHaveProperty("verdict");
   });
 
-  it("returns a committed mutation with a stable degraded cleanup warning", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-team-task-cleanup-"));
-    const graphPath = path.join(directory, "task-graph.json");
-    const lockPath = `${graphPath}.lock`;
-    const actor = { role: "leader", sessionId: "root-session" } as const;
-    const store = createFileTeamTaskStore({
-      graphPath,
-      now: () => {
-        unlinkSync(lockPath);
-        mkdirSync(lockPath);
-        return new Date("2026-07-26T04:00:00.000Z");
-      },
+  it("keeps child evidence scoped to its delegated Leader-owned task", async () => {
+    const { store } = await fixture();
+    await store.create(leader, {
+      acceptance: ["Reviewed"],
+      description: "Research",
+      kind: "research",
+      title: "Research",
     });
-    await store.initialize();
-    const runtime = createTeamTaskToolRuntime({ actor, store });
-
-    const result = await runtime.execute({
-      arguments: JSON.stringify({
-        acceptance: ["Focused test passes"],
-        description: "Commit before cleanup.",
-        title: "Cleanup warning",
-      }),
-      name: "task_create",
+    await store.transition(leader, {
+      action: "assign",
+      assignee: { role: "leader" },
+      id: "task_001",
     });
-
-    expect(result).toMatchObject({
-      metadata: {
-        graphHealth: "degraded",
-        observationSummary: "created team task task_001 at revision 1",
-        revision: 1,
-        task: {
-          id: "task_001",
-          status: "pending",
-          title: "Cleanup warning",
-        },
-        taskGraphMutation: {
-          nextStatus: "pending",
-          operation: "create",
-          revision: 1,
-          taskId: "task_001",
-        },
-        warningCode: "store_io",
-        warningReason: "task graph mutation committed but lock cleanup failed",
-      },
-      status: "completed",
-      toolName: "task_create",
-    });
-    expect(result.metadata).not.toHaveProperty("reasonCode");
-    expect(result.content).toContain("revision: 1\noperation: create");
-    expect(result.content).toContain(
-      [
-        "warning_reason: task graph mutation committed but lock cleanup failed",
-        "warning_code: store_io",
-        "graph_health: degraded",
-      ].join("\n"),
-    );
-    await expect(store.read()).resolves.toMatchObject({
-      revision: 1,
-      tasks: [{ id: "task_001", status: "pending" }],
-    });
-    expect((await fs.stat(lockPath)).isDirectory()).toBe(true);
-  });
-
-  it("lets the store reject evidence outside a child's delegated task without mutation", async () => {
-    const { actor, store } = await initializedRuntime();
-    await store.create(actor, {
-      acceptance: ["First passes"],
-      description: "First task.",
-      title: "First",
-    });
-    await store.create(actor, {
-      acceptance: ["Second passes"],
-      description: "Second task.",
-      title: "Second",
-    });
-    await store.update(actor, "task_001", { status: "in_progress" });
-    await store.update(actor, "task_002", { status: "in_progress" });
     const childRuntime = createTeamTaskToolRuntime({
       actor: {
-        delegatedTaskId: "task_001",
+        delegatedTaskId: "task_999",
+        profile: "research",
         role: "child",
         sessionId: "child-session",
       },
       store,
     });
 
-    const result = await childRuntime.execute(
-      {
-        arguments: JSON.stringify({
-          id: "task_002",
-          summary: "Evidence for the wrong task.",
-        }),
-        name: "task_add_evidence",
-      },
-      { callId: "call_child", round: 2 },
-    );
-
-    expect(result).toMatchObject({
-      metadata: {
-        graphHealth: "healthy",
-        observationSummary: "task_add_evidence failed: delegated_task_mismatch",
-        reasonCode: "delegated_task_mismatch",
-      },
+    expect(await execute(childRuntime, "task_add_evidence", {
+      id: "task_001",
+      summary: "Wrong task",
+    })).toMatchObject({
+      metadata: { reasonCode: "delegated_task_mismatch" },
       status: "failed",
-      toolName: "task_add_evidence",
     });
-    await expect(store.get("task_002")).resolves.toMatchObject({
-      revision: 4,
-      task: {
-        evidence: [],
-        status: "in_progress",
-      },
-    });
+    expect((await store.get("task_001")).task.evidence).toEqual([]);
   });
 });
 
-function roleRuntime(actor: TeamTaskActor) {
-  return createTeamTaskToolRuntime({
-    actor,
-    store: createFileTeamTaskStore({
-      graphPath: path.join(os.tmpdir(), `forge-team-task-role-${actor.sessionId}.json`),
-    }),
-  });
+function createGitMock(source: TeamTaskResultSource): GitIntegrationService {
+  return {
+    capture: vi.fn(async () => ({
+      changedFiles: ["demo.txt"],
+      fingerprint: "fingerprint",
+      head: "head",
+      status: ["?? demo.txt"],
+    })),
+    integrate: vi.fn(async () => ({
+      fingerprint: "fingerprint",
+      integratedAt: "2026-07-28T00:00:00.000Z",
+      integratedCommit: "integrated",
+      source,
+      sourceCommit: "source",
+      targetBefore: "before",
+    })),
+    review: vi.fn(async () => ({
+      changedFiles: ["demo.txt"],
+      diff: "+demo",
+      fingerprint: "fingerprint",
+      fingerprintStatus: "current" as const,
+      head: "head",
+      status: ["?? demo.txt"],
+    })),
+    verify: vi.fn(async () => ({
+      actualFingerprint: "fingerprint",
+      command: "npm test",
+      exitCode: 0,
+      output: "passed",
+      sourceDrifted: false,
+    })),
+  };
 }
 
-async function initializedRuntime() {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-team-task-tools-"));
-  const actor = { role: "leader", sessionId: "root-session" } as const;
+async function fixture() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-task-tools-"));
   const store = createFileTeamTaskStore({
-    graphPath: path.join(directory, "task-graph.json"),
-    now: () => new Date("2026-07-26T04:00:00.000Z"),
+    graphPath: path.join(root, "task-graph.json"),
+    now: () => new Date("2026-07-28T00:00:00.000Z"),
   });
   await store.initialize();
+  return { root, store };
+}
 
+async function leaderFixture() {
+  const result = await fixture();
   return {
-    actor,
-    runtime: createTeamTaskToolRuntime({ actor, store }),
-    store,
+    ...result,
+    runtime: createTeamTaskToolRuntime({ actor: leader, store: result.store }),
   };
+}
+
+async function execute(
+  runtime: ReturnType<typeof createTeamTaskToolRuntime>,
+  name: string,
+  args: Record<string, unknown>,
+) {
+  return runtime.execute(
+    { arguments: JSON.stringify(args), name },
+    { callId: `call_${name}`, round: 1 },
+  );
 }
