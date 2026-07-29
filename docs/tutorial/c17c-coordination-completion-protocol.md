@@ -277,54 +277,111 @@ interface TeamTaskIntegrationReceipt {
 
 ## 运行验证
 
-先完成 [README Setup](../../README.md#setup)。本章提供两条自动 smoke，也给出对应的真实 CLI 流程。
+先完成 [README Setup](../../README.md#setup)。本章有两层验证，它们回答的问题不同：
 
-### 1. capstone：长期成员、one-shot research、plugin lookup 与 edit integration
+| 命令 | 调用 LLM API | 经过公开 tool runtime | 真实副作用 | 验证重点 |
+| --- | --- | --- | --- | --- |
+| `npm run smoke:c17c-capstone` | 否 | 否 | 临时文件、verification command、commit、cherry-pick | TaskGraph、Git integration、root verifier 与 CompletionGate 能闭环 |
+| `npm run smoke:c17c-child` | 否 | 否 | 临时 child worktree、verification command、commit、cherry-pick | one-shot edit source 能进入 integration |
+| `npm run start -- ...` | 是 | 是 | session worktree、child session、teammate process、MCP、Git integration | 模型能否通过受限工具面走完协议 |
 
-自动 smoke 不调用模型，固定重放同一条协议：
+前两条是 deterministic protocol integration tests。它们直接调用 domain store 和 runtime services，适合快速重放状态机与 Git 证据链，但不能证明模型会选择正确工具，也不会经过 tool schema、permission policy 或 tool result projection。第三条才是 live LLM API demo。
+
+### 1. deterministic protocol integration tests
+
+#### 完整协议与 CompletionGate
+
+运行：
 
 ```bash
 npm run smoke:c17c-capstone
 ```
 
-预期看到 1 个 test 通过。它会建立三个临时 worktree，从本地 fixture 读取 `FH-16`，再把 Leader-owned research child、assigned research teammate 和 atomic-claim edit teammate 放进同一份 TaskGraph。edit 路径依次经过 plan、verification、source commit、cherry-pick、receipt 和 CompletionGate，最终生成：
+这个 test 不启动 root、child 或 teammate model。测试代码会：
+
+1. 建立 base、Leader 和 editor 三个临时 worktree；
+2. 直接调用 `lookupDemoIssue("FH-16")` 读取本地 fixture，而不是通过 MCP transport 发起 tool call；
+3. 直接调用 TaskGraphStore 写入 assign、claim、plan、submission 和 review，并用 stub 提供 stopped teammate projection；
+4. 通过 GitIntegrationService 运行 verification、创建 source commit，再 cherry-pick 到 Leader worktree；
+5. 运行 root verifier，并要求 CompletionGate 返回 `ready`。
+
+预期看到 1 个 test 通过，Leader worktree 中的 artifact 是：
 
 ```text
 issue: FH-16
 status: integrated by c17c
 ```
 
-真实模型 smoke 使用 Leader `--worktree`，根级 verifier 同时检查 build 与 artifact：
+#### one-shot edit source
 
-```bash
-npm run start -- --worktree --verify "npm run build && test -f c17c-coordination-demo.txt && grep -Fx 'issue: FH-16' c17c-coordination-demo.txt && grep -Fx 'status: integrated by c17c' c17c-coordination-demo.txt" '/issue-workflow:triage Run the c17c capstone with one tool call per round. Trust the issue-workflow-demo plugin and call mcp_issue-workflow-demo_lookup_issue with issueId="FH-16". Start research teammate protocol-researcher and edit teammate protocol-editor without taskId; both use maxToolRounds=4. Create three ready tasks: a Leader-owned research task for one synchronous research child, a research task assigned to protocol-researcher, and an edit task titled="Create c17c coordination artifact" with verificationCommand="grep -Fx '\''issue: FH-16'\'' c17c-coordination-demo.txt && grep -Fx '\''status: integrated by c17c'\'' c17c-coordination-demo.txt". Delegate the first task with its taskId and require the child to append evidence. Message protocol-researcher to append evidence and submit its research result. Message idle protocol-editor to atomically claim the edit task, submit a plan, and return to idle; approve that plan as Leader, then message it to create c17c-coordination-demo.txt containing exactly two lines: issue: FH-16 and status: integrated by c17c. It must append evidence and submit_result. Review both research results with pass. Read the submitted edit with task_get, run task_verify with the exact contract command, then task_integrate. After both teammates are idle, call teammate_shutdown for each. Return final only after the completion gate is ready.'
-```
-
-运行期间会出现三类确认：plugin trust、edit teammate start、`task_verify` / `task_integrate`。逐项确认后，最终 session worktree 应有 artifact，原始 base checkout 没有：
-
-```bash
-test ! -e c17c-coordination-demo.txt
-```
-
-### 2. focused smoke：one-shot edit child integration
+运行：
 
 ```bash
 npm run smoke:c17c-child
 ```
 
-预期同样是 1 个 test 通过，target 出现：
+这个 test 同样不启动模型，也不创建真实 child session。测试代码先在临时 child worktree 写入 artifact，再构造受信的 child source，随后直接执行 capture、submit、verify 和 integrate。它验证的是 source binding 与 Git integration，不是 `delegate` tool 的调用过程。
+
+预期看到 1 个 test 通过，target 中的文件内容是：
 
 ```text
 status: one-shot integrated
 ```
 
-真实 CLI 路径如下：
+### 2. live LLM API demo：完整团队闭环
+
+下面这条命令会读取 `.env` 中的 `OPENAI_API_KEY`、`OPENAI_MODEL` 和可选的 `OPENAI_BASE_URL`。它不是 Vitest：root、one-shot child 和两名 teammate 都会实际请求模型，模型返回的 function calls 再交给 permission policy 与 tool runtime 执行。
+
+```bash
+npm run start -- --worktree --verify "npm run build && test -f c17c-coordination-demo.txt && grep -Fx 'issue: FH-16' c17c-coordination-demo.txt && grep -Fx 'status: integrated by c17c' c17c-coordination-demo.txt" '/issue-workflow:triage Run the c17c capstone with one tool call per round. Trust the issue-workflow-demo plugin and call mcp_issue-workflow-demo_lookup_issue with issueId="FH-16". Start research teammate protocol-researcher and edit teammate protocol-editor without taskId; both use maxToolRounds=4. Create three ready tasks: a Leader-owned research task for one synchronous research child, a research task assigned to protocol-researcher, and an edit task titled="Create c17c coordination artifact" with verificationCommand="grep -Fx '\''issue: FH-16'\'' c17c-coordination-demo.txt && grep -Fx '\''status: integrated by c17c'\'' c17c-coordination-demo.txt". Delegate the first task with its taskId and require the child to append evidence. Message protocol-researcher to append evidence and submit its research result. Message idle protocol-editor to atomically claim the edit task, submit a plan, and return to idle; approve that plan as Leader, then message it to create c17c-coordination-demo.txt containing exactly two lines: issue: FH-16 and status: integrated by c17c. It must append evidence and submit_result. Review both research results with pass. Read the submitted edit with task_get, run task_verify with the exact contract command, then task_integrate. After both teammates are idle, call teammate_shutdown for each. Return final only after the completion gate is ready.'
+```
+
+这条命令里：
+
+- `--worktree` 为 root session 建立隔离 worktree，Git integration 的 target 就是这里；
+- `--verify` 注册根级 verifier，只有 CompletionGate 返回 `ready` 后才会执行；
+- `/issue-workflow:triage` 激活 plugin skill，模型随后通过 `mcp_issue-workflow-demo_lookup_issue` 查询 `FH-16`；
+- task prompt 规定 task contract、成员分工和完成顺序，每一步仍须由模型发出实际 function call。
+
+运行期间会询问 plugin trust、edit teammate start，以及 `task_verify` / `task_integrate`。批准后，root transcript 应出现真实模型与工具记录，例如：
+
+```text
+[round N] model=<OPENAI_MODEL>
+[round N] function_call: task_transition {...}
+[round N] permission: allow ...
+[round N] tool_result:
+...
+[verify] status=passed ...
+```
+
+具体 round number 由模型执行过程决定。root trace 应包含 `mcp_issue-workflow-demo_lookup_issue`、`task_create`、`task_transition`、`delegate`、`teammate_start`、`message_send`、`task_get`、`task_verify`、`task_integrate` 和 `teammate_shutdown`。child 与 teammate 发出的 `task_add_evidence`、`task_transition`、`edit` 或 `write` 会记录在各自 trace，而不是 root trace。CLI 会打印这些 trace 的路径，可以直接检查：
+
+```bash
+rg '"type":"tool_call"' <root-trace-path> <child-or-teammate-trace-path>
+```
+
+CLI 还会打印 `[workspace] path=...`。该目录中的 artifact 应为：
+
+```text
+issue: FH-16
+status: integrated by c17c
+```
+
+收尾阶段出现 `[verify] status=passed`，说明 CompletionGate 已允许根级 verifier 运行。原始 base checkout 不应出现 artifact：
+
+```bash
+test ! -e c17c-coordination-demo.txt
+```
+
+### 3. 可选的 focused live demo：one-shot edit child
+
+若只想观察 root、sync edit child 与 Git integration，可以运行这条较短的 live 路径：
 
 ```bash
 npm run start -- --worktree --verify "npm run build && grep -Fx 'status: one-shot integrated' c17c-child-integration-demo.txt" 'Run the focused c17c one-shot edit integration. Create one edit task titled="Integrate one-shot child artifact", acceptance=["The artifact is integrated"], kind="edit", dependencies=[], and verificationCommand="grep -Fx '\''status: one-shot integrated'\'' c17c-child-integration-demo.txt". Assign it to leader with task_transition. Delegate one synchronous edit child with this taskId, maxToolRounds=4, and runInBackground=false. The child must create c17c-child-integration-demo.txt containing exactly status: one-shot integrated followed by a newline, then append task evidence and return. Use the returned childSessionId in Leader task_transition submit_result; do not pass a workspace path. Read task_get for diff and fingerprint status, run task_verify with the exact contract command, then task_integrate. Return final only after completion gate and root verifier pass.'
 ```
 
-这条路径没有长期成员，也不需要 `teammate_shutdown`。它专门验证 sync child terminal handoff 会进入 source registry，而不是只验证 teammate worktree。
+这条命令仍会调用真实 LLM 和公开工具。它不启动长期成员，因此不需要 `teammate_shutdown`；观察重点是 sync child terminal handoff 是否进入 source registry，以及 Leader 是否只凭 `childSessionId` 完成后续 verify / integrate。
 
 ## 下一步缺口
 
