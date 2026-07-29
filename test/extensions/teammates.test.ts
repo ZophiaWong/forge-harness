@@ -71,7 +71,7 @@ describe("TeammateManager", () => {
     ));
     expect(definition).toMatchObject({
       instructions: "Investigate repository behavior.",
-      maxToolRounds: 8,
+      maxToolRounds: 32,
       name: "repo-researcher",
       profile: "research",
     });
