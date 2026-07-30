@@ -10,7 +10,8 @@ export interface CreateTeammateToolsOptions {
 }
 
 const teammateStartDefinition: ToolDefinition = {
-  description: "Start a long-lived named teammate and dispatch its required first mailbox message.",
+  description:
+    "Start a long-lived named teammate and immediately dispatch its required first mailbox message.",
   name: "teammate_start",
   parameters: {
     additionalProperties: false,
@@ -18,8 +19,16 @@ const teammateStartDefinition: ToolDefinition = {
       name: { type: "string" },
       profile: { enum: ["research", "edit"], type: "string" },
       instructions: { type: "string" },
-      message: { type: "string" },
-      maxToolRounds: { type: ["number", "null"] },
+      message: {
+        description:
+          "First mailbox message, executed immediately after startup. Any referenced task must already be ready or assigned.",
+        type: "string",
+      },
+      maxToolRounds: {
+        description:
+          "Tool round cap for each mailbox batch. Reserve room for claim, inspection, evidence, submission, retries, and a final response.",
+        type: ["number", "null"],
+      },
     },
     required: ["name", "profile", "instructions", "message", "maxToolRounds"],
     type: "object",

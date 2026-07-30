@@ -26,6 +26,19 @@ describe("teammate tools", () => {
     expect(
       leader.find((tool) => tool.definition.name === "teammate_rejoin")?.definition.description,
     ).toContain("does not unblock");
+    const start = leader.find(
+      (tool) => tool.definition.name === "teammate_start",
+    )?.definition;
+    const startProperties = (
+      start?.parameters as {
+        properties?: Record<string, { description?: string }>;
+      } | undefined
+    )?.properties;
+    expect(start?.description).toContain("immediately");
+    expect(startProperties?.message?.description).toContain("immediately");
+    expect(startProperties?.message?.description).toContain("ready or assigned");
+    expect(startProperties?.maxToolRounds?.description).toContain("mailbox batch");
+    expect(startProperties?.maxToolRounds?.description).toContain("final response");
   });
 
   it("resolves start arguments and binds direct-message sender identity", async () => {
