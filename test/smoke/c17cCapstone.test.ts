@@ -6,26 +6,28 @@ import { promisify } from "node:util";
 
 import { expect, it } from "vitest";
 
+import type { TeamTaskActor } from "../../src/domain/teamTask.js";
 import type { TeammateManager } from "../../src/extensions/teammates.js";
 import { lookupDemoIssue } from "../../src/extensions/mcpDemoServer.js";
 import { createCompletionGate } from "../../src/runtime/completionGate.js";
 import { createGitIntegrationService } from "../../src/runtime/gitIntegration.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import { createCommandVerifier } from "../../src/runtime/verification.js";
+import { createTeamTaskToolRuntime } from "../../src/tools/teamTaskTools.js";
 
 const execFileAsync = promisify(execFile);
 const timestamp = "2026-07-28T00:00:00.000Z";
-const leader = { role: "leader" as const, sessionId: "leader-session" };
-const researcher = {
+const leader: TeamTaskActor = { role: "leader", sessionId: "leader-session" };
+const researcher: TeamTaskActor = {
   name: "researcher",
-  profile: "research" as const,
-  role: "teammate" as const,
+  profile: "research",
+  role: "teammate",
   sessionId: "researcher-session",
 };
-const editor = {
+const editor: TeamTaskActor = {
   name: "editor",
-  profile: "edit" as const,
-  role: "teammate" as const,
+  profile: "edit",
+  role: "teammate",
   sessionId: "editor-session",
 };
 
@@ -36,10 +38,45 @@ it("runs the c17c capstone protocol through integrated artifact and completion g
     now: () => new Date(timestamp),
   });
   await store.initialize();
-  await store.create(leader, researchContract("One-shot issue research"));
-  await store.create(leader, researchContract("Assigned teammate research"));
-  await store.create(leader, {
+  const integration = createGitIntegrationService({
+    now: () => new Date(timestamp),
+    targetCwd: git.leader,
+  });
+  const teammates = stoppedTeammates();
+  const leaderRuntime = createTeamTaskToolRuntime({
+    actor: leader,
+    gitIntegration: integration,
+    store,
+    teammates,
+  });
+  const researcherRuntime = createTeamTaskToolRuntime({ actor: researcher, store });
+  const editorRuntime = createTeamTaskToolRuntime({
+    actor: editor,
+    gitIntegration: integration,
+    ownWorkspace: { branch: "editor-work", path: git.editor },
+    store,
+  });
+  const childRuntime = createTeamTaskToolRuntime({
+    actor: {
+      delegatedTaskId: "task_001",
+      profile: "research",
+      role: "child",
+      sessionId: "child-research",
+    },
+    store,
+  });
+
+  await executeCompleted(leaderRuntime, "task_create", {
+    ...researchContract("One-shot issue research"),
+    dependencies: [],
+  });
+  await executeCompleted(leaderRuntime, "task_create", {
+    ...researchContract("Assigned teammate research"),
+    dependencies: [],
+  });
+  await executeCompleted(leaderRuntime, "task_create", {
     acceptance: ["c17c artifact is integrated"],
+    dependencies: [],
     description: "Create the capstone artifact",
     kind: "edit",
     title: "Create c17c artifact",
@@ -47,61 +84,64 @@ it("runs the c17c capstone protocol through integrated artifact and completion g
       "grep -Fx 'issue: FH-16' c17c-coordination-demo.txt && grep -Fx 'status: integrated by c17c' c17c-coordination-demo.txt",
   });
 
-  await store.transition(leader, {
+  await executeCompleted(leaderRuntime, "task_transition", {
     action: "assign",
-    assignee: { role: "leader" },
+    assignee: "leader",
     id: "task_001",
   });
-  await store.transition(leader, {
+  await executeCompleted(leaderRuntime, "task_transition", {
     action: "assign",
-    assignee: { name: "researcher", profile: "research", role: "teammate" },
+    assignee: "researcher",
     id: "task_002",
   });
-  await store.transition(editor, { action: "claim", id: "task_003" });
+  await executeCompleted(editorRuntime, "task_transition", {
+    action: "claim",
+    id: "task_003",
+  });
 
   const issue = lookupDemoIssue("FH-16");
   expect(issue.found).toBe(true);
-  await store.addEvidence(
-    { delegatedTaskId: "task_001", profile: "research", role: "child", sessionId: "child-research" },
-    "task_001",
-    { callId: "issue-lookup", round: 1, summary: issue.text },
-  );
-  await store.transition(leader, {
+  await executeCompleted(childRuntime, "task_add_evidence", {
+    id: "task_001",
+    references: [{ kind: "external", value: "issue-workflow-demo:FH-16" }],
+    summary: issue.text,
+  });
+  await executeCompleted(leaderRuntime, "task_transition", {
     action: "submit_result",
     id: "task_001",
     summary: "FH-16 was loaded through the local issue fixture",
   });
-  await store.transition(leader, {
+  await executeCompleted(leaderRuntime, "task_transition", {
     action: "review_result",
     decision: "pass",
     id: "task_001",
     reason: "Issue evidence is present",
   });
 
-  await store.addEvidence(researcher, "task_002", {
-    callId: "researcher-result",
-    round: 1,
+  await executeCompleted(researcherRuntime, "task_add_evidence", {
+    id: "task_002",
+    references: [{ kind: "external", value: "issue-workflow-demo:FH-16" }],
     summary: "The completion gate must wait for integration and shutdown",
   });
-  await store.transition(researcher, {
+  await executeCompleted(researcherRuntime, "task_transition", {
     action: "submit_result",
     id: "task_002",
     summary: "Coordination requirements confirmed",
   });
-  await store.transition(leader, {
+  await executeCompleted(leaderRuntime, "task_transition", {
     action: "review_result",
     decision: "pass",
     id: "task_002",
     reason: "Research acceptance is satisfied",
   });
 
-  await store.transition(editor, {
+  await executeCompleted(editorRuntime, "task_transition", {
     action: "submit_plan",
     id: "task_003",
     steps: ["Create the exact artifact", "Run the contract verifier"],
     summary: "One file, two exact lines",
   });
-  await store.transition(leader, {
+  await executeCompleted(leaderRuntime, "task_transition", {
     action: "review_plan",
     decision: "approve",
     id: "task_003",
@@ -112,43 +152,29 @@ it("runs the c17c capstone protocol through integrated artifact and completion g
     "issue: FH-16\nstatus: integrated by c17c\n",
     "utf8",
   );
-  await store.addEvidence(editor, "task_003", {
-    callId: "artifact-created",
-    round: 2,
+  await executeCompleted(editorRuntime, "task_add_evidence", {
+    id: "task_003",
+    references: [{ kind: "artifact", value: "c17c-coordination-demo.txt" }],
     summary: "Created the exact artifact",
   });
-  const source = {
-    kind: "teammate" as const,
-    name: "editor",
-    profile: "edit" as const,
-    sessionId: "editor-session",
-    workspace: { branch: "editor-work", path: git.editor },
-  };
-  const integration = createGitIntegrationService({
-    now: () => new Date(timestamp),
-    targetCwd: git.leader,
-  });
-  const snapshot = await integration.capture(source);
-  await store.transition(editor, {
+  await executeCompleted(editorRuntime, "task_transition", {
     action: "submit_result",
-    changedFiles: snapshot.changedFiles,
-    fingerprint: snapshot.fingerprint,
     id: "task_003",
-    source,
     summary: "Artifact ready",
   });
-  const verification = await integration.verify(
-    (await store.get("task_003")).task,
-    (await store.get("task_003")).task.verificationCommand as string,
-  );
-  await store.recordVerification(leader, "task_003", {
-    command: verification.command,
-    exitCode: verification.exitCode,
-    fingerprint: verification.actualFingerprint,
-    summary: verification.output,
+  const submitted = await executeCompleted(leaderRuntime, "task_get", {
+    id: "task_003",
   });
-  const receipt = await integration.integrate((await store.get("task_003")).task);
-  await store.recordIntegration(leader, "task_003", receipt);
+  expect(submitted.metadata?.review).toMatchObject({
+    changedFiles: ["c17c-coordination-demo.txt"],
+    fingerprintStatus: "current",
+  });
+  await executeCompleted(leaderRuntime, "task_verify", {
+    command:
+      "grep -Fx 'issue: FH-16' c17c-coordination-demo.txt && grep -Fx 'status: integrated by c17c' c17c-coordination-demo.txt",
+    id: "task_003",
+  });
+  await executeCompleted(leaderRuntime, "task_integrate", { id: "task_003" });
 
   const rootVerification = await createCommandVerifier({
     command: `${JSON.stringify(process.execPath)} -e "" && test -f c17c-coordination-demo.txt`,
@@ -163,7 +189,7 @@ it("runs the c17c capstone protocol through integrated artifact and completion g
   expect(await createCompletionGate({
     cwd: git.leader,
     taskStore: store,
-    teammates: stoppedTeammates(),
+    teammates,
   }).evaluate()).toEqual({ status: "ready" });
   expect(await fs.readFile(
     path.join(git.leader, "c17c-coordination-demo.txt"),
@@ -205,6 +231,16 @@ function stoppedTeammates(): TeammateManager {
         },
       ];
     },
+    async resolveAssignee(name) {
+      if (name !== "researcher") {
+        throw new Error(`unknown teammate "${name}"`);
+      }
+      return {
+        name: "researcher",
+        profile: "research",
+        role: "teammate",
+      };
+    },
   } as TeammateManager;
 }
 
@@ -227,4 +263,17 @@ async function createThreeWorktreeFixture() {
 
 async function runGit(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
+}
+
+async function executeCompleted(
+  runtime: ReturnType<typeof createTeamTaskToolRuntime>,
+  name: string,
+  args: Record<string, unknown>,
+) {
+  const result = await runtime.execute(
+    { arguments: JSON.stringify(args), name },
+    { callId: `call_${name}`, round: 1 },
+  );
+  expect(result.status, result.content).toBe("completed");
+  return result;
 }

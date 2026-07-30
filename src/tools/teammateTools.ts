@@ -42,7 +42,8 @@ const teammateListDefinition: ToolDefinition = {
 };
 
 const teammateRejoinDefinition: ToolDefinition = {
-  description: "Explicitly rejoin a failed teammate with a fresh session and a required recovery message.",
+  description:
+    "Explicitly rejoin a failed teammate with a fresh session and a required recovery message. Rejoin does not unblock tasks already frozen by owner failure.",
   name: "teammate_rejoin",
   parameters: {
     additionalProperties: false,

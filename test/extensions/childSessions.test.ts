@@ -398,6 +398,25 @@ describe("child session profiles", () => {
     expect(task).toContain("/chapter-handoff Inspect the previous chapter gap.");
   });
 
+  it("permits linked research children to append task evidence without editing files", () => {
+    const task = formatChildProfileTask({
+      profile: "research",
+      task: "Inspect the delegated task and append evidence.",
+      taskId: "task_001",
+    });
+
+    expect(task).toContain(
+      "task_add_evidence is permitted coordination metadata and does not edit project files",
+    );
+    expect(task).toContain("Use it when the delegated task requests evidence");
+    expect(task).toContain(
+      "Follow the explicit delegated task before doing any broader investigation",
+    );
+    expect(task).toContain(
+      "do not inspect unrelated files after the requested evidence is recorded",
+    );
+  });
+
   it("lists changed files from git porcelain status without inline diff", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-child-status-"));
     await fs.writeFile(path.join(cwd, "unchanged.txt"), "base\n", "utf8");

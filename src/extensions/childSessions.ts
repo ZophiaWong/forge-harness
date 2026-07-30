@@ -120,7 +120,14 @@ export function formatChildProfileTask(options: {
     options.profile === "research"
       ? [
           "You are a fresh research child session.",
-          "Use the available read-only tools to investigate the delegated task.",
+          "Use inspect-only tools to investigate the delegated task without editing project files.",
+          ...(options.taskId
+            ? [
+                "task_add_evidence is permitted coordination metadata and does not edit project files.",
+                "Use it when the delegated task requests evidence.",
+                "Follow the explicit delegated task before doing any broader investigation; do not inspect unrelated files after the requested evidence is recorded.",
+              ]
+            : []),
           "Report findings, evidence, open questions, and the next step in your final answer.",
         ].join("\n")
       : [

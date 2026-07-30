@@ -13,6 +13,7 @@ import {
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import {
   createTeamTaskToolRuntime,
+  taskAddEvidenceToolDefinition,
   taskCreateToolDefinition,
   taskIntegrateToolDefinition,
   taskTransitionToolDefinition,
@@ -55,7 +56,10 @@ describe("team task tool contract", () => {
       sessionId: "child-session",
     };
 
-    expect(createTeamTaskToolRuntime({ actor: leader, store }).toolDefinitions().map((tool) => tool.name))
+    const leaderDefinitions = createTeamTaskToolRuntime({ actor: leader, store }).toolDefinitions();
+    const teammateDefinitions = createTeamTaskToolRuntime({ actor: teammate, store }).toolDefinitions();
+
+    expect(leaderDefinitions.map((tool) => tool.name))
       .toEqual([
         "task_list",
         "task_get",
@@ -66,10 +70,74 @@ describe("team task tool contract", () => {
         "task_verify",
         "task_integrate",
       ]);
-    expect(createTeamTaskToolRuntime({ actor: teammate, store }).toolDefinitions().map((tool) => tool.name))
+    expect(teammateDefinitions.map((tool) => tool.name))
       .toEqual(["task_list", "task_get", "task_add_evidence", "task_transition"]);
     expect(createTeamTaskToolRuntime({ actor: child, store }).toolDefinitions().map((tool) => tool.name))
       .toEqual(["task_list", "task_get", "task_add_evidence"]);
+    expect(transitionActions(leaderDefinitions)).toEqual([
+      "assign",
+      "review_plan",
+      "review_result",
+      "submit_result",
+      "submit_handoff",
+      "transfer",
+      "block",
+    ]);
+    expect(transitionActions(teammateDefinitions)).toEqual([
+      "claim",
+      "submit_plan",
+      "submit_result",
+      "submit_handoff",
+    ]);
+  });
+
+  it("guides Leader ownership and ready task dependencies in the model-facing schema", () => {
+    expect(taskCreateToolDefinition.parameters).toMatchObject({
+      properties: {
+        dependencies: {
+          description: expect.stringContaining("ready"),
+        },
+      },
+    });
+    expect(taskTransitionToolDefinition.parameters).toMatchObject({
+      properties: {
+        assignee: {
+          description: expect.stringContaining('exactly "leader"'),
+        },
+      },
+    });
+    expect(taskAddEvidenceToolDefinition.description).toContain("coordination metadata");
+    expect(taskAddEvidenceToolDefinition.description).toContain("research child");
+  });
+
+  it("describes action-specific transition inputs and submission ownership by actor", async () => {
+    const { store } = await fixture();
+    const teammate: TeamTaskActor = {
+      name: "editor",
+      profile: "edit",
+      role: "teammate",
+      sessionId: "teammate-session",
+    };
+    const leaderTransition = transitionDefinition(
+      createTeamTaskToolRuntime({ actor: leader, store }).toolDefinitions(),
+    );
+    const teammateTransition = transitionDefinition(
+      createTeamTaskToolRuntime({ actor: teammate, store }).toolDefinitions(),
+    );
+
+    expect(leaderTransition.description).toContain(
+      "review_plan/review_result require decision and reason",
+    );
+    expect(leaderTransition.description).toContain(
+      "Never submit_result for a teammate-owned task",
+    );
+    expect(leaderTransition.description).toContain(
+      "edit also requires childSessionId",
+    );
+    expect(teammateTransition.description).toContain(
+      "submit_result requires summary and uses your registered workspace",
+    );
+    expect(teammateTransition.description).toContain("Do not pass childSessionId");
   });
 
   it("creates and updates only pending contract fields", async () => {
@@ -142,6 +210,69 @@ describe("team task tool contract", () => {
       status: "completed",
     });
     expect((await store.get("task_001")).task.verdict).toMatchObject({ status: "passed" });
+  });
+
+  it("returns the exact Leader assignee after a casing mistake", async () => {
+    const { runtime } = await leaderFixture();
+    await execute(runtime, "task_create", {
+      acceptance: ["Reviewed"],
+      dependencies: [],
+      description: "Research",
+      kind: "research",
+      title: "Research task",
+    });
+
+    const result = await execute(runtime, "task_transition", {
+      action: "assign",
+      assignee: "Leader",
+      id: "task_001",
+    });
+
+    expect(result).toMatchObject({
+      metadata: { reasonCode: "invalid_input" },
+      status: "failed",
+    });
+    expect(result.content).toContain('exactly "leader"');
+  });
+
+  it("rejects Leader submission for a teammate-owned edit before requesting childSessionId", async () => {
+    const { store } = await fixture();
+    const editor: TeamTaskActor = {
+      name: "editor",
+      profile: "edit",
+      role: "teammate",
+      sessionId: "editor-session",
+    };
+    await store.create(leader, {
+      acceptance: ["Integrated"],
+      dependencies: [],
+      description: "Edit",
+      kind: "edit",
+      title: "Edit task",
+      verificationCommand: "npm test",
+    });
+    await store.transition(leader, {
+      action: "assign",
+      assignee: { name: "editor", profile: "edit", role: "teammate" },
+      id: "task_001",
+    });
+
+    const result = await execute(
+      createTeamTaskToolRuntime({ actor: leader, store }),
+      "task_transition",
+      {
+        action: "submit_result",
+        id: "task_001",
+        summary: "Leader should not submit this.",
+      },
+    );
+
+    expect(result).toMatchObject({
+      metadata: { reasonCode: "invalid_input" },
+      status: "failed",
+    });
+    expect(result.content).toContain("teammate-owned");
+    expect(result.content).not.toContain("childSessionId");
   });
 
   it("exposes actor-filtered availableActions", async () => {
@@ -424,4 +555,22 @@ async function execute(
     { arguments: JSON.stringify(args), name },
     { callId: `call_${name}`, round: 1 },
   );
+}
+
+function transitionActions(
+  definitions: ReturnType<ReturnType<typeof createTeamTaskToolRuntime>["toolDefinitions"]>,
+): string[] {
+  const transition = transitionDefinition(definitions);
+  const properties = transition?.parameters.properties as
+    | Record<string, { enum?: string[] }>
+    | undefined;
+  return properties?.action?.enum ?? [];
+}
+
+function transitionDefinition(
+  definitions: ReturnType<ReturnType<typeof createTeamTaskToolRuntime>["toolDefinitions"]>,
+) {
+  const transition = definitions.find((definition) => definition.name === "task_transition");
+  expect(transition).toBeDefined();
+  return transition!;
 }

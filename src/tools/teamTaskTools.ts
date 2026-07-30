@@ -33,6 +33,21 @@ const TASK_VERIFY = "task_verify";
 const TASK_INTEGRATE = "task_integrate";
 const COMMITTED_MUTATION_CLEANUP_WARNING =
   "task graph mutation committed but lock cleanup failed";
+const LEADER_TRANSITION_ACTIONS = [
+  "assign",
+  "review_plan",
+  "review_result",
+  "submit_result",
+  "submit_handoff",
+  "transfer",
+  "block",
+] as const;
+const TEAMMATE_TRANSITION_ACTIONS = [
+  "claim",
+  "submit_plan",
+  "submit_result",
+  "submit_handoff",
+] as const;
 
 const idProperty = {
   description: "Team task id, such as task_001.",
@@ -88,7 +103,11 @@ export const taskCreateToolDefinition: ToolDefinition = {
     additionalProperties: false,
     properties: {
       acceptance: stringArray,
-      dependencies: stringArray,
+      dependencies: {
+        ...stringArray,
+        description:
+          "Task ids that must complete first. Use [] for a task that should be ready immediately.",
+      },
       description: { type: "string" },
       kind: { enum: ["research", "edit"], type: "string" },
       title: { type: "string" },
@@ -123,7 +142,8 @@ export const taskUpdateToolDefinition: ToolDefinition = {
 export const taskAddEvidenceToolDefinition: ToolDefinition = {
   type: "function",
   name: TASK_ADD_EVIDENCE,
-  description: "Append evidence to an owned or delegated in-progress task.",
+  description:
+    "Append coordination metadata to an owned or delegated in-progress task. This is permitted for a linked research child and does not edit project files.",
   strict: false,
   parameters: {
     type: "object",
@@ -149,19 +169,22 @@ export const taskTransitionToolDefinition: ToolDefinition = {
     properties: {
       action: {
         enum: [
-          "assign",
-          "claim",
-          "submit_plan",
-          "review_plan",
-          "submit_result",
-          "review_result",
-          "submit_handoff",
-          "transfer",
-          "block",
+          ...LEADER_TRANSITION_ACTIONS,
+          ...TEAMMATE_TRANSITION_ACTIONS.filter(
+            (action) => !LEADER_TRANSITION_ACTIONS.includes(
+              action as typeof LEADER_TRANSITION_ACTIONS[number],
+            ),
+          ),
         ],
+        description:
+          "Use only actions exposed for the current actor role. Leader assigns and reviews; teammates claim, plan, and submit.",
         type: "string",
       },
-      assignee: { type: "string" },
+      assignee: {
+        description:
+          'For assign, use exactly "leader" for Leader ownership or an existing teammate name. Transfer accepts only an existing teammate name.',
+        type: "string",
+      },
       childSessionId: { type: "string" },
       code: { type: "string" },
       decision: { enum: ["approve", "reject", "pass"], type: "string" },
@@ -387,7 +410,7 @@ function createEvidenceTool(options: TeamTaskToolRuntimeOptions): RegisteredTool
 
 function createTransitionTool(options: TeamTaskToolRuntimeOptions): RegisteredTool {
   return {
-    definition: taskTransitionToolDefinition,
+    definition: transitionDefinitionForActor(options.actor),
     async handler({ rawArguments }) {
       return handle(TASK_TRANSITION, async () => {
         const input = parseObject(rawArguments, TASK_TRANSITION, [
@@ -552,6 +575,11 @@ async function buildTransitionInput(
   switch (action) {
     case "assign": {
       const assigneeName = requiredString(input.assignee, "task_transition assignee");
+      if (assigneeName !== "leader" && assigneeName.toLowerCase() === "leader") {
+        throw invalidArguments(
+          'task_transition assign must use exactly "leader" for Leader ownership',
+        );
+      }
       const assignee = assigneeName === "leader"
         ? { role: "leader" as const }
         : await requireTeammates(options).resolveAssignee(assigneeName);
@@ -580,6 +608,11 @@ async function buildTransitionInput(
     case "submit_result": {
       const task = (await options.store.get(id)).task;
       const summary = requiredString(input.summary, "task_transition summary");
+      if (options.actor.role === "leader" && task.owner?.role === "teammate") {
+        throw invalidArguments(
+          `Leader cannot submit_result for teammate-owned task "${id}"; wait for the owning teammate to submit it`,
+        );
+      }
       if (task.kind === "research") {
         return { action, id, summary };
       }
@@ -643,6 +676,44 @@ async function buildTransitionInput(
     default:
       throw invalidArguments(`unsupported task_transition action "${action}"`);
   }
+}
+
+function transitionDefinitionForActor(actor: TeamTaskActor): ToolDefinition {
+  const actions = actor.role === "leader"
+    ? LEADER_TRANSITION_ACTIONS
+    : TEAMMATE_TRANSITION_ACTIONS;
+  const properties = taskTransitionToolDefinition.parameters.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  return {
+    ...taskTransitionToolDefinition,
+    description: actor.role === "leader"
+      ? [
+          taskTransitionToolDefinition.description,
+          "Leader inputs: assign requires assignee; review_plan/review_result require decision and reason.",
+          "submit_result is only for a Leader-owned synchronous child: it requires summary, and edit also requires childSessionId.",
+          "Never submit_result for a teammate-owned task; wait for that teammate to submit it.",
+          "block requires code and reason.",
+        ].join(" ")
+      : [
+          taskTransitionToolDefinition.description,
+          "Teammate inputs: claim requires only id; submit_plan requires summary and steps.",
+          "submit_result requires summary and uses your registered workspace.",
+          "Do not pass childSessionId.",
+          "submit_handoff requires summary.",
+        ].join(" "),
+    parameters: {
+      ...taskTransitionToolDefinition.parameters,
+      properties: {
+        ...properties,
+        action: {
+          ...properties.action,
+          enum: [...actions],
+        },
+      },
+    },
+  };
 }
 
 async function resolveEditSource(

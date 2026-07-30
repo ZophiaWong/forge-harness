@@ -126,7 +126,7 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
             || linkedTask.task.kind !== args.profile
           ) {
             throw new Error(
-              `delegate taskId "${args.taskId}" must reference an in_progress Leader-owned ${args.profile} task`,
+              `delegate taskId "${args.taskId}" must reference an in_progress Leader-owned ${args.profile} task; first use task_transition action="assign" assignee="leader"`,
             );
           }
         }

@@ -58,8 +58,8 @@ export function createTeammateWorktreePath(
     baseCwd,
     ".forge",
     "worktrees",
-    rootSessionId,
     "teammates",
+    rootSessionId,
     name,
   );
 }

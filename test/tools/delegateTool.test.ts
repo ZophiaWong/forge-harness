@@ -81,6 +81,8 @@ describe("delegate tool", () => {
       toolName: "delegate",
     });
     expect(pending.content).toContain("in_progress");
+    expect(pending.content).toContain('action="assign"');
+    expect(pending.content).toContain('assignee="leader"');
     expect(requests).toEqual([]);
     expect(await store.read()).toEqual(before);
   });

@@ -23,6 +23,9 @@ describe("teammate tools", () => {
       "teammate_list",
       "message_send",
     ]);
+    expect(
+      leader.find((tool) => tool.definition.name === "teammate_rejoin")?.definition.description,
+    ).toContain("does not unblock");
   });
 
   it("resolves start arguments and binds direct-message sender identity", async () => {
