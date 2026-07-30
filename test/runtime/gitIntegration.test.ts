@@ -91,7 +91,10 @@ describe("GitIntegrationService", () => {
     });
     expect(await git(["status", "--porcelain=v1"], fixture.target)).toBe("");
     await expect(
-      fs.access(path.join(await git(["rev-parse", "--git-dir"], fixture.target), "CHERRY_PICK_HEAD")),
+      fs.access(path.join(
+        await git(["rev-parse", "--path-format=absolute", "--git-dir"], fixture.target),
+        "CHERRY_PICK_HEAD",
+      )),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(["rev-parse", "HEAD"], fixture.source)).toBe(
       (failure as GitIntegrationError).sourceCommit,
