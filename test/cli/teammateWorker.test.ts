@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatTeammateMailboxTurn,
+  formatTeammateSessionTask,
   startTeammateWorkerHost,
   type TeammateWorkerChannel,
 } from "../../src/cli/teammateWorker.js";
@@ -96,6 +97,18 @@ describe("teammate worker", () => {
     expect(formatted).toContain("kind: direct");
     expect(formatted).toContain("id: msg_researcher_000002");
     expect(formatted).toContain("kind: broadcast");
+  });
+
+  it("reserves todo for explicit Leader requests in short mailbox protocols", () => {
+    const task = formatTeammateSessionTask(workerConfig("/tmp/teammate"));
+
+    expect(task).toContain("TaskGraph is the shared coordination state");
+    expect(task).toContain(
+      "Do not call todo unless the current Leader message explicitly requests local todo planning.",
+    );
+    expect(task).toContain(
+      "For short mailbox protocols, call the requested TaskGraph tools directly and then return a final response.",
+    );
   });
 
   it("exposes only edit-profile tools and brokers each write approval over IPC", async () => {
