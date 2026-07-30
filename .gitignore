@@ -51,6 +51,7 @@ Thumbs.db
 !.forge/skills/**/SKILL.md
 .forge/sessions/
 .superpowers/
+.worktrees/
 
 # Temporary files
 tmp/
