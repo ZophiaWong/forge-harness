@@ -34,6 +34,22 @@ OPENAI_BASE_URL=
 
 Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gateway.
 
+## Clean run artifacts
+
+Runs that use `--worktree` or child sessions accumulate data under `.forge/sessions/` and `.forge/worktrees/`. Clean those artifacts with:
+
+```bash
+npm run clean:runs
+```
+
+The command shows the artifact counts and asks for `y/N` confirmation. CI jobs and scripts can skip confirmation:
+
+```bash
+npm run clean:runs -- --yes
+```
+
+Cleanup is limited to `.forge/sessions/` and `.forge/worktrees/`. Registered worktrees are removed through Git before those directories are deleted. `.forge/mcp.json`, plugins, memory, skills, and Git branches are preserved.
+
 ## Docs
 
 - [c00 Orientation](docs/tutorial/c00-orientation.md): first checkpoint for the course direction and docs-only baseline.
