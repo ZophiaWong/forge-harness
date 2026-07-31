@@ -392,6 +392,76 @@ describe("RuntimeState projection", () => {
     });
   });
 
+  it("projects only compact task-graph health, revision, mutation, and error state", () => {
+    const state = applyEvents([
+      {
+        callId: "call_list",
+        projectedOutput: "tool: task_list\nstatus: completed",
+        round: 1,
+        status: "completed",
+        taskGraph: {
+          health: "healthy",
+          revision: 2,
+        },
+        toolName: "task_list",
+        type: "tool_result",
+      },
+      {
+        callId: "call_update",
+        projectedOutput: "tool: task_update\nstatus: completed",
+        round: 2,
+        status: "completed",
+        taskGraph: {
+          health: "healthy",
+          revision: 3,
+        },
+        toolName: "task_update",
+        type: "tool_result",
+      },
+      {
+        nextStatus: "in_progress",
+        operation: "update",
+        previousStatus: "pending",
+        revision: 3,
+        taskId: "task_001",
+        type: "task_graph_mutated",
+      },
+      {
+        callId: "call_missing",
+        projectedOutput: "tool: task_get\nstatus: failed",
+        round: 3,
+        status: "failed",
+        taskGraph: {
+          error: {
+            code: "graph_missing",
+            message: "task_get failed: graph_missing",
+          },
+          health: "degraded",
+        },
+        toolName: "task_get",
+        type: "tool_result",
+      },
+    ]);
+
+    expect(state.taskGraph).toEqual({
+      health: "degraded",
+      lastError: {
+        code: "graph_missing",
+        message: "task_get failed: graph_missing",
+      },
+      lastMutation: {
+        nextStatus: "in_progress",
+        operation: "update",
+        previousStatus: "pending",
+        revision: 3,
+        taskId: "task_001",
+      },
+      lastSeenRevision: 3,
+    });
+    expect(JSON.stringify(state.taskGraph)).not.toContain("acceptance");
+    expect(JSON.stringify(state.taskGraph)).not.toContain('"tasks"');
+  });
+
   it("projects context compaction metadata without storing the summary body", () => {
     const state = applyEvents([
       {

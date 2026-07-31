@@ -1,3 +1,8 @@
+import { mkdirSync, unlinkSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createOpenAIResponseMock, OpenAIMock } = vi.hoisted(() => {
@@ -23,6 +28,7 @@ import type { ChildSessionRunner } from "../../src/extensions/childSessions.js";
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import type { PermissionApprover, PermissionDecision, PermissionPolicy } from "../../src/governance/types.js";
 import { createRuntimeStateRecorder } from "../../src/runtime/state.js";
+import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import type { TraceEventPayload, TraceRecorder } from "../../src/runtime/trace.js";
 import type { VerificationResult, Verifier } from "../../src/runtime/verification.js";
 import type { ToolRuntime } from "../../src/tools/types.js";
@@ -403,6 +409,297 @@ describe("runMinimalLoop", () => {
         type: "session_ended",
       },
     ]);
+  });
+
+  it("wires a Leader team-task runtime into the default loop without replacing todo", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-loop-task-runtime-"));
+    const store = createFileTeamTaskStore({
+      graphPath: path.join(directory, "task-graph.json"),
+    });
+    const actor = { role: "leader", sessionId: "root-session" } as const;
+    await store.initialize();
+    const trace = createTraceRecorder();
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              acceptance: ["The integration is verified"],
+              description: "Wire team tasks into the root loop.",
+              title: "Wire root loop",
+            }),
+            call_id: "call_task_create",
+            name: "task_create",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "Created the team task.",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "Coordinate team work.",
+      teamTasks: { actor, store },
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+    });
+
+    const toolNames = callsFor(responseCreate)[0]!.tools.map((tool) => tool.name);
+    expect(toolNames).toContain("todo");
+    expect(toolNames).toEqual(expect.arrayContaining([
+      "task_list",
+      "task_get",
+      "task_create",
+      "task_update",
+      "task_add_evidence",
+    ]));
+    await expect(store.get("task_001")).resolves.toMatchObject({
+      revision: 1,
+      task: {
+        status: "pending",
+        title: "Wire root loop",
+      },
+    });
+    const mutationEvents = trace.events.filter((event) => event.type === "task_graph_mutated");
+    expect(mutationEvents).toEqual([
+      {
+        nextStatus: "pending",
+        operation: "create",
+        revision: 1,
+        taskId: "task_001",
+        type: "task_graph_mutated",
+      },
+    ]);
+    expect(Object.keys(mutationEvents[0]!).sort()).toEqual([
+      "nextStatus",
+      "operation",
+      "revision",
+      "taskId",
+      "type",
+    ]);
+  });
+
+  it("traces and projects a committed mutation even when lock cleanup is degraded", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-loop-task-warning-"));
+    const graphPath = path.join(directory, "task-graph.json");
+    const lockPath = `${graphPath}.lock`;
+    const store = createFileTeamTaskStore({
+      graphPath,
+      now: () => {
+        unlinkSync(lockPath);
+        mkdirSync(lockPath);
+        return new Date("2026-07-26T04:00:00.000Z");
+      },
+    });
+    const actor = { role: "leader", sessionId: "root-session" } as const;
+    await store.initialize();
+    const trace = createTraceRecorder();
+    const statefulTrace = createRuntimeStateRecorder(trace.recorder);
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              acceptance: ["The committed revision is observable"],
+              description: "Commit before cleanup fails.",
+              title: "Cleanup warning",
+            }),
+            call_id: "call_task_warning",
+            name: "task_create",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "Recorded the warning.",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "Exercise the cleanup warning.",
+      teamTasks: { actor, store },
+      lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
+    });
+
+    expect(trace.events.filter((event) => event.type === "task_graph_mutated")).toEqual([
+      {
+        nextStatus: "pending",
+        operation: "create",
+        revision: 1,
+        taskId: "task_001",
+        type: "task_graph_mutated",
+      },
+    ]);
+    expect(statefulTrace.getState().taskGraph).toEqual({
+      health: "degraded",
+      lastError: {
+        code: "store_io",
+        message: "task graph mutation committed but lock cleanup failed",
+      },
+      lastMutation: {
+        nextStatus: "pending",
+        operation: "create",
+        revision: 1,
+        taskId: "task_001",
+      },
+      lastSeenRevision: 1,
+    });
+  });
+
+  it("projects task_store_busy as the stable lock-contention failure code", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-loop-task-busy-"));
+    const graphPath = path.join(directory, "task-graph.json");
+    const store = createFileTeamTaskStore({ graphPath });
+    const actor = { role: "leader", sessionId: "root-session" } as const;
+    await store.initialize();
+    await fs.writeFile(`${graphPath}.lock`, "held by another writer", "utf8");
+    const trace = createTraceRecorder();
+    const statefulTrace = createRuntimeStateRecorder(trace.recorder);
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              acceptance: ["The busy result is projected"],
+              description: "Exercise lock contention.",
+              title: "Busy graph",
+            }),
+            call_id: "call_task_busy",
+            name: "task_create",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "Observed the busy task store.",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "Exercise task graph contention.",
+      teamTasks: { actor, store },
+      lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
+    });
+
+    expect(statefulTrace.getState().taskGraph).toEqual({
+      health: "degraded",
+      lastError: {
+        code: "task_store_busy",
+        message: "task_create failed: task_store_busy",
+      },
+    });
+    await expect(store.read()).resolves.toMatchObject({ revision: 0, tasks: [] });
+  });
+
+  it("keeps todo session-local and does not inject the shared graph into round instructions", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-loop-independent-tasks-"));
+    const store = createFileTeamTaskStore({
+      graphPath: path.join(directory, "task-graph.json"),
+    });
+    const actor = { role: "leader", sessionId: "root-session" } as const;
+    await store.initialize();
+    await store.create(actor, {
+      acceptance: ["The sentinel stays in the graph only"],
+      description: "Graph snapshot sentinel description.",
+      title: "Graph snapshot sentinel title",
+    });
+    const graphBefore = await store.read();
+    const trace = createTraceRecorder();
+    const statefulTrace = createRuntimeStateRecorder(trace.recorder);
+    const responseCreate = createResponseCreate(
+      {
+        output: [
+          {
+            arguments: JSON.stringify({
+              acceptance: ["The local check passes"],
+              items: [
+                {
+                  id: "inspect",
+                  status: "in_progress",
+                  title: "Inspect local session state",
+                },
+              ],
+              summary: "Track only this session.",
+            }),
+            call_id: "call_todo",
+            name: "todo",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [
+          {
+            arguments: "{}",
+            call_id: "call_task_list",
+            name: "task_list",
+            type: "function_call",
+          },
+        ],
+        output_text: "",
+      },
+      {
+        output: [],
+        output_text: "Both layers remain independent.",
+      },
+    );
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "Coordinate local and shared work.",
+      teamTasks: { actor, store },
+      lifecycleEmitter: createLifecycleEmitter({ recorder: statefulTrace.recorder }),
+    });
+
+    expect(statefulTrace.getState().taskState).toMatchObject({
+      acceptance: ["The local check passes"],
+      items: [
+        {
+          id: "inspect",
+          status: "in_progress",
+          title: "Inspect local session state",
+        },
+      ],
+      summary: "Track only this session.",
+    });
+    expect(statefulTrace.getState().taskGraph).toEqual({
+      health: "healthy",
+      lastSeenRevision: 1,
+    });
+    expect(await store.read()).toEqual(graphBefore);
+    for (const call of callsFor(responseCreate)) {
+      expect(call.instructions).toContain(
+        "todo is session-local execution planning; task_* tools operate on the root-session shared TaskGraph.",
+      );
+      expect(call.instructions).toContain(
+        "Leader flow: create a task with task_create, explicitly start it with task_update status in_progress",
+      );
+      expect(call.instructions).not.toContain("Graph snapshot sentinel title");
+      expect(call.instructions).not.toContain("Graph snapshot sentinel description");
+    }
   });
 
   it("records workspace evidence before model work begins", async () => {

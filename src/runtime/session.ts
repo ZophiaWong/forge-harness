@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { createJsonlTraceRecorder } from "./traceRecorder.js";
 import type { TraceRecorder } from "./trace.js";
+import { createFileTeamTaskStore } from "./teamTaskStore.js";
 
 export interface SessionWorkspaceMetadata {
   baseBranch: string;
@@ -22,6 +23,12 @@ export interface ChildSessionMetadata {
   role: "child";
 }
 
+export interface SessionTaskGraphBinding {
+  delegatedTaskId?: string;
+  rootSessionId: string;
+  taskGraphPath: string;
+}
+
 export interface SessionMetadata {
   baseCwd?: string;
   child?: ChildSessionMetadata;
@@ -31,6 +38,7 @@ export interface SessionMetadata {
   model: string;
   startedAt: string;
   task: string;
+  taskGraph?: SessionTaskGraphBinding;
   tracePath: string;
   workspace?: SessionWorkspaceMetadata;
 }
@@ -38,6 +46,7 @@ export interface SessionMetadata {
 export interface SessionPaths {
   sessionDir: string;
   sessionMetadataPath: string;
+  taskGraphPath: string;
   tracePath: string;
 }
 
@@ -50,6 +59,7 @@ export interface CreateSessionMetadataInput {
   model: string;
   startedAt: string;
   task: string;
+  taskGraph?: SessionTaskGraphBinding;
   tracePath: string;
   workspace?: SessionWorkspaceMetadata;
 }
@@ -63,6 +73,7 @@ export interface CreateCliSessionTraceOptions {
   now?: () => Date;
   randomSuffix?: () => string;
   task: string;
+  taskGraph?: SessionTaskGraphBinding;
   workspace?: SessionWorkspaceMetadata;
 }
 
@@ -82,6 +93,7 @@ export function createSessionPaths(cwd: string, sessionId: string): SessionPaths
   return {
     sessionDir,
     sessionMetadataPath: path.join(sessionDir, "session.json"),
+    taskGraphPath: path.resolve(sessionDir, "task-graph.json"),
     tracePath: path.join(sessionDir, "trace.jsonl"),
   };
 }
@@ -96,16 +108,32 @@ export function createSessionMetadata(input: CreateSessionMetadataInput): Sessio
     model: input.model,
     startedAt: input.startedAt,
     task: input.task,
+    ...(input.taskGraph ? { taskGraph: { ...input.taskGraph } } : {}),
     tracePath: input.tracePath,
     ...(input.workspace ? { workspace: input.workspace } : {}),
   };
 }
 
 export async function createCliSessionTrace(options: CreateCliSessionTraceOptions): Promise<CliSessionTrace> {
+  if (!options.child && options.taskGraph) {
+    throw new Error("root session cannot supply a taskGraph binding");
+  }
+
   const now = options.now ?? (() => new Date());
   const startedAtDate = now();
   const sessionId = createSessionId(startedAtDate, options.randomSuffix ?? createRandomSuffix);
   const paths = createSessionPaths(options.baseCwd ?? options.cwd, sessionId);
+  const taskGraph = options.child
+    ? options.taskGraph
+    : {
+        rootSessionId: sessionId,
+        taskGraphPath: paths.taskGraphPath,
+      };
+
+  if (taskGraph && !path.isAbsolute(taskGraph.taskGraphPath)) {
+    throw new Error("session taskGraphPath must be absolute");
+  }
+
   const metadata = createSessionMetadata({
     ...(options.baseCwd ? { baseCwd: options.baseCwd } : {}),
     ...(options.child ? { child: options.child } : {}),
@@ -115,11 +143,15 @@ export async function createCliSessionTrace(options: CreateCliSessionTraceOption
     model: options.model,
     startedAt: startedAtDate.toISOString(),
     task: options.task,
+    ...(taskGraph ? { taskGraph } : {}),
     tracePath: paths.tracePath,
     ...(options.workspace ? { workspace: options.workspace } : {}),
   });
 
   await fs.mkdir(paths.sessionDir, { recursive: true });
+  if (!options.child) {
+    await createFileTeamTaskStore({ graphPath: paths.taskGraphPath }).initialize();
+  }
   await fs.writeFile(paths.sessionMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
   await fs.writeFile(paths.tracePath, "", "utf8");
 

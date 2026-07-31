@@ -6,7 +6,7 @@ Instructions for coding agents working in this repository.
 
 Forge Harness is a tutorial-driven TypeScript project for building a coding agent harness from scratch.
 
-Current phase: `c11 System Prompt / Skills / Memory` is integrated. The repository now has the first eleven runnable TypeScript checkpoints.
+Current phase: `c17a Shared Team Task Graph` is integrated. The repository now has the first twenty runnable TypeScript checkpoints.
 
 Do not turn this repo into a full platform ahead of the course. Each chapter should add the smallest mechanism needed to solve the current problem.
 

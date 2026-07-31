@@ -243,7 +243,7 @@ c15b 要处理的就是这个问题：child 可以异步运行，完成后用 no
 其他场景也还没进这一章：
 
 - fork-child：如果 child 需要继承完整 history，需要单独设计 fork 语义，而不是叫 fresh child。
-- shared task graph：parent、sync child 和 async child 还没有共同的 dependency、owner 和 acceptance/evidence 视图；`c17a` 会补这层共享工作状态。
+- shared task graph：parent、sync child 和 async child 还没有共同的 dependency、status 和 acceptance/evidence 视图；`c17a` 会补这层共享工作状态，owner、assign、claim 和 verifier 留到 `c17c`。
 - long-lived teammate：child 完成 handoff 就退出，不能持续收发消息或等待新任务；`c17b` 会引入独立 teammate process 和 mailbox。
 - review / integration：edit child 的改动仍留在独立 worktree；`c17c` 会加入 Leader review 和显式 integration，不引入 shared worktree，也不自动解决冲突。
 - model routing：如果不同 profile 要选不同 model，需要单独的 model policy 和 trace evidence。

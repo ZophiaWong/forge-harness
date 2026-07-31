@@ -7,9 +7,11 @@ import type { PermissionApprover, PermissionPolicy } from "../governance/types.j
 import {
   createCliSessionTrace,
   type ChildSessionProfile,
+  type SessionTaskGraphBinding,
   type SessionWorkspaceMetadata,
 } from "../runtime/session.js";
 import { prepareWorktreeSession } from "../runtime/sessionWorkspace.js";
+import { createFileTeamTaskStore } from "../runtime/teamTaskStore.js";
 import type { TraceRecorder } from "../runtime/trace.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
 import { createEditTool } from "../tools/editTool.js";
@@ -18,6 +20,7 @@ import { createGrepTool } from "../tools/grepTool.js";
 import { createLsTool } from "../tools/lsTool.js";
 import { createReadTool } from "../tools/readTool.js";
 import { createToolRuntime } from "../tools/runtime.js";
+import { createTeamTaskTools } from "../tools/teamTaskTools.js";
 import { createTodoTool } from "../tools/todoTool.js";
 import type {
   ChildSessionRunHandle,
@@ -43,6 +46,7 @@ export interface CreateChildSessionRunnerOptions {
   parentSessionId: string;
   permissionPolicy?: PermissionPolicy;
   responseCreate?: ResponseCreate;
+  taskGraph?: SessionTaskGraphBinding;
 }
 
 export function createChildSessionRunner(options: CreateChildSessionRunnerOptions): ChildSessionRunner {
@@ -59,6 +63,8 @@ export function createChildSessionRunner(options: CreateChildSessionRunnerOption
 export function createChildProfileToolRuntime(options: {
   cwd: string;
   profile: ChildSessionProfile;
+  sessionId?: string;
+  taskGraph?: SessionTaskGraphBinding;
 }): ToolRuntime {
   const inspectTools = [
     createReadTool(options.cwd),
@@ -67,15 +73,37 @@ export function createChildProfileToolRuntime(options: {
     createFindTool(options.cwd),
     createTodoTool(),
   ];
+  const taskTools = options.taskGraph && options.sessionId
+    ? createTeamTaskTools({
+        actor: {
+          ...(options.taskGraph.delegatedTaskId
+            ? { delegatedTaskId: options.taskGraph.delegatedTaskId }
+            : {}),
+          role: "child",
+          sessionId: options.sessionId,
+        },
+        store: createFileTeamTaskStore({ graphPath: options.taskGraph.taskGraphPath }),
+      })
+    : [];
 
   if (options.profile === "research") {
-    return createToolRuntime(inspectTools);
+    return createToolRuntime([...inspectTools, ...taskTools]);
   }
 
-  return createToolRuntime([...inspectTools.slice(0, 4), createEditTool(options.cwd), createWriteTool(options.cwd), createTodoTool()]);
+  return createToolRuntime([
+    ...inspectTools.slice(0, 4),
+    createEditTool(options.cwd),
+    createWriteTool(options.cwd),
+    createTodoTool(),
+    ...taskTools,
+  ]);
 }
 
-export function formatChildProfileTask(options: { profile: ChildSessionProfile; task: string }): string {
+export function formatChildProfileTask(options: {
+  profile: ChildSessionProfile;
+  task: string;
+  taskId?: string;
+}): string {
   const contract =
     options.profile === "research"
       ? [
@@ -89,7 +117,13 @@ export function formatChildProfileTask(options: { profile: ChildSessionProfile; 
           "In your final answer, describe what changed, the evidence you checked, and the review or merge next step.",
         ].join("\n");
 
-  return [contract, "", "Delegated task:", options.task].join("\n");
+  return [
+    contract,
+    ...(options.taskId ? ["", `Linked team task ID: ${options.taskId}`] : []),
+    "",
+    "Delegated task:",
+    options.task,
+  ].join("\n");
 }
 
 export async function listChangedFiles(cwd: string): Promise<string[]> {
@@ -108,7 +142,21 @@ async function startChildSession(
   options: CreateChildSessionRunnerOptions,
   request: ChildSessionRunRequest,
 ): Promise<ChildSessionRunHandle> {
-  const childTask = formatChildProfileTask({ profile: request.profile, task: request.task });
+  const childTask = formatChildProfileTask({
+    profile: request.profile,
+    task: request.task,
+    ...(request.taskId ? { taskId: request.taskId } : {}),
+  });
+  if (request.taskId && !options.taskGraph) {
+    throw new Error("linked child session requires a root task graph binding");
+  }
+  const taskGraph = options.taskGraph
+    ? {
+        ...(request.taskId ? { delegatedTaskId: request.taskId } : {}),
+        rootSessionId: options.taskGraph.rootSessionId,
+        taskGraphPath: options.taskGraph.taskGraphPath,
+      }
+    : undefined;
   const childTrace = await createCliSessionTrace({
     child: {
       parentCallId: request.parentCallId,
@@ -120,6 +168,7 @@ async function startChildSession(
     maxToolRounds: request.maxToolRounds,
     model: options.model ?? DEFAULT_MODEL,
     task: childTask,
+    ...(taskGraph ? { taskGraph } : {}),
   });
   const childLifecycleEmitter = createLifecycleEmitter({ recorder: childTrace.recorder });
   let executionCwd = options.baseCwd;
@@ -160,7 +209,12 @@ async function startChildSession(
         promptAssets: await loadRepoPromptAssets(options.baseCwd),
         ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
         task: childTask,
-        toolRuntime: createChildProfileToolRuntime({ cwd: executionCwd, profile: request.profile }),
+        toolRuntime: createChildProfileToolRuntime({
+          cwd: executionCwd,
+          profile: request.profile,
+          sessionId: childTrace.metadata.id,
+          ...(taskGraph ? { taskGraph } : {}),
+        }),
         ...(workspace ? { workspace } : {}),
       });
       const changedFiles = workspace ? await listChangedFiles(workspace.path) : undefined;

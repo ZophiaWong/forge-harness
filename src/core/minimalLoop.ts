@@ -33,6 +33,11 @@ import type {
   PermissionDecision,
   PermissionPolicy,
 } from "../governance/types.js";
+import type {
+  TeamTaskFailureCode,
+  TeamTaskMutationOperation,
+  TeamTaskStatus,
+} from "../domain/teamTask.js";
 import {
   createBackgroundTaskManager,
   formatBackgroundTaskNotification,
@@ -45,10 +50,11 @@ import type { RuntimeState } from "../runtime/state.js";
 import type { SessionWorkspaceMetadata } from "../runtime/session.js";
 import { isTaskState } from "../runtime/task.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
-import type { SessionEndStatus } from "../runtime/trace.js";
+import type { SessionEndStatus, TraceTaskGraphProjection } from "../runtime/trace.js";
 import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import { composeToolRuntimes } from "../tools/compositeRuntime.js";
+import type { TeamTaskToolRuntimeOptions } from "../tools/teamTaskTools.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
@@ -146,6 +152,7 @@ export interface MinimalLoopOptions {
   cronSchedules?: CronScheduleStore;
   childSessionRunner?: ChildSessionRunner;
   task: string;
+  teamTasks?: TeamTaskToolRuntimeOptions;
   toolRuntime?: ToolRuntime;
   transcript?: MinimalLoopTranscript;
   verifier?: Verifier;
@@ -211,6 +218,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       cronSchedules: options.cronSchedules,
       cwd: options.cwd,
       maxToolRounds,
+      ...(options.teamTasks ? { teamTasks: options.teamTasks } : {}),
     });
   const toolRuntime = options.additionalToolRuntimes?.length
     ? composeToolRuntimes([primaryToolRuntime, ...options.additionalToolRuntimes])
@@ -945,19 +953,190 @@ async function executeToolCall(
 
   const result = await toolRuntime.execute(request, { callId: toolCall.call_id, round });
   const resultText = projectToolResult(result, contextProjection);
+  const taskGraph = readTaskGraphTraceProjection(result);
   transcript?.toolResult(round, resultText);
   await lifecycleEmitter.emit({
     callId: toolCall.call_id,
     projectedOutput: resultText,
     round,
     status: result.status,
+    ...(taskGraph ? { taskGraph } : {}),
     toolName: toolCall.name,
     type: "tool_result",
   });
+  await recordTaskGraphMutationFromToolResult(lifecycleEmitter, result);
   await recordTaskStateUpdateFromToolResult(lifecycleEmitter, round, toolCall.call_id, result);
   await recordBackgroundTaskStartedFromToolResult(lifecycleEmitter, round, result);
   await recordCronScheduleEventFromToolResult(lifecycleEmitter, round, result);
   return resultText;
+}
+
+async function recordTaskGraphMutationFromToolResult(
+  lifecycleEmitter: LifecycleEmitter,
+  result: ToolResult,
+): Promise<void> {
+  if (result.status !== "completed") {
+    return;
+  }
+
+  const mutation = readTaskGraphMutation(result.metadata?.taskGraphMutation);
+  if (!mutation) {
+    return;
+  }
+
+  await lifecycleEmitter.emit({
+    ...(mutation.nextStatus ? { nextStatus: mutation.nextStatus } : {}),
+    operation: mutation.operation,
+    ...(mutation.previousStatus ? { previousStatus: mutation.previousStatus } : {}),
+    revision: mutation.revision,
+    taskId: mutation.taskId,
+    type: "task_graph_mutated",
+  });
+}
+
+function readTaskGraphTraceProjection(result: ToolResult): TraceTaskGraphProjection | undefined {
+  if (!TEAM_TASK_TOOL_NAMES.has(result.toolName) || !isRecord(result.metadata)) {
+    return undefined;
+  }
+
+  const revision = readRevision(result.metadata.revision);
+  const graphHealth = readGraphHealth(result.metadata.graphHealth);
+  if (result.status === "completed" && revision !== undefined) {
+    const warningCode = readFailureCode(result.metadata.warningCode);
+    const warningReason = readNonEmptyString(result.metadata.warningReason);
+    return {
+      ...(warningCode && warningReason
+        ? {
+            error: {
+              code: warningCode,
+              message: warningReason,
+            },
+          }
+        : {}),
+      health: graphHealth ?? "healthy",
+      revision,
+    };
+  }
+
+  const reasonCode = readFailureCode(result.metadata.reasonCode);
+  const reason = readNonEmptyString(result.metadata.observationSummary);
+  if (!graphHealth || !reasonCode || !reason) {
+    return undefined;
+  }
+
+  return {
+    error: {
+      code: reasonCode,
+      message: reason,
+    },
+    health: graphHealth,
+  };
+}
+
+function readTaskGraphMutation(value: unknown): {
+  nextStatus?: TeamTaskStatus;
+  operation: TeamTaskMutationOperation;
+  previousStatus?: TeamTaskStatus;
+  revision: number;
+  taskId: string;
+} | undefined {
+  if (
+    !isRecord(value) ||
+    !isMutationOperation(value.operation) ||
+    typeof value.taskId !== "string" ||
+    value.taskId.length === 0
+  ) {
+    return undefined;
+  }
+
+  const revision = readRevision(value.revision);
+  if (revision === undefined) {
+    return undefined;
+  }
+  if (value.previousStatus !== undefined && !isTeamTaskStatus(value.previousStatus)) {
+    return undefined;
+  }
+  if (value.nextStatus !== undefined && !isTeamTaskStatus(value.nextStatus)) {
+    return undefined;
+  }
+
+  return {
+    ...(value.nextStatus ? { nextStatus: value.nextStatus } : {}),
+    operation: value.operation,
+    ...(value.previousStatus ? { previousStatus: value.previousStatus } : {}),
+    revision,
+    taskId: value.taskId,
+  };
+}
+
+const TEAM_TASK_TOOL_NAMES = new Set([
+  "task_add_evidence",
+  "task_create",
+  "task_get",
+  "task_list",
+  "task_update",
+]);
+
+const TEAM_TASK_FAILURE_CODES = new Set([
+  "blocked_reason_not_allowed",
+  "blocked_reason_required",
+  "contract_frozen",
+  "delegated_task_mismatch",
+  "delete_not_allowed",
+  "dependencies_incomplete",
+  "evidence_not_allowed",
+  "evidence_required",
+  "graph_invalid",
+  "graph_malformed",
+  "graph_missing",
+  "invalid_actor",
+  "invalid_input",
+  "invalid_transition",
+  "task_store_busy",
+  "permission_denied",
+  "schema_unsupported",
+  "store_io",
+  "task_frozen",
+  "task_not_found",
+  "task_not_ready",
+]);
+
+function isMutationOperation(value: unknown): value is TeamTaskMutationOperation {
+  return value === "create" ||
+    value === "update" ||
+    value === "add_evidence" ||
+    value === "delete";
+}
+
+function isTeamTaskStatus(value: unknown): value is TeamTaskStatus {
+  return value === "pending" ||
+    value === "in_progress" ||
+    value === "blocked" ||
+    value === "completed";
+}
+
+function readFailureCode(value: unknown): TeamTaskFailureCode | undefined {
+  return typeof value === "string" && TEAM_TASK_FAILURE_CODES.has(value)
+    ? value as TeamTaskFailureCode
+    : undefined;
+}
+
+function readGraphHealth(value: unknown): "healthy" | "degraded" | undefined {
+  return value === "healthy" || value === "degraded" ? value : undefined;
+}
+
+function readRevision(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? value as number
+    : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function projectToolResult(result: ToolResult, contextProjection: ContextProjection): string {

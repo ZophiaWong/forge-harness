@@ -6,6 +6,7 @@ import { createGrepTool } from "./grepTool.js";
 import { createLsTool } from "./lsTool.js";
 import { createReadTool } from "./readTool.js";
 import { createToolRuntime } from "./runtime.js";
+import { createTeamTaskTools, type TeamTaskToolRuntimeOptions } from "./teamTaskTools.js";
 import { createTodoTool } from "./todoTool.js";
 import { createCronTools } from "./cronTools.js";
 import type { ToolRuntime } from "./types.js";
@@ -21,6 +22,7 @@ export interface DefaultToolRuntimeOptions {
   maxToolRounds?: number;
   parentCallId?: () => string;
   parentRound?: () => number;
+  teamTasks?: TeamTaskToolRuntimeOptions;
 }
 
 export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): ToolRuntime {
@@ -33,6 +35,7 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
     createEditTool(options.cwd),
     createWriteTool(options.cwd),
     createTodoTool(),
+    ...(options.teamTasks ? createTeamTaskTools(options.teamTasks) : []),
     ...(options.childSessionRunner
       ? [
           createDelegateTool({
@@ -40,6 +43,7 @@ export function createDefaultToolRuntime(options: DefaultToolRuntimeOptions): To
             ...(options.parentCallId ? { parentCallId: options.parentCallId } : {}),
             ...(options.parentRound ? { parentRound: options.parentRound } : {}),
             runner: options.childSessionRunner,
+            ...(options.teamTasks ? { taskStore: options.teamTasks.store } : {}),
           }),
         ]
       : []),

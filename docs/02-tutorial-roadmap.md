@@ -44,10 +44,11 @@ flowchart TB
     c17a["c17a Shared Team Task Graph"]
     c17b["c17b Long-Lived Teammates / Mailbox"]
     c17c["c17c Coordination / Completion Protocol"]
+    c18["c18 Attempts / Recovery / Reconciliation"]
   end
 
   c00 --> c01 --> c02 --> c03 --> c04 --> c05 --> c06 --> c07 --> c08
-  c08 --> c09 --> c10 --> c11 --> c12 --> c13a --> c13b --> c14 --> c15a --> c15b --> c16a --> c16b --> c17a --> c17b --> c17c
+  c08 --> c09 --> c10 --> c11 --> c12 --> c13a --> c13b --> c14 --> c15a --> c15b --> c16a --> c16b --> c17a --> c17b --> c17c --> c18
 
   c06 -. "有了稳定事件" .-> c09
   c07 -. "需要显式工作状态" .-> c10
@@ -79,6 +80,9 @@ flowchart TB
   c14 -. "隔离修改需要 review 和 integration" .-> c17c
   c16a -. "Leader 使用外部工具" .-> c17c
   c16b -. "Leader 加载 plugin 组件" .-> c17c
+  c06 -. "trace 需要可重放边界" .-> c18
+  c08 -. "单轮 recovery 不足以恢复中断运行" .-> c18
+  c17c -. "团队执行需要跨 Attempt 对账" .-> c18
 ```
 
 ## Part 2 的顺序
@@ -87,9 +91,11 @@ flowchart TB
 
 原来的 `c13 Background / Cron` 拆成两章：`c13a Background Tool Tasks` 只处理当前 session 内的后台 tool task；`c13b Scheduled Jobs / Cron` 再处理 durable job、schedule 和 worker wakeup。`c15 Child Sessions / Subagents` 也拆成两章：`c15a Child Sessions / Handoff` 先讲同步 child session、profile、worktree-bound edit 和 summary handoff；`c15b Async Child Sessions / Parallel Handoff` 再讲异步 research/edit child、notification 回流、final gate 和 edit preview metadata。外部扩展也分两步：`c16a MCP Tool Integration` 先完成 MCP runtime path，`c16b Plugin Loading / Registration` 再处理 plugin manifest 和组件注册。
 
-`c17` 分成三个 checkpoint。`c17a Shared Team Task Graph` 先让 parent 和现有 child sessions 共享工作状态；`c17b Long-Lived Teammates / Mailbox` 把一次性 child 扩展成由 Leader 管理的独立 teammate processes；`c17c Coordination / Completion Protocol` 再把 task ownership、消息、review、integration 和 team completion 收束成一条完整运行路径。
+`c17` 分成三个 checkpoint。`c17a Shared Team Task Graph` 先让 parent、sync child 和 async child 共享 dependency、status 与 acceptance/evidence；`c17b Long-Lived Teammates / Mailbox` 把一次性 child 扩展成由 Leader 管理的独立 teammate processes；`c17c Coordination / Completion Protocol` 再加入 owner、assign、claim、task verifier、消息、review、integration 和 team completion。
 
-`c17a` 保存 owner 并保证图更新的原子性，但不定义谁有权建立 ownership；assign 和 claim 的权限留到 `c17c`。`c17b` 只提供 direct message 和 fan-out broadcast，普通消息不能修改 task owner 或 status；这一章也不做 group chat、完整 session resume 或 capability routing。MCP/plugins 继续由 Leader 持有，不进入 teammate process。`c17c` 的 integration 遇到冲突时会阻止 task 和 team completion，不自动解决冲突。
+`c17a` 保存 dependency、status、acceptance 和 evidence，并保证 current-state snapshot 原子更新；owner、assign、claim 和 task verifier 留到 `c17c`。`c17b` 只提供 direct message 和 fan-out broadcast，普通消息不能修改 task status，也不能建立 ownership；这一章也不做 group chat、session resume 或 capability routing。MCP/plugins 继续由 Leader 持有，不进入 teammate process。`c17c` 的 integration 遇到冲突时会阻止 task 和 team completion，不自动解决冲突。
+
+`c18 Attempts / Recovery / Reconciliation` 接在 `c17c` 后，定义 `Attempt`、resume、idempotency、reconciliation 和 event replay 的边界；`c17a` 到 `c17c` 不提前实现这些恢复语义。
 
 | Chapter | 从哪里长出来 | 为什么现在需要 | 完成后有什么 |
 | --- | --- | --- | --- |
@@ -104,9 +110,10 @@ flowchart TB
 | `c15b` Async Child Sessions / Parallel Handoff | `c13a Background Tool Tasks` + `c15a Child Sessions / Handoff` | 独立 research 和 edit preview 子任务不该总是阻塞 parent session。 | 异步 child session 能启动、完成、通知，并在 final 前回流 handoff；edit child 只返回 worktree preview metadata。 |
 | `c16a` MCP Tool Integration | `c02 Tool Runtime` + `c03 Permission Governance` | 外部 MCP tools 不能绕过 runtime、permission 和 result protocol。 | 一个 foreground stdio MCP server 走同一条 tool runtime path。 |
 | [`c16b` Plugin Loading / Registration](tutorial/c16b-plugin-loading-registration.md) | `c09 Hooks` + `c11 Skills / Memory` + `c16a MCP Tool Integration` | 已配置的本地扩展需要 manifest、trust 和统一 loading boundary，不能让每种组件自行接入。 | enabled plugin 经全量 preflight 与 session trust 后，把 namespaced skills/hooks 和 multi-server MCP 交给现有子系统。 |
-| `c17a` Shared Team Task Graph | `c10 Task / Todo` + `c15a/c15b Child Sessions` | parent 和 child 各自维护 task snapshot，不能表达共享 dependency、owner 和并发更新。 | parent、sync child 和 async child 共享一份 session-scoped 磁盘 task graph。 |
+| [`c17a` Shared Team Task Graph](tutorial/c17a-shared-team-task-graph.md) | `c10 Task / Todo` + `c15a/c15b Child Sessions` | parent 和 child 各自维护 task snapshot，不能共享 dependency、status、acceptance/evidence，也无法安全处理并发更新。 | parent、sync child 和 async child 共享一份 revisioned、原子更新的 session-scoped 磁盘 task graph。 |
 | `c17b` Long-Lived Teammates / Mailbox | `c15a/c15b Child Sessions` + `c17a Shared Team Task Graph` | fresh child 交出一次 handoff 就结束，不能被持续寻址，也不能等待后续消息。 | Leader 能启动和管理独立 teammate processes，并通过持久 mailbox 做 direct message、fan-out broadcast 和 explicit rejoin。 |
-| `c17c` Coordination / Completion Protocol | `c08 Verification / Recovery` + `c14 Worktree Isolation` + `c16a/c16b Extensions` + `c17a/c17b Team Foundations` | task graph 和 mailbox 只能保存状态、传递消息，不能决定谁接任务、哪些产物可整合，以及团队何时真正完成。 | 一个 capstone run 串起 Leader assign、idle teammate 对 ready + unowned task 的原子 claim、plan approval、review/integration、graceful shutdown 和 completion gate。 |
+| `c17c` Coordination / Completion Protocol | `c08 Verification / Recovery` + `c14 Worktree Isolation` + `c16a/c16b Extensions` + `c17a/c17b Team Foundations` | task graph 和 mailbox 只能保存状态、传递消息，不能决定谁接任务、谁验证结果、哪些产物可整合，以及团队何时真正完成。 | 一个 capstone run 串起 Leader assign、idle teammate 对 ready + unowned task 的原子 claim、task verifier、plan approval、review/integration、graceful shutdown 和 completion gate。 |
+| `c18` Attempts / Recovery / Reconciliation | `c06 Session / Trace` + `c08 Verification / Recovery` + `c17c Coordination / Completion Protocol` | 中断后，snapshot 和 trace 不能区分旧执行与新尝试，也不能判断哪些动作可以安全重放。 | 每次执行有明确的 `Attempt`；resume、idempotency、reconciliation 和 event replay 有清楚边界。 |
 
 `c02` 只落地 `bash`、`read`、`ls` 这三个 built-in tools。`edit` / `write` 会在 `c04 Reviewable File Editing` 里进入；`grep` / `find` 会在 `c05 Context Projection` 里和搜索输出的上下文压力一起讲。
 
@@ -134,9 +141,10 @@ flowchart TB
 | [`c15b` Async Child Sessions / Parallel Handoff With Edit Preview](tutorial/c15b-async-child-sessions-parallel-handoff.md) | `L5 + L3 + L4` | research 和 edit preview 子任务可能很慢，串行等待会卡住 parent session。 | async child session、child registry、handoff notification、final gate、edit preview metadata。 | parent 能继续推进，并在后续 round 接收 child handoff。 |
 | [`c16a` MCP Tool Integration](tutorial/c16a-mcp-tool-integration.md) | `L1 + L2 + L4` | 内置 tools 不够，外部 MCP tools 也要被治理。 | strict project config、startup trust、dynamic MCP runtime、permission/result/trace adapter。 | 一个 local stdio MCP server 复用 Tool Runtime、permission、ToolResult 和 trace。 |
 | [`c16b` Plugin Loading / Registration](tutorial/c16b-plugin-loading-registration.md) | `L2 + L3 + L4 + L5` | 已配置的本地 plugin 还没有统一、安全、可追踪的 loading 与 registration 边界。 | strict preflight、per-session trust、namespace、component registration、activation snapshot。 | 两个 enabled fixtures 把 skills、observe-only hooks 和 multi-server MCP 接入既有子系统。 |
-| `c17a` Shared Team Task Graph | `L5 + L4` | parent 和 child 的 task snapshot 彼此隔离，依赖、owner 和验收证据无法共享。 | session-scoped 磁盘 task graph、dependency、owner、acceptance/evidence、原子更新。 | parent、sync child 和 async child 能读写同一份工作图。 |
+| [`c17a` Shared Team Task Graph](tutorial/c17a-shared-team-task-graph.md) | `L5 + L4` | parent 和 child 的 task snapshot 彼此隔离，dependency、status 和 acceptance/evidence 无法共享。 | session-scoped 磁盘 task graph、dependency、Leader/child role permissions、state machine、acceptance/evidence、原子 snapshot 更新。 | Leader 与 root-linked children 能按角色权限读写同一份工作图。 |
 | `c17b` Long-Lived Teammates / Mailbox | `L5 + L3 + L4` | 一次性 child 不能长期存在，也没有可寻址的异步通信路径。 | Leader-managed teammate process、persistent teammate definition、lifecycle、file mailbox、direct/broadcast、explicit rejoin。 | named teammates 能跨多个 turn 存活、收发消息并在失败后由 Leader 重新加入。 |
-| `c17c` Coordination / Completion Protocol | all | 有共享工作图和 mailbox，仍缺少 ownership、验收、代码整合与团队收尾规则。 | Leader assign、ready-task atomic claim、plan approval、completion evidence、review/integration、shutdown、completion gate。 | comprehensive run 串起 one-shot children、long-lived teammates、Leader extensions、verification 和已整合产物。 |
+| `c17c` Coordination / Completion Protocol | all | 有共享工作图和 mailbox，仍缺少 ownership、任务验证、代码整合与团队收尾规则。 | owner/Leader assign、ready-task atomic claim、task verifier、plan approval、completion evidence、review/integration、shutdown、completion gate。 | comprehensive run 串起 one-shot children、long-lived teammates、Leader extensions、verification 和已整合产物。 |
+| `c18` Attempts / Recovery / Reconciliation | `L4 + L5` | current-state snapshot 不能解释中断前哪些副作用已经发生，也不能安全续跑。 | `Attempt` identity、resume protocol、idempotency boundary、reconciliation、event replay。 | harness 能区分新尝试与恢复，并在重放前对齐状态和已发生的副作用。 |
 
 ## Branch 和 tag
 

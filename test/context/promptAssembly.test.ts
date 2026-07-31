@@ -182,4 +182,30 @@ describe("prompt assembly", () => {
     expect(assembly.instructions).toContain("Verification reporting body.");
     expect(assembly.instructions).not.toContain("Tutorial writing body should not be selected.");
   });
+
+  it("teaches the independent todo and shared task workflow with role boundaries", () => {
+    const assembly = assemblePrompt({
+      assets: { skills: [] },
+      task: "Coordinate implementation.",
+    });
+
+    expect(assembly.instructions).toContain(
+      "todo is session-local execution planning; task_* tools operate on the root-session shared TaskGraph.",
+    );
+    expect(assembly.instructions).toContain(
+      "Leader flow: create a task with task_create, explicitly start it with task_update status in_progress, delegate with taskId",
+    );
+    expect(assembly.instructions).toContain(
+      "record evidence with task_add_evidence, then have the Leader complete it with task_update.",
+    );
+    expect(assembly.instructions).toContain(
+      "Every root-linked child may use task_list and task_get; only a child linked with taskId may add evidence to that task",
+    );
+    expect(assembly.instructions).toContain(
+      "Only the Leader may create or delete team tasks and change their contracts, topology, or status (including completion); a linked child may only append evidence to its bound in-progress task.",
+    );
+    expect(assembly.instructions).not.toContain(
+      "Only the Leader may create, change, complete, or delete team tasks.",
+    );
+  });
 });

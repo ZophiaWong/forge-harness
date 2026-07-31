@@ -341,9 +341,9 @@ c15b 之后，parent 已经可以同时启动多个 research child，也可以�
 - parent 和多个 child 仍各自维护 task snapshot。`c17a` 会让它们共享 session-scoped task graph。
 - fresh child 交出 handoff 就退出。`c17b` 会增加由 Leader 管理的独立 teammate process 和持久 mailbox。
 - edit child 只给 preview metadata。`c17c` 会增加 Leader review 和显式 integration；冲突会阻止完成，但不会自动解决。
-- async child 如果跑偏或卡住，现在没有 cancel / resume；`c17a` 到 `c17c` 也不补这项能力。
+- async child 如果跑偏或卡住，现在没有 cancel / resume；`c17` 系列不补这项能力。跨 `Attempt` 的 resume 留到 `c18`，cancel 仍是未规划能力。
 - 多个 edit child 继续使用各自的 worktree。`c17c` 会逐项 review 和 integration，不建立 shared worktree。
 - research 和 edit 现在继承 parent model。不同 profile 选不同 model 的 routing policy 还没进入。
 - `c17c` 会把 one-shot children、long-lived teammates、Leader extensions 和 verification 放进同一个 completion protocol。
 
-所以这一章的边界仍然很窄：parent 可以并行启动独立 child，继续 foreground 工作，并在 final 前收到所有 async child 的 terminal handoff 或 failure。后面的 `c17a`、`c17b` 和 `c17c` 会依次补上共享工作图、长期成员和团队收束协议。
+所以这一章的边界仍然很窄：parent 可以并行启动独立 child，继续 foreground 工作，并在 final 前收到所有 async child 的 terminal handoff 或 failure。后面的 `c17a`、`c17b` 和 `c17c` 会依次补上共享工作图、长期成员和团队收束协议；`c18` 再处理 attempts、恢复与对账。

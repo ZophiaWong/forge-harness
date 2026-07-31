@@ -1,8 +1,15 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { createSessionId, createSessionMetadata, createSessionPaths } from "../../src/runtime/session.js";
+import {
+  createCliSessionTrace,
+  createSessionId,
+  createSessionMetadata,
+  createSessionPaths,
+} from "../../src/runtime/session.js";
 
 describe("session metadata", () => {
   it("creates a readable session id from the timestamp and random suffix", () => {
@@ -16,7 +23,142 @@ describe("session metadata", () => {
 
     expect(paths.sessionDir).toBe(path.join("/workspace/forge-harness", ".forge", "sessions", "20260625-160102-a1b2c3d4"));
     expect(paths.sessionMetadataPath).toBe(path.join(paths.sessionDir, "session.json"));
+    expect(paths.taskGraphPath).toBe(path.join(paths.sessionDir, "task-graph.json"));
     expect(paths.tracePath).toBe(path.join(paths.sessionDir, "trace.jsonl"));
+  });
+
+  it("round-trips a child task-graph binding through session metadata", () => {
+    const taskGraph = {
+      delegatedTaskId: "task_001",
+      rootSessionId: "20260625-160102-a1b2c3d4",
+      taskGraphPath: "/workspace/forge-harness/.forge/sessions/20260625-160102-a1b2c3d4/task-graph.json",
+    };
+    const metadata = createSessionMetadata({
+      child: {
+        parentCallId: "call_delegate",
+        parentSessionId: "20260625-160102-a1b2c3d4",
+        profile: "research",
+        role: "child",
+      },
+      cwd: "/workspace/forge-harness",
+      id: "20260625-160103-e5f6a7b8",
+      maxToolRounds: 8,
+      model: "gpt-5.4-mini",
+      startedAt: "2026-06-25T08:01:02.000Z",
+      task: "coordinate implementation",
+      taskGraph,
+      tracePath: "/workspace/forge-harness/.forge/sessions/20260625-160103-e5f6a7b8/trace.jsonl",
+    });
+
+    expect(JSON.parse(JSON.stringify(metadata))).toEqual({
+      child: {
+        parentCallId: "call_delegate",
+        parentSessionId: "20260625-160102-a1b2c3d4",
+        profile: "research",
+        role: "child",
+      },
+      cwd: "/workspace/forge-harness",
+      id: "20260625-160103-e5f6a7b8",
+      maxToolRounds: 8,
+      model: "gpt-5.4-mini",
+      startedAt: "2026-06-25T08:01:02.000Z",
+      task: "coordinate implementation",
+      taskGraph,
+      tracePath: "/workspace/forge-harness/.forge/sessions/20260625-160103-e5f6a7b8/trace.jsonl",
+    });
+  });
+
+  it("initializes a root task graph beside the root session metadata and trace", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-root-session-"));
+    const session = await createCliSessionTrace({
+      cwd,
+      maxToolRounds: 8,
+      model: "gpt-5.4-mini",
+      now: () => new Date("2026-06-25T08:01:02.000Z"),
+      randomSuffix: () => "a1b2c3d4",
+      task: "coordinate implementation",
+    });
+
+    expect(session.metadata.taskGraph).toEqual({
+      rootSessionId: session.metadata.id,
+      taskGraphPath: session.paths.taskGraphPath,
+    });
+    expect(path.isAbsolute(session.paths.taskGraphPath)).toBe(true);
+    await expect(
+      fs.readFile(session.paths.sessionMetadataPath, "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual(session.metadata);
+    await expect(
+      fs.readFile(session.paths.taskGraphPath, "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      nextTaskSequence: 1,
+      revision: 0,
+      schemaVersion: 1,
+      tasks: [],
+    });
+  });
+
+  it("rejects a supplied task-graph binding for a root session before writing session files", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-root-task-override-"));
+    const sessionId = "20260625-160102-a1b2c3d4";
+    const paths = createSessionPaths(cwd, sessionId);
+
+    await expect(
+      createCliSessionTrace({
+        cwd,
+        maxToolRounds: 8,
+        model: "gpt-5.4-mini",
+        now: () => new Date("2026-06-25T08:01:02.000Z"),
+        randomSuffix: () => "a1b2c3d4",
+        task: "coordinate implementation",
+        taskGraph: {
+          rootSessionId: "another-root",
+          taskGraphPath: path.join(cwd, "external", "task-graph.json"),
+        },
+      }),
+    ).rejects.toThrow("root session cannot supply a taskGraph binding");
+    await expect(fs.stat(paths.sessionDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("persists a supplied root task-graph binding for a child without creating a child graph", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-child-task-binding-"));
+    const root = await createCliSessionTrace({
+      cwd,
+      maxToolRounds: 8,
+      model: "gpt-5.4-mini",
+      now: () => new Date("2026-06-25T08:01:02.000Z"),
+      randomSuffix: () => "a1b2c3d4",
+      task: "coordinate implementation",
+    });
+    if (!root.metadata.taskGraph) {
+      throw new Error("root session did not expose its derived task-graph binding");
+    }
+    const taskGraph = {
+      ...root.metadata.taskGraph,
+      delegatedTaskId: "task_001",
+    };
+
+    const child = await createCliSessionTrace({
+      child: {
+        parentCallId: "call_delegate",
+        parentSessionId: root.metadata.id,
+        profile: "research",
+        role: "child",
+      },
+      cwd,
+      maxToolRounds: 4,
+      model: "gpt-5.4-mini",
+      now: () => new Date("2026-06-25T08:01:03.000Z"),
+      randomSuffix: () => "e5f6a7b8",
+      task: "inspect the delegated task",
+      taskGraph,
+    });
+
+    expect(child.metadata.taskGraph).toEqual(taskGraph);
+    await expect(
+      fs.readFile(child.paths.sessionMetadataPath, "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual(child.metadata);
+    await expect(fs.stat(child.paths.taskGraphPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(root.paths.taskGraphPath)).resolves.toBeDefined();
   });
 
   it("builds metadata without embedding trace events", () => {

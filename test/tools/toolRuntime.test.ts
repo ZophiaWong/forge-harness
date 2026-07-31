@@ -1,5 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
+import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import { createDefaultToolRuntime } from "../../src/tools/defaultRuntime.js";
 import { createToolRuntime } from "../../src/tools/runtime.js";
 import type { ToolDefinition, ToolHandler } from "../../src/tools/types.js";
@@ -105,6 +110,87 @@ describe("createDefaultToolRuntime", () => {
 
     expect(withoutRunner.toolDefinitions().map((tool) => tool.name)).not.toContain("delegate");
     expect(withRunner.toolDefinitions().map((tool) => tool.name)).toContain("delegate");
+  });
+
+  it("adds the Leader task runtime and validates linked delegation through the same store", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-default-task-runtime-"));
+    const store = createFileTeamTaskStore({
+      graphPath: path.join(directory, "task-graph.json"),
+    });
+    const actor = { role: "leader", sessionId: "root-session" } as const;
+    await store.initialize();
+    await store.create(actor, {
+      acceptance: ["The child handoff is reviewed"],
+      description: "Coordinate one child investigation.",
+      title: "Coordinate child",
+    });
+    const childRequests: unknown[] = [];
+    const runtime = createDefaultToolRuntime({
+      childSessionRunner: {
+        async run(request) {
+          childRequests.push(request);
+          return {
+            childSessionId: "child",
+            finalAnswer: "done",
+            profile: request.profile,
+            status: "completed",
+            tracePath: "trace.jsonl",
+          };
+        },
+        async start(request) {
+          childRequests.push(request);
+          return {
+            childSessionId: "child",
+            profile: request.profile,
+            promise: Promise.resolve({
+              childSessionId: "child",
+              finalAnswer: "done",
+              profile: request.profile,
+              status: "completed",
+              tracePath: "trace.jsonl",
+            }),
+            status: "running",
+            tracePath: "trace.jsonl",
+          };
+        },
+      },
+      cwd: process.cwd(),
+      maxToolRounds: 8,
+      teamTasks: { actor, store },
+    });
+
+    expect(runtime.toolDefinitions().map((tool) => tool.name)).toEqual([
+      "bash",
+      "read",
+      "ls",
+      "grep",
+      "find",
+      "edit",
+      "write",
+      "todo",
+      "task_list",
+      "task_get",
+      "task_create",
+      "task_update",
+      "task_add_evidence",
+      "delegate",
+    ]);
+    await expect(
+      runtime.execute(
+        {
+          arguments: JSON.stringify({
+            maxToolRounds: null,
+            profile: "research",
+            runInBackground: false,
+            task: "Inspect the pending task.",
+            taskId: "task_001",
+          }),
+          name: "delegate",
+        },
+        { callId: "call_delegate", round: 1 },
+      ),
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(childRequests).toEqual([]);
   });
 
   it("keeps ls non-strict because its path argument is optional", () => {

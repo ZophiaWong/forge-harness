@@ -47,6 +47,7 @@ import { createFileCronScheduleStore } from "../runtime/cronStore.js";
 import { createCliSessionTrace, type SessionWorkspaceMetadata } from "../runtime/session.js";
 import { prepareWorktreeSession } from "../runtime/sessionWorkspace.js";
 import { createRuntimeStateRecorder, type RuntimeState } from "../runtime/state.js";
+import { createFileTeamTaskStore } from "../runtime/teamTaskStore.js";
 import { createCommandVerifier } from "../runtime/verification.js";
 
 const cliArgs = parseCliArgs(process.argv.slice(2));
@@ -102,6 +103,17 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       model,
       task,
     });
+    const taskGraph = sessionTrace.metadata.taskGraph;
+    if (!taskGraph) {
+      throw new Error("root CLI session did not initialize a task graph");
+    }
+    const teamTasks = {
+      actor: {
+        role: "leader" as const,
+        sessionId: sessionTrace.metadata.id,
+      },
+      store: createFileTeamTaskStore({ graphPath: taskGraph.taskGraphPath }),
+    };
     const runtimeStateTrace = createRuntimeStateRecorder(sessionTrace.recorder);
     const builtInHooks: LifecycleHook[] = cliArgs.hookLog
       ? [
@@ -242,6 +254,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
         model,
         parentLifecycleEmitter: lifecycleEmitter,
         parentSessionId: sessionTrace.metadata.id,
+        taskGraph,
       }),
       cronSchedules,
       cwd: executionCwd,
@@ -259,6 +272,7 @@ async function runTaskCli(cliArgs: ParsedCliArgs): Promise<void> {
       promptAssets,
       runtimeState: runtimeStateTrace.getState,
       task,
+      teamTasks,
       transcript: {
         roundStart(round, modelName) {
           console.log(`\n[round ${round}] model=${modelName}`);
@@ -377,6 +391,17 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
     model: options.model,
     task: scheduledTask,
   });
+  const taskGraph = sessionTrace.metadata.taskGraph;
+  if (!taskGraph) {
+    throw new Error("scheduled root session did not initialize a task graph");
+  }
+  const teamTasks = {
+    actor: {
+      role: "leader" as const,
+      sessionId: sessionTrace.metadata.id,
+    },
+    store: createFileTeamTaskStore({ graphPath: taskGraph.taskGraphPath }),
+  };
   const runtimeStateTrace = createRuntimeStateRecorder(sessionTrace.recorder);
   const lifecycleEmitter = createLifecycleEmitter({
     recorder: runtimeStateTrace.recorder,
@@ -406,6 +431,7 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
         model: options.model,
         parentLifecycleEmitter: lifecycleEmitter,
         parentSessionId: sessionTrace.metadata.id,
+        taskGraph,
       }),
       cwd: executionCwd,
       lifecycleEmitter,
@@ -414,6 +440,7 @@ async function runScheduledCronTask(options: RunScheduledCronTaskOptions): Promi
       ...(workspace ? { promptAssets: await loadRepoPromptAssets(options.baseCwd) } : {}),
       runtimeState: runtimeStateTrace.getState,
       task: scheduledTask,
+      teamTasks,
     });
 
     return {
