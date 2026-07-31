@@ -334,7 +334,7 @@ describe("runMinimalLoop", () => {
     expect(trace.events).toEqual([
       {
         cwd: "/workspace/forge-harness",
-        maxToolRounds: 32,
+        maxToolRounds: 48,
         model: "test-model",
         task: "inspect",
         type: "session_started",
@@ -886,7 +886,7 @@ describe("runMinimalLoop", () => {
       {
         baseCwd: "/workspace/forge-harness",
         cwd: "/workspace/forge-harness/.forge/worktrees/20260713-101500-a1b2c3d4",
-        maxToolRounds: 32,
+        maxToolRounds: 48,
         model: "test-model",
         task: "inspect",
         type: "session_started",

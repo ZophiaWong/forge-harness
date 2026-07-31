@@ -27,6 +27,12 @@ describe("delegate tool", () => {
       },
       strict: true,
     });
+    const properties = (
+      delegateToolDefinition.parameters as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties;
+    expect(properties?.maxToolRounds?.description).toContain("final response");
   });
 
   it("rejects missing and non-in-progress task links without starting a child or mutating the graph", async () => {

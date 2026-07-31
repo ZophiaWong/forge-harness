@@ -65,7 +65,7 @@ import {
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
-export const DEFAULT_MAX_TOOL_ROUNDS = 32;
+export const DEFAULT_MAX_TOOL_ROUNDS = 48;
 export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 1;
 
 export interface UserInputItem {

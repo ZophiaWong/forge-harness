@@ -78,7 +78,8 @@ export const delegateToolDefinition: ToolDefinition = {
       },
       maxToolRounds: {
         type: ["number", "null"],
-        description: "Optional child tool round cap. Use null to inherit the parent maxToolRounds.",
+        description:
+          "Optional child model-round cap, including the final response. Use null to inherit the parent maxToolRounds.",
       },
       runInBackground: {
         type: ["boolean", "null"],

@@ -269,8 +269,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         (task) =>
           task.owner?.role === "teammate"
           && task.owner.name === member.definition.name
-          && task.status !== "completed"
-          && task.status !== "blocked",
+          && task.status === "in_progress",
       );
       if (activeTask) {
         await store.transition(

@@ -26,7 +26,7 @@ const teammateStartDefinition: ToolDefinition = {
       },
       maxToolRounds: {
         description:
-          "Tool round cap for each mailbox batch. Reserve room for claim, inspection, evidence, submission, retries, and a final response.",
+          "Model-round cap for each mailbox batch. Reserve room for claim, inspection, evidence, submission, retries, and a final response.",
         type: ["number", "null"],
       },
     },

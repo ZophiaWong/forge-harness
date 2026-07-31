@@ -71,7 +71,7 @@ describe("TeammateManager", () => {
     ));
     expect(definition).toMatchObject({
       instructions: "Investigate repository behavior.",
-      maxToolRounds: 32,
+      maxToolRounds: 48,
       name: "repo-researcher",
       profile: "research",
     });
@@ -219,6 +219,60 @@ describe("TeammateManager", () => {
     expect(JSON.stringify(secondProcess.sent.at(-1))).not.toContain("claimed and then failed");
     expect((await fixture.manager.drainLeaderMessages()).map((message) => message.kind))
       .toEqual(["failure_notice"]);
+  });
+
+  it("blocks an in-progress task when its teammate owner fails", async () => {
+    const fixture = await createOwnedResearchTaskFixture("in_progress");
+
+    fixture.process.emit({
+      reason: "model request failed",
+      sessionId: "session-a",
+      type: "failure",
+    });
+    await fixture.manager.flushEvents();
+
+    await expect(fixture.taskStore.get("task_001")).resolves.toMatchObject({
+      task: {
+        blocker: { code: "owner_failed" },
+        status: "blocked",
+      },
+    });
+  });
+
+  it("preserves a submitted task for Leader review when its teammate owner fails", async () => {
+    const fixture = await createOwnedResearchTaskFixture("submitted");
+
+    fixture.process.emit({
+      reason: "final response exceeded the round budget",
+      sessionId: "session-a",
+      type: "failure",
+    });
+    await fixture.manager.flushEvents();
+
+    await expect(fixture.taskStore.get("task_001")).resolves.toMatchObject({
+      availableActions: ["review_result", "block", "submit_handoff"],
+      task: {
+        status: "submitted",
+        submission: {
+          submittedBy: {
+            name: "researcher",
+            role: "teammate",
+            sessionId: "session-a",
+          },
+        },
+      },
+    });
+    await expect(fixture.taskStore.transition(
+      { role: "leader", sessionId: "root-session" },
+      {
+        action: "review_result",
+        decision: "pass",
+        id: "task_001",
+        reason: "The durable submission remains reviewable.",
+      },
+    )).resolves.toMatchObject({
+      task: { status: "completed" },
+    });
   });
 
   it("broadcasts to a fixed snapshot without rolling back successful deliveries", async () => {
@@ -838,6 +892,70 @@ async function createFixture(
   });
   await manager.initialize();
   return { adapter, manager, teamRoot };
+}
+
+async function createOwnedResearchTaskFixture(status: "in_progress" | "submitted") {
+  const baseCwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammate-owned-task-"));
+  const graphPath = path.join(baseCwd, "task-graph.json");
+  const teamRoot = path.join(baseCwd, "team");
+  const taskStore = createFileTeamTaskStore({ graphPath });
+  const adapter = new FakeProcessAdapter();
+  const manager = createTeammateManager({
+    baseCwd,
+    lifecycleEmitter: createLifecycleEmitter({ recorder: createNoopTraceRecorder() }),
+    processAdapter: adapter,
+    rootSessionId: "root-session",
+    sessionId: () => "session-a",
+    taskGraph: { rootSessionId: "root-session", taskGraphPath: graphPath },
+    teamRoot,
+  });
+  await taskStore.initialize();
+  await taskStore.create(
+    { role: "leader", sessionId: "root-session" },
+    {
+      acceptance: ["Evidence is submitted"],
+      description: "Research the durable task state.",
+      kind: "research",
+      title: "Research",
+    },
+  );
+  await manager.initialize();
+  const started = manager.start({
+    instructions: "research",
+    message: "initial",
+    name: "researcher",
+    profile: "research",
+  });
+  const process = await adapter.nextProcess();
+  process.emit({ sessionId: "session-a", type: "ready" });
+  await started;
+  await taskStore.transition(
+    { role: "leader", sessionId: "root-session" },
+    {
+      action: "assign",
+      assignee: { name: "researcher", profile: "research", role: "teammate" },
+      id: "task_001",
+    },
+  );
+  if (status === "submitted") {
+    const teammate = {
+      name: "researcher",
+      profile: "research" as const,
+      role: "teammate" as const,
+      sessionId: "session-a",
+    };
+    await taskStore.addEvidence(teammate, "task_001", {
+      callId: "evidence",
+      round: 1,
+      summary: "Research evidence",
+    });
+    await taskStore.transition(teammate, {
+      action: "submit_result",
+      id: "task_001",
+      summary: "Research complete",
+    });
+  }
+  return { manager, process, taskStore };
 }
 
 function deferred<T>() {
