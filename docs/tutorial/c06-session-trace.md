@@ -234,7 +234,7 @@ sed -n '1,12p' .forge/sessions/<session-id>/trace.jsonl
   "task": "...",
   "cwd": "...",
   "model": "gpt-5.4-mini",
-  "maxToolRounds": 8,
+  "maxToolRounds": 32,
   "sequence": 1,
   "sessionId": "...",
   "timestamp": "..."

@@ -88,8 +88,9 @@ describe("createDefaultPermissionPolicy", () => {
           title: "Task",
         },
       ],
-      ["task_update", { id: "task_001", status: "in_progress" }],
+      ["task_update", { id: "task_001", title: "Updated" }],
       ["task_add_evidence", { id: "task_001", summary: "Verified." }],
+      ["task_transition", { action: "claim", id: "task_001" }],
     ] as const) {
       expect(decide(name, args)).toEqual({
         action: "allow",
@@ -97,6 +98,10 @@ describe("createDefaultPermissionPolicy", () => {
         risk: "mutating",
       });
     }
+    expect(decide("task_verify", { command: "npm test", id: "task_001" }))
+      .toMatchObject({ action: "ask", risk: "mutating" });
+    expect(decide("task_integrate", { id: "task_001" }))
+      .toMatchObject({ action: "ask", risk: "mutating" });
   });
 
   it("allows research delegation but asks before edit delegation", () => {

@@ -19,6 +19,7 @@ import type {
 } from "../extensions/teammates.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import type { PermissionApprover } from "../governance/types.js";
+import { createGitIntegrationService } from "../runtime/gitIntegration.js";
 import { createJsonlTraceRecorder } from "../runtime/traceRecorder.js";
 import type { TeamMessage } from "../runtime/teamMailbox.js";
 import { composeToolRuntimes } from "../tools/compositeRuntime.js";
@@ -66,13 +67,13 @@ export function formatTeammateSessionTask(config: TeammateWorkerConfig): string 
     `Your stable profile is "${config.definition.profile}" for this root session.`,
     "Keep conversation history, todo state, tool state, and compaction state across mailbox turns.",
     "Treat every mailbox batch as one new user turn. Preserve each message id, sender, and kind when reasoning.",
+    "TaskGraph is the shared coordination state across actors.",
     "Do not call todo unless the current Leader message explicitly requests local todo planning.",
-    "For short mailbox turns, call only the tools needed by the current message and then return a final response.",
+    "For short mailbox protocols, call the requested TaskGraph tools directly and then return a final response.",
     ...profileContract,
     "You may use teammate_list and message_send. You may not delegate, broadcast, schedule cron work, or load MCP/plugin tools.",
-    ...(config.definition.taskId
-      ? [`Your immutable linked team task ID is ${config.definition.taskId}.`]
-      : ["You may inspect the shared task graph, but you are not bound to append evidence to a task."]),
+    "Starting this teammate does not assign a task. Use task_transition claim for a ready unowned task, or wait for the Leader to assign one.",
+    "For an edit task, submit a plan and wait for Leader approval before edit/write. Submit evidence and then submit_result when ready.",
     "",
     "Standing instructions:",
     config.definition.instructions,
@@ -135,6 +136,12 @@ export function startTeammateWorkerHost(
     async rejoin() {
       throw new Error("teammates may not rejoin members");
     },
+    async resolveAssignee() {
+      throw new Error("teammates may not resolve assignees");
+    },
+    async resolveEditSource() {
+      throw new Error("teammates may not resolve other edit sources");
+    },
     async sendMessage(input) {
       const result = await request<TeammateDeliveryResult | { error: string }>(
         (requestId, sessionId) => ({
@@ -152,6 +159,9 @@ export function startTeammateWorkerHost(
     },
     async settleBeforeFinal() {
       return [];
+    },
+    async shutdown() {
+      throw new Error("teammates may not shut down members");
     },
     async start() {
       throw new Error("teammates may not start members");
@@ -206,8 +216,20 @@ export function startTeammateWorkerHost(
     });
     const profileRuntime = createChildProfileToolRuntime({
       cwd: config.cwd,
+      gitIntegration: createGitIntegrationService({
+        targetCwd: config.baseCwd,
+      }),
+      ...(config.definition.workspace
+        ? { ownWorkspace: { ...config.definition.workspace } }
+        : {}),
       profile: config.definition.profile,
       sessionId: config.sessionId,
+      taskActor: {
+        name: config.definition.name,
+        profile: config.definition.profile,
+        role: "teammate",
+        sessionId: config.sessionId,
+      },
       ...(config.taskGraph ? { taskGraph: config.taskGraph } : {}),
     });
     const teammateRuntime = createToolRuntime(createTeammateTools({

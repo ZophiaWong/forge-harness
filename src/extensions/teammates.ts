@@ -20,12 +20,17 @@ import {
   type TeammateRejoinInput,
   type TeammateRuntime,
   type TeammateSendInput,
+  type TeammateShutdownInput,
   type TeammateStartInput,
   type TeammateSummary,
   type TeammateToLeaderMessage,
   type TeammateWorkerConfig,
   type TeammateWorkspaceFactory,
 } from "../domain/teammate.js";
+import type {
+  TeamTaskAssignee,
+  TeamTaskResultSource,
+} from "../domain/teamTask.js";
 import type { PermissionApprover } from "../governance/types.js";
 import {
   createSessionId,
@@ -74,8 +79,11 @@ export interface TeammateManager {
   initialize(): Promise<void>;
   list(): Promise<TeammateSummary[]>;
   rejoin(input: TeammateRejoinInput): Promise<TeammateSummary>;
+  resolveAssignee(name: string, requireIdle?: boolean): Promise<TeamTaskAssignee>;
+  resolveEditSource(name: string, sessionId: string, taskId: string): Promise<TeamTaskResultSource>;
   sendMessage(input: TeammateSendInput): Promise<TeammateDeliveryResult>;
   settleBeforeFinal(): Promise<TeamMessage[]>;
+  shutdown(input: TeammateShutdownInput): Promise<TeammateSummary>;
   start(input: TeammateStartInput): Promise<TeammateSummary>;
   terminateAll(): Promise<void>;
 }
@@ -255,6 +263,26 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       sessionId: member.runtime.sessionId,
       to: "leader",
     });
+    if (options.taskGraph) {
+      const store = createFileTeamTaskStore({ graphPath: options.taskGraph.taskGraphPath });
+      const activeTask = (await store.read()).tasks.find(
+        (task) =>
+          task.owner?.role === "teammate"
+          && task.owner.name === member.definition.name
+          && task.status === "in_progress",
+      );
+      if (activeTask) {
+        await store.transition(
+          { role: "leader", sessionId: options.rootSessionId },
+          {
+            action: "block",
+            code: "owner_failed",
+            id: activeTask.id,
+            reason,
+          },
+        );
+      }
+    }
     notifyActivity();
   };
 
@@ -339,7 +367,25 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
     const brokerApproval = async () => {
       let result;
       try {
-        result = options.approver
+        if (options.taskGraph) {
+          const ownedEdit = (await createFileTeamTaskStore({
+            graphPath: options.taskGraph.taskGraphPath,
+          }).read()).tasks.find(
+            (task) =>
+              task.owner?.role === "teammate"
+              && task.owner.name === member.definition.name
+              && task.kind === "edit"
+              && task.status === "in_progress"
+              && !task.handoff,
+          );
+          if (!ownedEdit || ownedEdit.plan?.status !== "approved") {
+            result = {
+              approved: false,
+              reason: "edit/write is unavailable until the teammate owns an in-progress edit task with an approved plan",
+            };
+          }
+        }
+        result ??= options.approver
           ? await options.approver.approve({
               decision: {
                 action: "ask",
@@ -416,7 +462,6 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       ...(options.taskGraph
         ? {
             taskGraph: {
-              ...(member.definition.taskId ? { delegatedTaskId: member.definition.taskId } : {}),
               rootSessionId: options.taskGraph.rootSessionId,
               taskGraphPath: options.taskGraph.taskGraphPath,
             },
@@ -693,6 +738,52 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       await dispatchUnread(member);
       return toSummary(member);
     },
+    async resolveAssignee(name, requireIdle = false) {
+      const member = members.get(name);
+      if (!member) {
+        throw new Error(`unknown teammate "${name}"`);
+      }
+      if (member.runtime.state === "failed" || member.runtime.state === "stopped") {
+        throw new Error(`teammate "${name}" is ${member.runtime.state}`);
+      }
+      if (requireIdle && member.runtime.state !== "idle") {
+        throw new Error(`teammate "${name}" must be idle`);
+      }
+      return {
+        name: member.definition.name,
+        profile: member.definition.profile,
+        role: "teammate",
+      };
+    },
+    async resolveEditSource(name, sessionId, taskId) {
+      const member = members.get(name);
+      if (!member) {
+        throw new Error(`unknown teammate "${name}"`);
+      }
+      if (
+        member.definition.profile !== "edit"
+        || member.runtime.sessionId !== sessionId
+        || !member.definition.workspace
+      ) {
+        throw new Error(`teammate "${name}" is not the requested edit source session`);
+      }
+      if (!options.taskGraph) {
+        throw new Error("teammate edit source requires a root task graph");
+      }
+      const task = await createFileTeamTaskStore({
+        graphPath: options.taskGraph.taskGraphPath,
+      }).get(taskId);
+      if (task.task.owner?.role !== "teammate" || task.task.owner.name !== name) {
+        throw new Error(`teammate "${name}" does not own task "${taskId}"`);
+      }
+      return {
+        kind: "teammate",
+        name,
+        profile: "edit",
+        sessionId,
+        workspace: { ...member.definition.workspace },
+      };
+    },
     sendMessage,
     async settleBeforeFinal() {
       while (true) {
@@ -712,6 +803,45 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         await waitForActivity(version);
       }
     },
+    async shutdown(input) {
+      const member = members.get(input.name);
+      if (!member) {
+        throw new Error(`unknown teammate "${input.name}"`);
+      }
+      if (input.mode !== "shutdown" && input.mode !== "retire") {
+        throw new Error("teammate shutdown mode must be shutdown or retire");
+      }
+      if (member.runtime.state === "busy" || member.runtime.state === "starting") {
+        throw new Error(`teammate "${input.name}" must be idle before shutdown`);
+      }
+      if (options.taskGraph) {
+        const activeTask = (await createFileTeamTaskStore({
+          graphPath: options.taskGraph.taskGraphPath,
+        }).read()).tasks.find(
+          (task) =>
+            task.owner?.role === "teammate"
+            && task.owner.name === member.definition.name
+            && task.status !== "completed"
+            && task.status !== "blocked",
+        );
+        if (activeTask) {
+          throw new Error(
+            `teammate "${input.name}" owns unfinished task "${activeTask.id}"; complete or transfer it before shutdown`,
+          );
+        }
+      }
+      if (member.runtime.state !== "stopped") {
+        const graceful = input.mode === "shutdown" && member.runtime.state === "idle";
+        await updateRuntime(member, "stopped");
+        await stopProcess(member, graceful);
+      }
+      await options.lifecycleEmitter.emit({
+        mode: input.mode === "shutdown" ? "graceful" : "terminate",
+        stopped: [member.definition.name],
+        type: "team_cleanup",
+      });
+      return toSummary(member);
+    },
     async start(input) {
       validateTeammateName(input.name);
       validateMessageText(input.instructions, "teammate instructions");
@@ -729,19 +859,6 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       if (!Number.isSafeInteger(maxToolRounds) || maxToolRounds < 1) {
         throw new Error("maxToolRounds must be a positive integer");
       }
-      if (input.taskId && !options.taskGraph) {
-        throw new Error("teammate taskId requires a root task graph binding");
-      }
-      if (input.taskId && options.taskGraph) {
-        const task = await createFileTeamTaskStore({
-          graphPath: options.taskGraph.taskGraphPath,
-        }).get(input.taskId);
-        if (task.task.status !== "in_progress") {
-          throw new Error(
-            `teammate taskId "${input.taskId}" must reference an in_progress team task`,
-          );
-        }
-      }
       const workspace = input.profile === "edit"
         ? await workspaceFactory.create({
             baseCwd: options.baseCwd,
@@ -756,7 +873,6 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         name: input.name,
         profile: input.profile,
         schemaVersion: TEAM_DEFINITION_SCHEMA_VERSION,
-        ...(input.taskId ? { taskId: input.taskId.trim() } : {}),
         ...(workspace ? { workspace } : {}),
       };
       const sessionId = allocateSessionId();

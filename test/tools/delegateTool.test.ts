@@ -27,6 +27,12 @@ describe("delegate tool", () => {
       },
       strict: true,
     });
+    const properties = (
+      delegateToolDefinition.parameters as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties;
+    expect(properties?.maxToolRounds?.description).toContain("final response");
   });
 
   it("rejects missing and non-in-progress task links without starting a child or mutating the graph", async () => {
@@ -37,6 +43,7 @@ describe("delegate tool", () => {
     await store.create(leader, {
       acceptance: ["The child reports findings"],
       description: "Investigate the integration boundary.",
+      kind: "research",
       title: "Investigate integration",
     });
     const before = await store.read();
@@ -80,6 +87,8 @@ describe("delegate tool", () => {
       toolName: "delegate",
     });
     expect(pending.content).toContain("in_progress");
+    expect(pending.content).toContain('action="assign"');
+    expect(pending.content).toContain('assignee="leader"');
     expect(requests).toEqual([]);
     expect(await store.read()).toEqual(before);
   });
@@ -92,9 +101,14 @@ describe("delegate tool", () => {
     await store.create(leader, {
       acceptance: ["The child reports findings"],
       description: "Investigate the integration boundary.",
+      kind: "research",
       title: "Investigate integration",
     });
-    await store.update(leader, "task_001", { status: "in_progress" });
+    await store.transition(leader, {
+      action: "assign",
+      assignee: { role: "leader" },
+      id: "task_001",
+    });
     const before = await store.read();
     const requests: ChildSessionRunRequest[] = [];
     const tool = createDelegateTool({
@@ -118,7 +132,7 @@ describe("delegate tool", () => {
       callId: "call_linked_again",
       rawArguments: JSON.stringify({
         maxToolRounds: 3,
-        profile: "edit",
+        profile: "research",
         runInBackground: true,
         task: "Inspect the same active task independently.",
         taskId: "task_001",
@@ -148,7 +162,7 @@ describe("delegate tool", () => {
         maxToolRounds: 3,
         parentCallId: "call_linked_again",
         parentRound: 3,
-        profile: "edit",
+        profile: "research",
         runInBackground: true,
         task: "Inspect the same active task independently.",
         taskId: "task_001",

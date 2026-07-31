@@ -164,6 +164,8 @@ function fakeBackgroundTaskManager(): BackgroundTaskManager {
     drainNotifications: () => [],
     drainRunningNotifications: () => [],
     flushEvents: async () => undefined,
+    pendingCount: () => 0,
+    settleBeforeFinal: async () => [],
     startBash: vi.fn(() => ({
       command: "sleep 1 && echo done",
       id: "bg_001",

@@ -99,12 +99,16 @@ describe("teammate worker", () => {
     expect(formatted).toContain("kind: broadcast");
   });
 
-  it("reserves short mailbox turn budgets for a final response", () => {
-    const task = formatTeammateSessionTask(workerConfig("/workspace"));
+  it("reserves todo for explicit Leader requests in short mailbox protocols", () => {
+    const task = formatTeammateSessionTask(workerConfig("/tmp/teammate"));
 
-    expect(task).toContain("Do not call todo unless the current Leader message explicitly requests");
-    expect(task).toContain("For short mailbox turns");
-    expect(task).toContain("return a final response");
+    expect(task).toContain("TaskGraph is the shared coordination state");
+    expect(task).toContain(
+      "Do not call todo unless the current Leader message explicitly requests local todo planning.",
+    );
+    expect(task).toContain(
+      "For short mailbox protocols, call the requested TaskGraph tools directly and then return a final response.",
+    );
   });
 
   it("exposes only edit-profile tools and brokers each write approval over IPC", async () => {
@@ -236,7 +240,7 @@ function workerConfig(root: string): TeammateWorkerConfig {
       maxToolRounds: 2,
       name: "researcher",
       profile: "research",
-      schemaVersion: 1,
+      schemaVersion: 2,
     },
     model: "test-model",
     rootSessionId: "root-session",

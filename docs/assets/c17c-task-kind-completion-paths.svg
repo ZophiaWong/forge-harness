@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="730" viewBox="0 0 1440 730" role="img" aria-labelledby="title desc">
+  <title id="title">c17c Research and Edit Completion Paths</title>
+  <desc id="desc">A shared acquire step branches into a short research path completed by Leader review and a longer edit path requiring plan approval, trusted source fingerprint, verification, Git integration, and receipt. Failed review or verification returns the task to in progress.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <marker id="arrowFail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b91c1c" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 26px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .subtitle { font: 15px ui-sans-serif, system-ui, sans-serif; fill: #4b5563; }
+      .shared { fill: #f8fafc; stroke: #475569; stroke-width: 2.2; }
+      .researchLane { fill: #eff6ff; stroke: #93c5fd; stroke-width: 1.8; }
+      .editLane { fill: #fff7ed; stroke: #fdba74; stroke-width: 1.8; }
+      .step { fill: #ffffff; stroke: #475569; stroke-width: 2; }
+      .review { fill: #fefce8; stroke: #a16207; stroke-width: 2.2; }
+      .proof { fill: #fdf4ff; stroke: #a21caf; stroke-width: 2.2; }
+      .done { fill: #ecfdf5; stroke: #047857; stroke-width: 2.5; }
+      .blocked { fill: #fef2f2; stroke: #b91c1c; stroke-width: 2.2; }
+      .laneTitle { font: 700 19px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .label { font: 700 15px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .small { font: 13px ui-sans-serif, system-ui, sans-serif; fill: #374151; }
+      .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2937; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .success { stroke: #047857; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .failure { stroke: #b91c1c; stroke-width: 2.2; stroke-dasharray: 8 6; fill: none; marker-end: url(#arrowFail); }
+      .researchNote { fill: #eff6ff; }
+      .editNote { fill: #fff7ed; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1440" height="730" />
+  <text class="title" x="48" y="48">c17c：research 与 edit 使用不同的完成证明</text>
+  <text class="subtitle" x="48" y="77">两类 task 共享 acquire 和 owner 规则；从 in_progress 开始，证据链分成两条。</text>
+
+  <rect class="shared" x="242" y="104" width="260" height="82" rx="11" />
+  <text class="label" x="270" y="136">ready + pending + unowned</text>
+  <text class="mono" x="270" y="163">dependencies completed</text>
+
+  <rect class="shared" x="592" y="104" width="260" height="82" rx="11" />
+  <text class="label" x="620" y="136">assign / claim（原子 acquire）</text>
+  <text class="mono" x="620" y="163">owner + in_progress</text>
+
+  <rect class="shared" x="942" y="104" width="260" height="82" rx="11" />
+  <text class="label" x="970" y="136">contract frozen</text>
+  <text class="mono" x="970" y="163">kind · acceptance · verifier</text>
+
+  <path class="arrow" d="M 502 145 L 592 145" />
+  <path class="arrow" d="M 852 145 L 942 145" />
+
+  <rect class="researchLane" x="48" y="222" width="1344" height="188" rx="14" />
+  <text class="laneTitle" x="72" y="254">research：结果由 Leader review 收口</text>
+
+  <rect class="step" x="72" y="278" width="210" height="82" rx="10" />
+  <text class="label" x="94" y="308">owner 调研并追加 evidence</text>
+  <text class="mono" x="94" y="335">status: in_progress</text>
+
+  <rect class="step" x="342" y="278" width="196" height="82" rx="10" />
+  <text class="label" x="364" y="308">submit_result</text>
+  <text class="mono" x="364" y="335">summary + evidence</text>
+
+  <rect class="proof" x="598" y="278" width="194" height="82" rx="10" />
+  <text class="label" x="620" y="308">submitted</text>
+  <text class="mono" x="620" y="335">等待 Leader verdict</text>
+
+  <rect class="review" x="852" y="278" width="220" height="82" rx="10" />
+  <text class="label" x="874" y="308">review_result pass</text>
+  <text class="mono" x="874" y="335">verdict 写入 TaskGraph</text>
+
+  <rect class="done" x="1132" y="278" width="212" height="82" rx="10" />
+  <text class="label" x="1154" y="308">completed</text>
+  <text class="mono" x="1154" y="335">无需 Git receipt</text>
+
+  <path class="arrow" d="M 282 319 L 342 319" />
+  <path class="arrow" d="M 538 319 L 598 319" />
+  <path class="arrow" d="M 792 319 L 852 319" />
+  <path class="success" d="M 1072 319 L 1132 319" />
+  <path class="failure" d="M 962 362 C 900 398 300 398 177 362" />
+  <rect class="researchNote" x="500" y="374" width="778" height="27" />
+  <text class="small" x="548" y="394">review fail：清除当前 submission / verdict，保留 evidence，回到 in_progress</text>
+
+  <rect class="editLane" x="48" y="434" width="1344" height="238" rx="14" />
+  <text class="laneTitle" x="72" y="466">edit：plan、source proof、verification 与 integration 缺一不可</text>
+
+  <rect class="step" x="72" y="494" width="156" height="82" rx="10" />
+  <text class="label" x="92" y="524">in_progress</text>
+  <text class="mono" x="92" y="551">owner acquired</text>
+
+  <rect class="review" x="260" y="494" width="164" height="82" rx="10" />
+  <text class="label" x="280" y="518">plan gate</text>
+  <text class="mono" x="280" y="541">submit_plan</text>
+  <text class="mono" x="280" y="560">review_plan approve</text>
+
+  <rect class="step" x="456" y="494" width="166" height="82" rx="10" />
+  <text class="label" x="476" y="518">edit + evidence</text>
+  <text class="mono" x="476" y="541">write allowed</text>
+  <text class="mono" x="476" y="560">submit_result</text>
+
+  <rect class="proof" x="654" y="494" width="194" height="82" rx="10" />
+  <text class="label" x="674" y="518">trusted source</text>
+  <text class="mono" x="674" y="541">registry binding</text>
+  <text class="mono" x="674" y="560">fingerprint + submitted</text>
+
+  <rect class="review" x="880" y="494" width="150" height="82" rx="10" />
+  <text class="label" x="900" y="524">task_verify</text>
+  <text class="mono" x="900" y="551">verdict: passed</text>
+
+  <rect class="proof" x="1062" y="494" width="162" height="82" rx="10" />
+  <text class="label" x="1082" y="518">task_integrate</text>
+  <text class="mono" x="1082" y="541">commit + cherry-pick</text>
+  <text class="mono" x="1082" y="560">receipt</text>
+
+  <rect class="done" x="1256" y="494" width="112" height="82" rx="10" />
+  <text class="label" x="1272" y="524">completed</text>
+  <text class="mono" x="1272" y="551">receipt</text>
+
+  <path class="arrow" d="M 228 535 L 260 535" />
+  <path class="arrow" d="M 424 535 L 456 535" />
+  <path class="arrow" d="M 622 535 L 654 535" />
+  <path class="arrow" d="M 848 535 L 880 535" />
+  <path class="arrow" d="M 1030 535 L 1062 535" />
+  <path class="success" d="M 1224 535 L 1256 535" />
+
+  <path class="failure" d="M 955 578 C 900 620 260 620 150 578" />
+  <rect class="editNote" x="386" y="594" width="760" height="27" />
+  <text class="small" x="410" y="615">verification fail / source drift：保留 approved plan 与 evidence，回到 in_progress</text>
+
+  <rect class="blocked" x="968" y="618" width="400" height="42" rx="8" />
+  <text class="small" x="988" y="636">integration conflict 或显式 block → blocked</text>
+  <text class="small" x="988" y="653">本次 root run 不再恢复</text>
+
+  <text class="small" x="48" y="706">long-lived edit teammate 需要 plan gate；one-shot edit child 的写入边界由 delegate approval 负责，但后半段 source proof、verify 与 integrate 相同。</text>
+</svg>

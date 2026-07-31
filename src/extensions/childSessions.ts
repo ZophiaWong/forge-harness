@@ -31,6 +31,9 @@ import type {
 import type { ToolRuntime } from "../tools/types.js";
 import { createWriteTool } from "../tools/writeTool.js";
 import { createLifecycleEmitter, type LifecycleEmitter } from "./lifecycle.js";
+import type { TeamTaskResultSource } from "../domain/teamTask.js";
+import type { TeamTaskActor } from "../domain/teamTask.js";
+import type { GitIntegrationService } from "../runtime/gitIntegration.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,8 +65,14 @@ export function createChildSessionRunner(options: CreateChildSessionRunnerOption
 
 export function createChildProfileToolRuntime(options: {
   cwd: string;
+  gitIntegration?: GitIntegrationService;
+  ownWorkspace?: {
+    branch: string;
+    path: string;
+  };
   profile: ChildSessionProfile;
   sessionId?: string;
+  taskActor?: TeamTaskActor;
   taskGraph?: SessionTaskGraphBinding;
 }): ToolRuntime {
   const inspectTools = [
@@ -75,13 +84,16 @@ export function createChildProfileToolRuntime(options: {
   ];
   const taskTools = options.taskGraph && options.sessionId
     ? createTeamTaskTools({
-        actor: {
+        actor: options.taskActor ?? {
           ...(options.taskGraph.delegatedTaskId
             ? { delegatedTaskId: options.taskGraph.delegatedTaskId }
             : {}),
+          profile: options.profile,
           role: "child",
           sessionId: options.sessionId,
         },
+        ...(options.gitIntegration ? { gitIntegration: options.gitIntegration } : {}),
+        ...(options.ownWorkspace ? { ownWorkspace: options.ownWorkspace } : {}),
         store: createFileTeamTaskStore({ graphPath: options.taskGraph.taskGraphPath }),
       })
     : [];
@@ -108,7 +120,14 @@ export function formatChildProfileTask(options: {
     options.profile === "research"
       ? [
           "You are a fresh research child session.",
-          "Use the available read-only tools to investigate the delegated task.",
+          "Use inspect-only tools to investigate the delegated task without editing project files.",
+          ...(options.taskId
+            ? [
+                "task_add_evidence is permitted coordination metadata and does not edit project files.",
+                "Use it when the delegated task requests evidence.",
+                "Follow the explicit delegated task before doing any broader investigation; do not inspect unrelated files after the requested evidence is recorded.",
+              ]
+            : []),
           "Report findings, evidence, open questions, and the next step in your final answer.",
         ].join("\n")
       : [
@@ -315,8 +334,17 @@ export interface AsyncChildSessionNotification {
 
 export interface AsyncChildSessionManager extends ChildSessionRunner {
   drainNotifications(): AsyncChildSessionNotification[];
+  getTerminal(childSessionId: string): ChildSessionTerminalRecord | undefined;
   pendingCount(): number;
+  resolveEditSource(childSessionId: string, taskId: string): TeamTaskResultSource;
   runningNotifications(): AsyncChildSessionNotification[];
+  settleBeforeFinal(): Promise<AsyncChildSessionNotification[]>;
+}
+
+export interface ChildSessionTerminalRecord {
+  consumedByTaskId?: string;
+  request: ChildSessionRunRequest;
+  result: ChildSessionRunResult;
 }
 
 export function createAsyncChildSessionManager(options: {
@@ -325,12 +353,24 @@ export function createAsyncChildSessionManager(options: {
   interface ManagedChildSession {
     handle: ChildSessionRunHandle;
     order: number;
+    request: ChildSessionRunRequest;
     result?: ChildSessionRunResult;
     terminalNotified: boolean;
   }
 
   const sessions: ManagedChildSession[] = [];
+  const terminal = new Map<string, ChildSessionTerminalRecord>();
   let nextOrder = 1;
+
+  const rememberTerminal = (
+    request: ChildSessionRunRequest,
+    result: ChildSessionRunResult,
+  ): void => {
+    terminal.set(result.childSessionId, {
+      request: structuredClone(request),
+      result: structuredClone(result),
+    });
+  };
 
   return {
     drainNotifications() {
@@ -346,7 +386,47 @@ export function createAsyncChildSessionManager(options: {
       return sessions.filter((session) => !session.result).length;
     },
     async run(request) {
-      return options.runner.run(request);
+      const result = await options.runner.run(request);
+      rememberTerminal(request, result);
+      return result;
+    },
+    getTerminal(childSessionId) {
+      const record = terminal.get(childSessionId);
+      return record ? structuredClone(record) : undefined;
+    },
+    resolveEditSource(childSessionId, taskId) {
+      const record = terminal.get(childSessionId);
+      if (!record) {
+        throw new Error(`unknown terminal child session "${childSessionId}"`);
+      }
+      if (record.request.taskId !== taskId) {
+        throw new Error(
+          `child session "${childSessionId}" was delegated task "${String(record.request.taskId)}", not "${taskId}"`,
+        );
+      }
+      if (
+        record.request.profile !== "edit"
+        || record.result.profile !== "edit"
+        || record.result.status !== "completed"
+        || !record.result.workspace
+      ) {
+        throw new Error(`child session "${childSessionId}" is not a completed edit source`);
+      }
+      if (record.consumedByTaskId && record.consumedByTaskId !== taskId) {
+        throw new Error(
+          `child session "${childSessionId}" was already used by task "${record.consumedByTaskId}"`,
+        );
+      }
+      record.consumedByTaskId = taskId;
+      return {
+        childSessionId,
+        kind: "child",
+        profile: "edit",
+        workspace: {
+          branch: record.result.workspace.branch,
+          path: record.result.workspace.path,
+        },
+      };
     },
     runningNotifications() {
       return sessions
@@ -354,11 +434,24 @@ export function createAsyncChildSessionManager(options: {
         .sort((left, right) => left.order - right.order)
         .map((session) => toChildSessionNotification(session));
     },
+    async settleBeforeFinal() {
+      const running = sessions.filter((session) => !session.result);
+      if (running.length > 0) {
+        await Promise.race(running.map((session) =>
+          session.handle.promise.then(
+            () => undefined,
+            () => undefined,
+          )
+        ));
+      }
+      return this.drainNotifications();
+    },
     async start(request) {
       const handle = await options.runner.start(request);
       const session: ManagedChildSession = {
         handle,
         order: nextOrder,
+        request: structuredClone(request),
         terminalNotified: false,
       };
       nextOrder += 1;
@@ -366,6 +459,7 @@ export function createAsyncChildSessionManager(options: {
       void handle.promise
         .then((result) => {
           session.result = result;
+          rememberTerminal(session.request, result);
         })
         .catch((error) => {
           session.result = {
@@ -375,6 +469,7 @@ export function createAsyncChildSessionManager(options: {
             status: "failed",
             tracePath: handle.tracePath,
           };
+          rememberTerminal(session.request, session.result);
         });
       return handle;
     },
