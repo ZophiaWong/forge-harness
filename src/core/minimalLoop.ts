@@ -25,6 +25,7 @@ import {
   type AsyncChildSessionNotification,
   type ChildSessionRunner,
 } from "../extensions/childSessions.js";
+import type { TeammateManager } from "../extensions/teammates.js";
 import { createLifecycleEmitter, type LifecycleEmitter } from "../extensions/lifecycle.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import type {
@@ -48,6 +49,7 @@ import {
 import type { CronSchedule, CronScheduleStore } from "../runtime/cronStore.js";
 import type { RuntimeState } from "../runtime/state.js";
 import type { SessionWorkspaceMetadata } from "../runtime/session.js";
+import type { TeamMessage } from "../runtime/teamMailbox.js";
 import { isTaskState } from "../runtime/task.js";
 import { createNoopTraceRecorder } from "../runtime/trace.js";
 import type { SessionEndStatus, TraceTaskGraphProjection } from "../runtime/trace.js";
@@ -153,6 +155,7 @@ export interface MinimalLoopOptions {
   childSessionRunner?: ChildSessionRunner;
   task: string;
   teamTasks?: TeamTaskToolRuntimeOptions;
+  teammates?: TeammateManager;
   toolRuntime?: ToolRuntime;
   transcript?: MinimalLoopTranscript;
   verifier?: Verifier;
@@ -162,6 +165,15 @@ export interface MinimalLoopOptions {
 export interface MinimalLoopResult {
   finalAnswer: string;
   rounds: number;
+}
+
+export interface MinimalLoopTurnOptions {
+  maxToolRounds?: number;
+}
+
+export interface MinimalLoopSession {
+  close(status: SessionEndStatus): Promise<void>;
+  runTurn(input?: string, options?: MinimalLoopTurnOptions): Promise<MinimalLoopResult>;
 }
 
 const COMPACTION_INSTRUCTIONS = [
@@ -179,6 +191,20 @@ const COMPACTION_INSTRUCTIONS = [
 ].join("\n");
 
 export async function runMinimalLoop(options: MinimalLoopOptions): Promise<MinimalLoopResult> {
+  const session = await createMinimalLoopSession(options);
+
+  try {
+    const result = await session.runTurn();
+    await session.close("completed");
+    reportFinalState(options);
+    return result;
+  } catch (error) {
+    await session.close("failed");
+    throw error;
+  }
+}
+
+export async function createMinimalLoopSession(options: MinimalLoopOptions): Promise<MinimalLoopSession> {
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   const baseURL = normalizeBaseURL(options.baseURL ?? process.env.OPENAI_BASE_URL);
   const model = options.model ?? process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
@@ -219,6 +245,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
       cwd: options.cwd,
       maxToolRounds,
       ...(options.teamTasks ? { teamTasks: options.teamTasks } : {}),
+      ...(options.teammates ? { teammates: options.teammates } : {}),
     });
   const toolRuntime = options.additionalToolRuntimes?.length
     ? composeToolRuntimes([primaryToolRuntime, ...options.additionalToolRuntimes])
@@ -243,7 +270,9 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     },
     recentRoundsToKeep: contextCompaction?.recentRoundsToKeep ?? DEFAULT_COMPACTION_OPTIONS.recentRoundsToKeep,
   });
-  let recoveryAttempts = 0;
+  let closed = false;
+  let running = false;
+  let responseCreate: ResponseCreate;
 
   try {
     await lifecycleEmitter.emit({
@@ -265,218 +294,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
         workspacePath: options.workspace.path,
       });
     }
-    const responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
-
-    for (let round = 1; round <= maxToolRounds; round += 1) {
-      lastRound = round;
-      options.transcript?.roundStart(round, model);
-      const toolDefinitions = toolRuntime.toolDefinitions();
-      await appendBackgroundTaskNotifications({
-        backgroundTasks,
-        inputHistory,
-        lifecycleEmitter,
-        round,
-        running: false,
-      });
-      await appendChildSessionNotifications({
-        childSessions,
-        inputHistory,
-        lifecycleEmitter,
-        round,
-        running: false,
-      });
-      await maybeAutoCompactInputHistory({
-        contextCompaction,
-        inputHistory,
-        lifecycleEmitter,
-        model,
-        options,
-        responseCreate,
-        round,
-        task: promptAssembly.task,
-      });
-      const input = inputHistory.modelInput() as ResponseInputItem[];
-
-      options.transcript?.promptAssembly?.(round, promptAssembly.summary);
-      await lifecycleEmitter.emit({
-        catalogSkillIds: promptAssembly.summary.catalogSkillIds,
-        instructionCharCount: promptAssembly.summary.instructionCharCount,
-        round,
-        sectionNames: promptAssembly.summary.sectionNames,
-        selectedSkillIds: promptAssembly.summary.selectedSkillIds,
-        type: "prompt_assembled",
-      });
-      await lifecycleEmitter.emit({
-        inputItemCount: input.length,
-        model,
-        round,
-        toolNames: toolDefinitions.map((tool) => tool.name),
-        type: "model_request",
-      });
-
-      const response = await responseCreate({
-        include: ["reasoning.encrypted_content"],
-        input,
-        instructions: promptAssembly.instructions,
-        model,
-        parallel_tool_calls: false,
-        reasoning: {
-          effort: "low",
-        },
-        store: false,
-        text: {
-          verbosity: "low",
-        },
-        tools: toolDefinitions,
-      });
-
-      inputHistory.appendRoundItems(round, response.output as CompactableInputItem[]);
-
-      const toolCalls = response.output.filter(isFunctionToolCall);
-
-      await lifecycleEmitter.emit({
-        functionCallCount: toolCalls.length,
-        outputText: response.output_text,
-        round,
-        type: "model_response",
-      });
-
-      if (toolCalls.length === 0) {
-        const candidateAnswer = response.output_text.trim();
-        const backgroundGateInjected = await appendBackgroundTaskNotifications({
-          backgroundTasks,
-          inputHistory,
-          lifecycleEmitter,
-          round,
-          running: true,
-        });
-        const childGateInjected = await appendChildSessionNotifications({
-          childSessions,
-          inputHistory,
-          lifecycleEmitter,
-          round,
-          running: true,
-        });
-
-        if (backgroundGateInjected + childGateInjected > 0) {
-          await maybeReactiveCompactInputHistory({
-            contextCompaction,
-            inputHistory,
-            lifecycleEmitter,
-            model,
-            options,
-            responseCreate,
-            round,
-            task: promptAssembly.task,
-          });
-          continue;
-        }
-
-        if (!options.verifier) {
-          options.transcript?.finalAnswer(candidateAnswer);
-          await lifecycleEmitter.emit({
-            answer: candidateAnswer,
-            round,
-            type: "final_answer",
-          });
-          await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, round, "completed");
-          reportFinalState(options);
-          return { finalAnswer: candidateAnswer, rounds: round };
-        }
-
-        await lifecycleEmitter.emit({
-          answer: candidateAnswer,
-          round,
-          type: "candidate_answer",
-        });
-
-        const verification = await options.verifier.verify({
-          candidateAnswer,
-          cwd: options.cwd,
-          round,
-          task: options.task,
-        });
-        options.transcript?.verificationResult?.(round, verification);
-        await recordVerificationResult(lifecycleEmitter, round, verification);
-
-        if (verification.status === "passed") {
-          options.transcript?.finalAnswer(candidateAnswer);
-          await lifecycleEmitter.emit({
-            answer: candidateAnswer,
-            round,
-            type: "final_answer",
-          });
-          await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, round, "completed");
-          reportFinalState(options);
-          return { finalAnswer: candidateAnswer, rounds: round };
-        }
-
-        if (!verification.recoverable) {
-          throw new Error(`Verification ${verification.status}.`);
-        }
-
-        if (recoveryAttempts >= maxRecoveryAttempts) {
-          throw new Error(formatRecoveryLimitError(maxRecoveryAttempts));
-        }
-
-        recoveryAttempts += 1;
-        await lifecycleEmitter.emit({
-          attempt: recoveryAttempts,
-          maxAttempts: maxRecoveryAttempts,
-          round,
-          summary: verification.summary,
-          type: "recovery_attempt",
-        });
-        options.transcript?.recoveryAttempt?.(round, recoveryAttempts, maxRecoveryAttempts, verification.summary);
-        inputHistory.appendRoundItems(round, [{
-          role: "user",
-          content: formatRecoveryUserMessage(verification),
-        }]);
-        await maybeReactiveCompactInputHistory({
-          contextCompaction,
-          inputHistory,
-          lifecycleEmitter,
-          model,
-          options,
-          responseCreate,
-          round,
-          task: promptAssembly.task,
-        });
-        continue;
-      }
-
-      for (const toolCall of toolCalls) {
-        const resultText = await executeToolCall(
-          toolCall,
-          toolRuntime,
-          permissionPolicy,
-          approver,
-          contextProjection,
-          round,
-          options.transcript,
-          lifecycleEmitter,
-        );
-        inputHistory.appendRoundItems(round, [{
-          type: "function_call_output",
-          call_id: toolCall.call_id,
-          output: resultText,
-        }]);
-        await maybeReactiveCompactInputHistory({
-          contextCompaction,
-          inputHistory,
-          lifecycleEmitter,
-          model,
-          options,
-          responseCreate,
-          round,
-          task: promptAssembly.task,
-        });
-      }
-
-      reportRoundState(options, round);
-    }
-
-    throw new Error(`Minimal loop stopped after ${maxToolRounds} tool rounds without a final answer.`);
+    responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await lifecycleEmitter.emit({
@@ -486,6 +304,318 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, "failed");
     throw error;
   }
+
+  return {
+    async close(status) {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, status);
+    },
+    async runTurn(input, turnOptions) {
+      if (closed) {
+        throw new Error("Minimal loop session is closed.");
+      }
+      if (running) {
+        throw new Error("Minimal loop session is already running a turn.");
+      }
+
+      const turnMaxToolRounds = turnOptions?.maxToolRounds ?? maxToolRounds;
+      if (!Number.isSafeInteger(turnMaxToolRounds) || turnMaxToolRounds < 1) {
+        throw new Error("maxToolRounds must be a positive integer.");
+      }
+
+      if (input !== undefined) {
+        const normalizedInput = input.trim();
+        if (normalizedInput.length === 0) {
+          throw new Error("Minimal loop turn input must not be empty.");
+        }
+        inputHistory.appendRoundItems(lastRound + 1, [{
+          role: "user",
+          content: normalizedInput,
+        }]);
+      }
+
+      let recoveryAttempts = 0;
+      running = true;
+
+      try {
+        for (let turnRound = 1; turnRound <= turnMaxToolRounds; turnRound += 1) {
+          const round = lastRound + 1;
+          lastRound = round;
+          options.transcript?.roundStart(round, model);
+          const toolDefinitions = toolRuntime.toolDefinitions();
+          await appendBackgroundTaskNotifications({
+            backgroundTasks,
+            inputHistory,
+            lifecycleEmitter,
+            round,
+            running: false,
+          });
+          await appendChildSessionNotifications({
+            childSessions,
+            inputHistory,
+            lifecycleEmitter,
+            round,
+            running: false,
+          });
+          await appendTeammateMessages({
+            inputHistory,
+            messages: options.teammates
+              ? await options.teammates.drainLeaderMessages()
+              : [],
+            round,
+          });
+          await maybeAutoCompactInputHistory({
+            contextCompaction,
+            inputHistory,
+            lifecycleEmitter,
+            model,
+            options,
+            responseCreate,
+            round,
+            task: promptAssembly.task,
+          });
+          const input = inputHistory.modelInput() as ResponseInputItem[];
+
+          options.transcript?.promptAssembly?.(round, promptAssembly.summary);
+          await lifecycleEmitter.emit({
+            catalogSkillIds: promptAssembly.summary.catalogSkillIds,
+            instructionCharCount: promptAssembly.summary.instructionCharCount,
+            round,
+            sectionNames: promptAssembly.summary.sectionNames,
+            selectedSkillIds: promptAssembly.summary.selectedSkillIds,
+            type: "prompt_assembled",
+          });
+          await lifecycleEmitter.emit({
+            inputItemCount: input.length,
+            model,
+            round,
+            toolNames: toolDefinitions.map((tool) => tool.name),
+            type: "model_request",
+          });
+
+          const response = await responseCreate({
+            include: ["reasoning.encrypted_content"],
+            input,
+            instructions: promptAssembly.instructions,
+            model,
+            parallel_tool_calls: false,
+            reasoning: {
+              effort: "low",
+            },
+            store: false,
+            text: {
+              verbosity: "low",
+            },
+            tools: toolDefinitions,
+          });
+
+          inputHistory.appendRoundItems(round, response.output as CompactableInputItem[]);
+
+          const toolCalls = response.output.filter(isFunctionToolCall);
+
+          await lifecycleEmitter.emit({
+            functionCallCount: toolCalls.length,
+            outputText: response.output_text,
+            round,
+            type: "model_response",
+          });
+
+          if (toolCalls.length === 0) {
+            const candidateAnswer = response.output_text.trim();
+            const backgroundGateInjected = await appendBackgroundTaskNotifications({
+              backgroundTasks,
+              inputHistory,
+              lifecycleEmitter,
+              round,
+              running: true,
+            });
+            const childGateInjected = await appendChildSessionNotifications({
+              childSessions,
+              inputHistory,
+              lifecycleEmitter,
+              round,
+              running: true,
+            });
+            const teammateGateMessages = options.teammates
+              ? await options.teammates.settleBeforeFinal()
+              : [];
+            const teammateGateInjected = await appendTeammateMessages({
+              inputHistory,
+              messages: teammateGateMessages,
+              round,
+            });
+
+            if (backgroundGateInjected + childGateInjected + teammateGateInjected > 0) {
+              await maybeReactiveCompactInputHistory({
+                contextCompaction,
+                inputHistory,
+                lifecycleEmitter,
+                model,
+                options,
+                responseCreate,
+                round,
+                task: promptAssembly.task,
+              });
+              continue;
+            }
+
+            if (!options.verifier) {
+              options.transcript?.finalAnswer(candidateAnswer);
+              await lifecycleEmitter.emit({
+                answer: candidateAnswer,
+                round,
+                type: "final_answer",
+              });
+              return { finalAnswer: candidateAnswer, rounds: turnRound };
+            }
+
+            await lifecycleEmitter.emit({
+              answer: candidateAnswer,
+              round,
+              type: "candidate_answer",
+            });
+
+            const verification = await options.verifier.verify({
+              candidateAnswer,
+              cwd: options.cwd,
+              round,
+              task: options.task,
+            });
+            options.transcript?.verificationResult?.(round, verification);
+            await recordVerificationResult(lifecycleEmitter, round, verification);
+
+            if (verification.status === "passed") {
+              options.transcript?.finalAnswer(candidateAnswer);
+              await lifecycleEmitter.emit({
+                answer: candidateAnswer,
+                round,
+                type: "final_answer",
+              });
+              return { finalAnswer: candidateAnswer, rounds: turnRound };
+            }
+
+            if (!verification.recoverable) {
+              throw new Error(`Verification ${verification.status}.`);
+            }
+
+            if (recoveryAttempts >= maxRecoveryAttempts) {
+              throw new Error(formatRecoveryLimitError(maxRecoveryAttempts));
+            }
+
+            recoveryAttempts += 1;
+            await lifecycleEmitter.emit({
+              attempt: recoveryAttempts,
+              maxAttempts: maxRecoveryAttempts,
+              round,
+              summary: verification.summary,
+              type: "recovery_attempt",
+            });
+            options.transcript?.recoveryAttempt?.(round, recoveryAttempts, maxRecoveryAttempts, verification.summary);
+            inputHistory.appendRoundItems(round, [{
+              role: "user",
+              content: formatRecoveryUserMessage(verification),
+            }]);
+            await maybeReactiveCompactInputHistory({
+              contextCompaction,
+              inputHistory,
+              lifecycleEmitter,
+              model,
+              options,
+              responseCreate,
+              round,
+              task: promptAssembly.task,
+            });
+            continue;
+          }
+
+          for (const toolCall of toolCalls) {
+            const resultText = await executeToolCall(
+              toolCall,
+              toolRuntime,
+              permissionPolicy,
+              approver,
+              contextProjection,
+              round,
+              options.transcript,
+              lifecycleEmitter,
+            );
+            inputHistory.appendRoundItems(round, [{
+              type: "function_call_output",
+              call_id: toolCall.call_id,
+              output: resultText,
+            }]);
+            await maybeReactiveCompactInputHistory({
+              contextCompaction,
+              inputHistory,
+              lifecycleEmitter,
+              model,
+              options,
+              responseCreate,
+              round,
+              task: promptAssembly.task,
+            });
+          }
+
+          reportRoundState(options, round);
+        }
+
+        throw new Error(`Minimal loop stopped after ${turnMaxToolRounds} tool rounds without a final answer.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await lifecycleEmitter.emit({
+          message,
+          type: "session_failed",
+        });
+        if (!closed) {
+          closed = true;
+          await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, "failed");
+        }
+        throw error;
+      } finally {
+        running = false;
+      }
+    },
+  };
+}
+
+async function appendTeammateMessages(options: {
+  inputHistory: ReturnType<typeof createInputHistoryManager>;
+  messages: TeamMessage[];
+  round: number;
+}): Promise<number> {
+  for (const message of options.messages) {
+    options.inputHistory.appendRoundItems(options.round, [{
+      role: "user",
+      content: [
+        "<team_mailbox_message>",
+        `id: ${message.id}`,
+        `from: ${message.from}`,
+        `kind: ${message.kind}`,
+        "content:",
+        message.content,
+        ...(message.sessionId ? [`session_id: ${message.sessionId}`] : []),
+        ...(message.workspace
+          ? [
+              `workspace_path: ${message.workspace.path}`,
+              `workspace_branch: ${message.workspace.branch}`,
+            ]
+          : []),
+        ...(message.changedFiles
+          ? [
+              "changed_files:",
+              ...(message.changedFiles.length > 0
+                ? message.changedFiles.map((file) => `- ${file}`)
+                : ["(none)"]),
+            ]
+          : []),
+        "</team_mailbox_message>",
+      ].join("\n"),
+    }]);
+  }
+  return options.messages.length;
 }
 
 interface MaybeCompactOptions {

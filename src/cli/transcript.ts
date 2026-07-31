@@ -147,6 +147,16 @@ export function formatRuntimeStateTranscript(state: RuntimeState, round?: number
     parts.push(`asyncChildren=${state.asyncChildPendingCount}`);
   }
 
+  if (state.teammates) {
+    parts.push(`teammates=${state.teammates.length}`);
+    parts.push(
+      `teamActive=${state.teammates.filter(
+        (teammate) => teammate.state === "starting" || teammate.state === "busy",
+      ).length}`,
+    );
+    parts.push(`teamFailed=${state.teammates.filter((teammate) => teammate.state === "failed").length}`);
+  }
+
   if (state.taskState) {
     const counts = countTaskItems(state.taskState);
     const openItems = counts.pending + counts.in_progress + counts.blocked;

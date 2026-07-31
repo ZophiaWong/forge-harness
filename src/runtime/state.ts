@@ -131,6 +131,20 @@ export interface RuntimeTaskGraphState {
   lastSeenRevision?: number;
 }
 
+export interface RuntimeTeammateState {
+  failure?: string;
+  name: string;
+  profile: ChildSessionProfile;
+  sessionId: string;
+  state: "starting" | "busy" | "idle" | "failed" | "stopped";
+  tracePath: string;
+  unreadCount: number;
+  workspace?: {
+    branch: string;
+    path: string;
+  };
+}
+
 export type RuntimeProblem =
   | {
       kind: "tool_result";
@@ -201,6 +215,7 @@ export interface RuntimeState {
   taskState?: RuntimeTaskState;
   task?: string;
   taskGraph?: RuntimeTaskGraphState;
+  teammates?: RuntimeTeammateState[];
   workspace?: RuntimeWorkspaceState;
 }
 
@@ -505,6 +520,40 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
           round: event.round,
         },
       };
+    case "teammate_registered":
+      return {
+        ...state,
+        teammates: upsertTeammateState(state.teammates, {
+          name: event.name,
+          profile: event.profile,
+          sessionId: event.sessionId,
+          state: event.state,
+          tracePath: event.tracePath,
+          unreadCount: event.unreadCount,
+          ...(event.workspace ? { workspace: { ...event.workspace } } : {}),
+        }),
+      };
+    case "teammate_state_changed":
+      return {
+        ...state,
+        teammates: upsertTeammateState(state.teammates, {
+          ...(event.failure ? { failure: event.failure } : {}),
+          name: event.name,
+          profile: event.profile,
+          sessionId: event.sessionId,
+          state: event.state,
+          tracePath: event.tracePath,
+          unreadCount: event.unreadCount,
+          ...(event.workspace ? { workspace: { ...event.workspace } } : {}),
+        }),
+      };
+    case "team_mailbox_message_persisted":
+    case "team_mailbox_claimed":
+    case "team_broadcast_result":
+    case "teammate_approval_brokered":
+    case "teammate_rejoined":
+    case "team_cleanup":
+      return state;
     case "session_failed":
       return {
         ...state,
@@ -524,6 +573,16 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
     case "hook_result":
       return state;
   }
+}
+
+function upsertTeammateState(
+  teammates: RuntimeTeammateState[] | undefined,
+  next: RuntimeTeammateState,
+): RuntimeTeammateState[] {
+  return [
+    ...(teammates ?? []).filter((teammate) => teammate.name !== next.name),
+    next,
+  ].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function applyTaskGraphProjection(

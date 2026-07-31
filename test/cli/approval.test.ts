@@ -1,7 +1,8 @@
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import { createCliApprover } from "../../src/cli/approval.js";
+import { createCliTerminalCoordinator } from "../../src/cli/terminal.js";
 
 const approvalRequest = {
   decision: {
@@ -109,4 +110,71 @@ describe("createCliApprover", () => {
     });
     expect(text()).toBe("");
   });
+
+  it("buffers background output without changing a pending yes answer", async () => {
+    const input = controlledInput();
+    const { output, text } = writableOutput();
+    const terminal = createCliTerminalCoordinator({
+      stderr: output,
+      stdout: output,
+    });
+    const approver = createCliApprover({ input, output, terminal });
+    const approval = approver.approve(editApprovalRequest);
+    await waitUntil(() => text().includes("[y/N]:"));
+
+    input.write("y");
+    terminal.log("[mailbox] id=msg_leader_000001 kind=turn_result");
+    const outputBeforeNewline = text();
+    input.write("\n");
+
+    await expect(approval).resolves.toEqual({ approved: true });
+    expect(outputBeforeNewline).not.toContain("[mailbox]");
+    expect(text()).toContain("[mailbox] id=msg_leader_000001 kind=turn_result");
+  });
+
+  it("serializes concurrent approval prompts through one terminal", async () => {
+    const input = controlledInput();
+    const { output, text } = writableOutput();
+    const terminal = createCliTerminalCoordinator({
+      stderr: output,
+      stdout: output,
+    });
+    const approver = createCliApprover({ input, output, terminal });
+
+    const first = approver.approve(approvalRequest);
+    const second = approver.approve(editApprovalRequest);
+    await waitUntil(() => text().includes("[y/N]:"));
+    const promptsBeforeFirstAnswer = occurrences(text(), "[y/N]:");
+
+    input.write("yes\n");
+    await expect(first).resolves.toEqual({ approved: true });
+    await waitUntil(() => occurrences(text(), "[y/N]:") === 2);
+    input.write("no\n");
+
+    await expect(second).resolves.toEqual({
+      approved: false,
+      reason: "approval rejected by user",
+    });
+    expect(promptsBeforeFirstAnswer).toBe(1);
+  });
 });
+
+function controlledInput(): NodeJS.ReadStream {
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  Object.defineProperty(input, "isTTY", { value: true });
+  return input;
+}
+
+function occurrences(text: string, pattern: string): number {
+  return text.split(pattern).length - 1;
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("condition was not met");
+}
