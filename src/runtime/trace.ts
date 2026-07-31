@@ -9,6 +9,7 @@ import type {
 } from "../domain/teamTask.js";
 import type { ToolStatus } from "../tools/types.js";
 import type { BackgroundTaskKind, BackgroundTaskStatus } from "./backgroundTasks.js";
+import type { CompletionGateProblem } from "./completionGate.js";
 import type { CronRunStatus } from "./cronStore.js";
 import type { ChildSessionProfile, SessionWorkspaceMetadata } from "./session.js";
 import type { TaskState } from "./task.js";
@@ -422,6 +423,10 @@ export type TraceEventPayload =
       type: "team_cleanup";
       mode: "graceful" | "terminate";
       stopped: string[];
+    }
+  | {
+      type: "completion_gate_failed";
+      problems: CompletionGateProblem[];
     }
   | {
       type: "session_failed";

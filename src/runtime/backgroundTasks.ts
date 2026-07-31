@@ -31,6 +31,8 @@ export interface BackgroundTaskManager {
   drainNotifications(): BackgroundTaskNotification[];
   drainRunningNotifications(): BackgroundTaskNotification[];
   flushEvents(): Promise<void>;
+  pendingCount(): number;
+  settleBeforeFinal(): Promise<BackgroundTaskNotification[]>;
   startBash(input: StartBackgroundBashInput): BackgroundTaskStart;
 }
 
@@ -113,6 +115,17 @@ export function createBackgroundTaskManager(options: BackgroundTaskManagerOption
       while (pendingEvents.size > 0) {
         await Promise.all([...pendingEvents]);
       }
+    },
+    pendingCount() {
+      return tasks.filter((task) => task.status === "running").length;
+    },
+    async settleBeforeFinal() {
+      const running = tasks.filter((task) => task.status === "running");
+      if (running.length > 0) {
+        await Promise.race(running.map((task) => task.settled));
+        await this.flushEvents();
+      }
+      return this.drainNotifications();
     },
     startBash(input) {
       const id = `bg_${String(nextTaskNumber).padStart(3, "0")}`;

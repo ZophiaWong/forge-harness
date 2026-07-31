@@ -32,7 +32,7 @@ describe("git worktree workspace", () => {
     const repo = await createGitRepo();
 
     expect(createTeammateWorktreePath(repo, "root-session", "docs-editor")).toBe(
-      path.join(repo, ".forge", "worktrees", "root-session", "teammates", "docs-editor"),
+      path.join(repo, ".forge", "worktrees", "teammates", "root-session", "docs-editor"),
     );
     expect(createTeammateWorktreeBranchName("root-session", "docs-editor")).toBe(
       "forge/teammate/root-session/docs-editor",
@@ -46,8 +46,27 @@ describe("git worktree workspace", () => {
 
     expect(binding).toMatchObject({
       branch: "forge/teammate/root-session/docs-editor",
-      path: path.join(repo, ".forge", "worktrees", "root-session", "teammates", "docs-editor"),
+      path: path.join(repo, ".forge", "worktrees", "teammates", "root-session", "docs-editor"),
     });
+  });
+
+  it("keeps the Leader worktree clean after creating a teammate workspace", async () => {
+    const repo = await createGitRepo();
+    await fs.writeFile(path.join(repo, ".gitignore"), ".forge/*\n", "utf8");
+    await git(repo, ["add", ".gitignore"]);
+    await git(repo, ["commit", "-m", "ignore Forge artifacts"]);
+    const leaderWorkspace = await createGitWorktreeWorkspace({
+      baseCwd: repo,
+      sessionId: "root-session",
+    });
+
+    await createGitTeammateWorkspace({
+      baseCwd: repo,
+      name: "docs-editor",
+      rootSessionId: "root-session",
+    });
+
+    expect((await git(leaderWorkspace.path, ["status", "--porcelain=v1"])).stdout).toBe("");
   });
 
   it("creates a session branch and worktree from a clean git repo", async () => {

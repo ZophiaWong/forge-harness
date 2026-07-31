@@ -122,6 +122,7 @@ describe("createDefaultToolRuntime", () => {
     await store.create(actor, {
       acceptance: ["The child handoff is reviewed"],
       description: "Coordinate one child investigation.",
+      kind: "research",
       title: "Coordinate child",
     });
     const childRequests: unknown[] = [];
@@ -173,6 +174,9 @@ describe("createDefaultToolRuntime", () => {
       "task_create",
       "task_update",
       "task_add_evidence",
+      "task_transition",
+      "task_verify",
+      "task_integrate",
       "delegate",
     ]);
     await expect(

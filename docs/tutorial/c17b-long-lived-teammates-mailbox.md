@@ -188,8 +188,6 @@ binding 写入 definition。rejoin 直接复用它，不创建新 branch，也�
 
 ### 5. final gate 等事件，不询问模型
 
-等待 teammate 不是一次 tool call。Leader 没有其他动作可做时，应先给出 candidate final；runner 会拦住这份回答，等待 teammate activity，再把新的 mailbox message 放进下一轮 context。反复调用 `teammate_list` 只会消耗 root 的 round budget。
-
 Leader 模型给出 candidate final 时，`settleBeforeFinal()` 先检查：
 
 - 是否还有 `starting` 或 `busy` teammate；
@@ -220,7 +218,7 @@ worker trace 保留自己的 model、tool、permission、todo 与 compaction eve
 ### 1. research follow-up 保留 history
 
 ```bash
-npm run start -- 'Run a c17b long-lived research smoke. Do not call teammate_list or any other polling tool while waiting. When no other action is available, return a candidate final answer so the runner waits for teammate activity and injects mailbox results. First call teammate_start with name="repo-researcher", profile="research", instructions="Keep findings across mailbox turns. For the first message read package.json, then answer with the package name. For follow-up messages answer from conversation history unless explicitly asked to reread.", message="Read package.json and report the package name.", taskId=null, and maxToolRounds=4. Do not use delegate. Wait for its turn_result. Then call message_send to repo-researcher with content="Without rereading package.json, repeat the package name and say this is a follow-up." Wait for the second turn_result, then report both answers and the stable teammate name.'
+npm run start -- 'Run a c17b long-lived research smoke. First call teammate_start with name="repo-researcher", profile="research", instructions="Keep findings across mailbox turns. For the first message read package.json, then answer with the package name. For follow-up messages answer from conversation history unless explicitly asked to reread.", message="Read package.json and report the package name.", taskId=null, and maxToolRounds=3. Do not use delegate. Wait for its turn_result. Then call message_send to repo-researcher with content="Without rereading package.json, repeat the package name and say this is a follow-up." Wait for the second turn_result, then report both answers and the stable teammate name.'
 ```
 
 应看到同一个 `repo-researcher` 产生两条 `turn_result`，第二条仍使用原 `sessionId`。worker trace 的 round number 单调增加。
@@ -228,7 +226,7 @@ npm run start -- 'Run a c17b long-lived research smoke. Do not call teammate_lis
 ### 2. 两名成员、broadcast 与 edit preview
 
 ```bash
-npm run start -- 'Run a c17b broadcast and edit-preview smoke. Do not call teammate_list, read, find, bash, or any other polling tool while waiting. When no other action is available, return a candidate final answer so the runner waits for teammate activity and injects mailbox results. Start research teammate repo-researcher with instructions="Answer mailbox messages briefly.", message="List the top-level docs directory and summarize it.", taskId=null, maxToolRounds=4. Then start edit teammate docs-editor with instructions="Work only in your stable worktree. On the first message create c17b-smoke.txt containing exactly c17b edit preview followed by a newline. On later messages answer briefly without another edit.", message="Create the requested preview file.", taskId=null, maxToolRounds=4. Approve the edit/write prompt. Then call message_broadcast with content="Reply with your name, profile, and whether your first task is done." Wait for all turn results. Report both session IDs plus docs-editor workspace branch, path, and changedFiles.'
+npm run start -- 'Run a c17b broadcast and edit-preview smoke. Start research teammate repo-researcher with instructions="Answer mailbox messages briefly.", message="List the top-level docs directory and summarize it.", taskId=null, maxToolRounds=3. Then start edit teammate docs-editor with instructions="Work only in your stable worktree. On the first message create c17b-smoke.txt containing exactly c17b edit preview followed by a newline. On later messages answer briefly without another edit.", message="Create the requested preview file.", taskId=null, maxToolRounds=3. Approve the edit/write prompt. Then call message_broadcast with content="Reply with your name, profile, and whether your first task is done." Wait for all turn results. Report both session IDs plus docs-editor workspace branch, path, and changedFiles.'
 ```
 
 edit start 会触发 Leader approval。如果 research 的 `turn_result` 恰好在此时到达，输入一次 `y` 并回车即可；`[mailbox]` 和 `[team]` 摘要会在 prompt 结束后出现，`repo-researcher` 只打印一次 `idle`。最终回执应列出 `c17b-smoke.txt`，文件位于 teammate worktree，不在当前 checkout。broadcast 若在成员 busy 时到达，会显示 `queued_busy`，并在下一批处理。

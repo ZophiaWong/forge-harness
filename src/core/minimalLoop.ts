@@ -57,10 +57,15 @@ import type { VerificationResult, Verifier } from "../runtime/verification.js";
 import { createDefaultToolRuntime } from "../tools/defaultRuntime.js";
 import { composeToolRuntimes } from "../tools/compositeRuntime.js";
 import type { TeamTaskToolRuntimeOptions } from "../tools/teamTaskTools.js";
+import { createGitIntegrationService } from "../runtime/gitIntegration.js";
+import {
+  createCompletionGate,
+  formatCompletionBlockers,
+} from "../runtime/completionGate.js";
 import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from "../tools/types.js";
 
 export const DEFAULT_MODEL = "gpt-5.4-mini";
-export const DEFAULT_MAX_TOOL_ROUNDS = 8;
+export const DEFAULT_MAX_TOOL_ROUNDS = 48;
 export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 1;
 
 export interface UserInputItem {
@@ -244,12 +249,34 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
       cronSchedules: options.cronSchedules,
       cwd: options.cwd,
       maxToolRounds,
-      ...(options.teamTasks ? { teamTasks: options.teamTasks } : {}),
+      ...(options.teamTasks
+        ? {
+            teamTasks: {
+              ...options.teamTasks,
+              ...(childSessions ? { childSessions } : {}),
+              gitIntegration: options.teamTasks.gitIntegration
+                ?? createGitIntegrationService({ targetCwd: options.cwd }),
+              ...(options.teammates ? { teammates: options.teammates } : {}),
+            },
+          }
+        : {}),
       ...(options.teammates ? { teammates: options.teammates } : {}),
     });
   const toolRuntime = options.additionalToolRuntimes?.length
     ? composeToolRuntimes([primaryToolRuntime, ...options.additionalToolRuntimes])
     : primaryToolRuntime;
+  const completionGate = createCompletionGate({
+    ...(backgroundTasks ? { backgroundTasks } : {}),
+    ...(childSessions ? { childSessions } : {}),
+    cwd: options.cwd,
+    ...(options.runtimeState
+      ? {
+          taskGraphState: () => options.runtimeState?.().taskGraph,
+        }
+      : {}),
+    ...(options.teamTasks ? { taskStore: options.teamTasks.store } : {}),
+    ...(options.teammates ? { teammates: options.teammates } : {}),
+  });
   const contextProjection = options.contextProjection ?? createContextProjection();
   const contextCompaction =
     options.contextCompaction === false
@@ -460,6 +487,34 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
                 task: promptAssembly.task,
               });
               continue;
+            }
+
+            const completion = await completionGate.evaluate();
+            if (completion.status === "incomplete") {
+              inputHistory.appendRoundItems(round, [{
+                role: "user",
+                content: formatCompletionBlockers(completion.blockers),
+              }]);
+              await maybeReactiveCompactInputHistory({
+                contextCompaction,
+                inputHistory,
+                lifecycleEmitter,
+                model,
+                options,
+                responseCreate,
+                round,
+                task: promptAssembly.task,
+              });
+              continue;
+            }
+            if (completion.status === "failed") {
+              await lifecycleEmitter.emit({
+                problems: completion.problems.map((problem) => ({ ...problem })),
+                type: "completion_gate_failed",
+              });
+              throw new Error(
+                `Completion gate failed: ${JSON.stringify(completion.problems)}`,
+              );
             }
 
             if (!options.verifier) {
@@ -879,10 +934,9 @@ async function appendBackgroundTaskNotifications(
     return 0;
   }
 
-  const notifications = [
-    ...options.backgroundTasks.drainNotifications(),
-    ...(options.running ? options.backgroundTasks.drainRunningNotifications() : []),
-  ];
+  const notifications = options.running
+    ? await options.backgroundTasks.settleBeforeFinal()
+    : options.backgroundTasks.drainNotifications();
 
   for (const notification of notifications) {
     options.inputHistory.appendRoundItems(options.round, [
@@ -927,10 +981,9 @@ async function appendChildSessionNotifications(
     return 0;
   }
 
-  const notifications = [
-    ...options.childSessions.drainNotifications(),
-    ...(options.running ? options.childSessions.runningNotifications() : []),
-  ];
+  const notifications = options.running
+    ? await options.childSessions.settleBeforeFinal()
+    : options.childSessions.drainNotifications();
 
   for (const notification of notifications) {
     options.inputHistory.appendRoundItems(options.round, [
@@ -1203,25 +1256,38 @@ const TEAM_TASK_TOOL_NAMES = new Set([
   "task_add_evidence",
   "task_create",
   "task_get",
+  "task_integrate",
   "task_list",
+  "task_transition",
   "task_update",
+  "task_verify",
 ]);
 
 const TEAM_TASK_FAILURE_CODES = new Set([
-  "blocked_reason_not_allowed",
-  "blocked_reason_required",
+  "capacity_exceeded",
+  "child_source_invalid",
+  "cherry_pick_in_progress",
   "contract_frozen",
   "delegated_task_mismatch",
   "delete_not_allowed",
   "dependencies_incomplete",
+  "dirty_target",
   "evidence_not_allowed",
   "evidence_required",
+  "fingerprint_mismatch",
+  "git_identity_missing",
   "graph_invalid",
   "graph_malformed",
   "graph_missing",
+  "handoff_required",
+  "integration_conflict",
   "invalid_actor",
   "invalid_input",
   "invalid_transition",
+  "owner_mismatch",
+  "plan_not_approved",
+  "source_drift",
+  "stale_approval",
   "task_store_busy",
   "permission_denied",
   "schema_unsupported",
@@ -1229,18 +1295,24 @@ const TEAM_TASK_FAILURE_CODES = new Set([
   "task_frozen",
   "task_not_found",
   "task_not_ready",
+  "transfer_exhausted",
+  "verification_failed",
 ]);
 
 function isMutationOperation(value: unknown): value is TeamTaskMutationOperation {
   return value === "create" ||
     value === "update" ||
     value === "add_evidence" ||
-    value === "delete";
+    value === "delete" ||
+    value === "transition" ||
+    value === "verify" ||
+    value === "integrate";
 }
 
 function isTeamTaskStatus(value: unknown): value is TeamTaskStatus {
   return value === "pending" ||
     value === "in_progress" ||
+    value === "submitted" ||
     value === "blocked" ||
     value === "completed";
 }

@@ -7,6 +7,7 @@ import type {
   TeamTaskStatus,
 } from "../domain/teamTask.js";
 import type { ToolStatus } from "../tools/types.js";
+import type { CompletionGateProblem } from "./completionGate.js";
 import type { ChildSessionProfile, SessionWorkspaceMetadata } from "./session.js";
 import type { RuntimeTaskState } from "./task.js";
 import type { SessionEndStatus, TraceEventPayload, TraceRecorder } from "./trace.js";
@@ -178,6 +179,10 @@ export type RuntimeProblem =
       message: string;
       profile: ChildSessionProfile;
       round: number;
+    }
+  | {
+      kind: "completion_gate_failed";
+      problems: CompletionGateProblem[];
     }
   | {
       kind: "verification_failed";
@@ -554,13 +559,24 @@ export function applyRuntimeStateEvent(state: RuntimeState, event: TraceEventPay
     case "teammate_rejoined":
     case "team_cleanup":
       return state;
-    case "session_failed":
+    case "completion_gate_failed":
       return {
         ...state,
         lastProblem: {
-          kind: "session_failed",
-          message: event.message,
+          kind: "completion_gate_failed",
+          problems: event.problems.map((problem) => ({ ...problem })),
         },
+        status: "failed",
+      };
+    case "session_failed":
+      return {
+        ...state,
+        lastProblem: state.lastProblem?.kind === "completion_gate_failed"
+          ? state.lastProblem
+          : {
+              kind: "session_failed",
+              message: event.message,
+            },
         status: "failed",
       };
     case "session_ended":

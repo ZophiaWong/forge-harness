@@ -12,7 +12,7 @@ Then each chapter pulls one problem out of that loop and turns it into a small h
 
 ## Status
 
-This branch contains the documentation baseline plus the runnable checkpoints through `c17b Long-Lived Teammates / Mailbox`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, `c15b Async Child Sessions / Parallel Handoff With Edit Preview`, `c16a MCP Tool Integration`, `c16b Plugin Loading / Registration`, `c17a Shared Team Task Graph`, and `c17b Long-Lived Teammates / Mailbox`.
+This branch contains the documentation baseline plus the runnable checkpoints through `c17c Coordination / Completion Protocol`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, `c15b Async Child Sessions / Parallel Handoff With Edit Preview`, `c16a MCP Tool Integration`, `c16b Plugin Loading / Registration`, `c17a Shared Team Task Graph`, `c17b Long-Lived Teammates / Mailbox`, and `c17c Coordination / Completion Protocol`.
 
 ## Setup
 
@@ -33,6 +33,22 @@ OPENAI_BASE_URL=
 ```
 
 Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gateway.
+
+## Clean run artifacts
+
+Runs that use `--worktree` or child sessions accumulate data under `.forge/sessions/` and `.forge/worktrees/`. Clean those artifacts with:
+
+```bash
+npm run clean:runs
+```
+
+The command shows the artifact counts and asks for `y/N` confirmation. CI jobs and scripts can skip confirmation:
+
+```bash
+npm run clean:runs -- --yes
+```
+
+Cleanup is limited to `.forge/sessions/` and `.forge/worktrees/`. Registered worktrees are removed through Git before those directories are deleted. `.forge/mcp.json`, plugins, memory, skills, and Git branches are preserved.
 
 ## Docs
 
@@ -58,6 +74,7 @@ Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gat
 - [c16b Plugin Loading / Registration](docs/tutorial/c16b-plugin-loading-registration.md): strict local plugin preflight, per-session trust, namespaced skills/hooks, and plugin-provided multi-server MCP registration.
 - [c17a Shared Team Task Graph](docs/tutorial/c17a-shared-team-task-graph.md): shared dependencies, role-scoped transitions, acceptance evidence, and atomic root-session snapshots across Leader and child sessions.
 - [c17b Long-Lived Teammates / Mailbox](docs/tutorial/c17b-long-lived-teammates-mailbox.md): root-session scoped named teammate processes, persistent mailboxes, direct/broadcast delivery, stable edit worktrees, and explicit rejoin.
+- [c17c Coordination / Completion Protocol](docs/tutorial/c17c-coordination-completion-protocol.md): explicit ownership, atomic claim, edit plan approval, source verification, Git integration receipts, teammate shutdown, and a fail-closed team completion gate.
 - [Minimal MCP Server Fixture](docs/appendix/minimal-mcp-server.md): local external-system fixture used by c16a.
 - [Minimal Plugin Fixtures](docs/appendix/minimal-plugin-fixtures.md): one full and one skill-only local plugin used by c16b.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
@@ -90,6 +107,6 @@ See [docs/01-project-architecture.md](docs/01-project-architecture.md) for the s
 
 ## Non-goals
 
-The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI. c16a adds one local MCP boundary only after Tool Runtime, Permission Governance, trace, and lifecycle are already in place. c16b then adds loading for already-configured local plugins. c17a adds a root-session scoped shared task graph. c17b adds named long-lived teammates and persistent mailboxes, but not task ownership, claiming, verification roles, automatic replay, or cross-root resume.
+The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI. c16a adds one local MCP boundary only after Tool Runtime, Permission Governance, trace, and lifecycle are already in place. c16b then adds loading for already-configured local plugins. c17a adds a root-session scoped shared task graph, c17b adds named long-lived teammates and persistent mailboxes, and c17c adds the smallest ownership, review, verification, integration, shutdown, and completion protocol around them.
 
-c16b still does not add a marketplace, downloader, persistent trust store, or package manager. Task ownership stays in c17c; attempts, resume, idempotency, reconciliation, and event replay stay in c18.
+c16b still does not add a marketplace, downloader, persistent trust store, or package manager. c17c intentionally stops at one root run: attempts, resume, idempotency, reconciliation, event replay, and recovery from a crash between a successful Git side effect and receipt persistence stay in c18.

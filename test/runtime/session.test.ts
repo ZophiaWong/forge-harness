@@ -92,7 +92,7 @@ describe("session metadata", () => {
     ).resolves.toEqual({
       nextTaskSequence: 1,
       revision: 0,
-      schemaVersion: 1,
+      schemaVersion: 2,
       tasks: [],
     });
   });

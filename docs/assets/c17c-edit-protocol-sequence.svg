@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1120" viewBox="0 0 1440 1120" role="img" aria-labelledby="title desc">
+  <title id="title">c17c Long-Lived Edit Task Protocol Sequence</title>
+  <desc id="desc">A sequence diagram showing a Leader starting an edit teammate, atomic claim, plan approval, guarded editing, trusted source submission, review preview, verification, Git integration, receipt persistence, teammate shutdown, CompletionGate readiness, and root verification.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#047857" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 26px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .subtitle { font: 15px ui-sans-serif, system-ui, sans-serif; fill: #4b5563; }
+      .leader { fill: #f8fafc; stroke: #475569; stroke-width: 2.2; }
+      .teammate { fill: #f5f3ff; stroke: #6d28d9; stroke-width: 2.2; }
+      .graph { fill: #eff6ff; stroke: #1d4ed8; stroke-width: 2.2; }
+      .source { fill: #fff7ed; stroke: #c2410c; stroke-width: 2.2; }
+      .gate { fill: #ecfdf5; stroke: #047857; stroke-width: 2.4; }
+      .lane { stroke: #cbd5e1; stroke-width: 2; stroke-dasharray: 8 7; }
+      .label { font: 700 16px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .small { font: 13px ui-sans-serif, system-ui, sans-serif; fill: #374151; }
+      .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2937; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .result { stroke: #1d4ed8; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .success { stroke: #047857; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); }
+      .barrier { stroke: #c2410c; stroke-width: 2.2; stroke-dasharray: 7 6; }
+      .barrierText { font: 700 12px ui-sans-serif, system-ui, sans-serif; fill: #9a3412; }
+      .work { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .ready { fill: #f0fdf4; stroke: #15803d; stroke-width: 2.2; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1440" height="1120" />
+  <text class="title" x="48" y="48">c17c：long-lived edit task 从 claim 走到 root verifier</text>
+  <text class="subtitle" x="48" y="77">时序图把七个实现小节连成一条主线；每次状态推进都通过受限工具和 TaskGraphStore。</text>
+
+  <rect class="leader" x="44" y="112" width="220" height="62" rx="10" />
+  <text class="label" x="90" y="149">Leader</text>
+  <line class="lane" x1="154" y1="174" x2="154" y2="1060" />
+
+  <rect class="teammate" x="316" y="112" width="220" height="62" rx="10" />
+  <text class="label" x="356" y="149">edit teammate</text>
+  <line class="lane" x1="426" y1="174" x2="426" y2="1060" />
+
+  <rect class="graph" x="588" y="112" width="220" height="62" rx="10" />
+  <text class="label" x="630" y="149">TaskGraphStore</text>
+  <line class="lane" x1="698" y1="174" x2="698" y2="1060" />
+
+  <rect class="source" x="860" y="112" width="240" height="62" rx="10" />
+  <text class="label" x="894" y="138">source registry +</text>
+  <text class="label" x="894" y="159">GitIntegrationService</text>
+  <line class="lane" x1="980" y1="174" x2="980" y2="1060" />
+
+  <rect class="gate" x="1168" y="112" width="228" height="62" rx="10" />
+  <text class="label" x="1213" y="149">CompletionGate</text>
+  <line class="lane" x1="1282" y1="174" x2="1282" y2="1060" />
+
+  <path class="arrow" d="M 154 205 L 426 205" />
+  <text class="small" x="202" y="194">teammate_start(profile="edit")</text>
+  <text class="mono" x="202" y="221">no taskId · member becomes idle</text>
+
+  <path class="arrow" d="M 426 262 L 698 262" />
+  <text class="small" x="480" y="251">task_transition claim</text>
+  <text class="mono" x="480" y="278">atomic owner + in_progress</text>
+
+  <path class="arrow" d="M 426 319 L 698 319" />
+  <text class="small" x="480" y="308">submit_plan(summary, steps)</text>
+  <text class="mono" x="480" y="335">plan: pending</text>
+
+  <path class="result" d="M 698 376 L 154 376" />
+  <text class="small" x="326" y="365">Leader reads task_get / availableActions</text>
+  <text class="mono" x="326" y="392">review_plan is available</text>
+
+  <path class="arrow" d="M 154 433 L 698 433" />
+  <text class="small" x="326" y="422">review_plan approve</text>
+  <text class="mono" x="326" y="449">approved plan stored in TaskGraph</text>
+
+  <line class="barrier" x1="296" y1="468" x2="1110" y2="468" />
+  <text class="barrierText" x="306" y="461">WRITE BARRIER：owner + in_progress + approved plan + no handoff</text>
+
+  <path class="result" d="M 698 496 L 426 496" />
+  <text class="small" x="480" y="486">broker 与 executor 二次检查</text>
+  <text class="mono" x="480" y="512">edit / write allowed</text>
+
+  <rect class="work" x="340" y="534" width="172" height="66" rx="9" />
+  <text class="label" x="364" y="561">edit worktree</text>
+  <text class="mono" x="364" y="584">write + evidence</text>
+
+  <path class="arrow" d="M 426 622 L 980 622" />
+  <text class="small" x="600" y="611">submit_result（不接受 workspace path）</text>
+  <text class="mono" x="600" y="638">resolve registered source + capture fingerprint</text>
+
+  <path class="arrow" d="M 980 679 L 698 679" />
+  <text class="small" x="752" y="668">record trusted submission</text>
+  <text class="mono" x="752" y="695">source + fingerprint + status=submitted</text>
+
+  <path class="result" d="M 698 736 L 154 736" />
+  <text class="small" x="326" y="725">task_get generates review preview</text>
+  <text class="mono" x="326" y="752">diff + changedFiles + fingerprintStatus</text>
+
+  <path class="arrow" d="M 154 793 L 980 793" />
+  <text class="small" x="442" y="782">task_verify(exact contract command)</text>
+  <text class="mono" x="442" y="809">source command + before/after fingerprint</text>
+
+  <path class="arrow" d="M 980 836 L 698 836" />
+  <text class="small" x="752" y="827">record verdict: passed</text>
+  <text class="mono" x="752" y="851">status remains submitted</text>
+
+  <path class="arrow" d="M 154 878 L 980 878" />
+  <text class="small" x="442" y="868">task_integrate</text>
+  <text class="mono" x="442" y="894">source commit → cherry-pick → receipt</text>
+
+  <path class="success" d="M 980 916 L 698 916" />
+  <text class="small" x="752" y="907">record receipt</text>
+  <text class="mono" x="752" y="933">status=completed</text>
+
+  <path class="arrow" d="M 154 968 L 426 968" />
+  <text class="small" x="207" y="957">teammate_shutdown</text>
+  <text class="mono" x="207" y="984">idle + no unfinished owned task</text>
+
+  <path class="arrow" d="M 154 1020 L 1282 1020" />
+  <text class="small" x="558" y="1009">candidate final：CompletionGate reads all projections</text>
+
+  <path class="success" d="M 1282 1062 L 154 1062" />
+  <text class="small" x="590" y="1051">ready → root --verify → final accepted</text>
+
+  <text class="small" x="48" y="1102">one-shot edit child 不走 long-lived teammate 的 plan gate；它仍须注册 terminal source，并经过相同的 review、verification、integration 与 CompletionGate。</text>
+</svg>

@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">c17c Verification and Git Integration Evidence Flow</title>
+  <desc id="desc">A two-phase flow shows exact contract verification with before and after fingerprints, then Git integration with source revalidation, target checks, source commit, cherry-pick, receipt, and completed status. Failure branches return to in progress, retain submitted status, or block after an aborted conflict.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#047857" />
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b91c1c" />
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 26px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .subtitle { font: 15px ui-sans-serif, system-ui, sans-serif; fill: #4b5563; }
+      .phaseVerify { fill: #eff6ff; stroke: #93c5fd; stroke-width: 1.8; }
+      .phaseIntegrate { fill: #fff7ed; stroke: #fdba74; stroke-width: 1.8; }
+      .step { fill: #ffffff; stroke: #475569; stroke-width: 2; }
+      .proof { fill: #fdf4ff; stroke: #a21caf; stroke-width: 2.2; }
+      .git { fill: #fff7ed; stroke: #c2410c; stroke-width: 2.2; }
+      .successBox { fill: #ecfdf5; stroke: #047857; stroke-width: 2.4; }
+      .warnBox { fill: #fefce8; stroke: #a16207; stroke-width: 2.1; }
+      .failBox { fill: #fef2f2; stroke: #b91c1c; stroke-width: 2.2; }
+      .phaseTitle { font: 700 19px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .label { font: 700 14px ui-sans-serif, system-ui, sans-serif; fill: #111827; }
+      .small { font: 12.5px ui-sans-serif, system-ui, sans-serif; fill: #374151; }
+      .mono { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2937; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .success { stroke: #047857; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); }
+      .failure { stroke: #b91c1c; stroke-width: 2.2; stroke-dasharray: 8 6; fill: none; marker-end: url(#arrowRed); }
+      .retry { stroke: #a16207; stroke-width: 2.2; stroke-dasharray: 7 6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1440" height="900" />
+  <text class="title" x="48" y="48">c17c：verification 写 verdict，integration 写 receipt</text>
+  <text class="subtitle" x="48" y="77">两次动作都重验 source；只有 source commit 成功 cherry-pick 且 receipt 落盘，edit task 才能 completed。</text>
+
+  <rect class="phaseVerify" x="42" y="108" width="1356" height="338" rx="14" />
+  <text class="phaseTitle" x="66" y="140">Phase 1 · task_verify：在注册 source 中执行 task contract command</text>
+
+  <rect class="proof" x="66" y="170" width="214" height="92" rx="10" />
+  <text class="label" x="86" y="197">submitted edit task</text>
+  <text class="mono" x="86" y="222">source + fingerprint</text>
+  <text class="mono" x="86" y="244">verificationCommand</text>
+
+  <rect class="step" x="326" y="170" width="204" height="92" rx="10" />
+  <text class="label" x="346" y="197">exact command check</text>
+  <text class="mono" x="346" y="222">input.command ===</text>
+  <text class="mono" x="346" y="244">task.verificationCommand</text>
+
+  <rect class="proof" x="576" y="170" width="194" height="92" rx="10" />
+  <text class="label" x="596" y="197">capture before</text>
+  <text class="mono" x="596" y="222">HEAD + Git status</text>
+  <text class="mono" x="596" y="244">mode/type/content hash</text>
+
+  <rect class="step" x="816" y="170" width="194" height="92" rx="10" />
+  <text class="label" x="836" y="197">run verifier</text>
+  <text class="mono" x="836" y="222">source workspace</text>
+  <text class="mono" x="836" y="244">capture exit + output</text>
+
+  <rect class="proof" x="1056" y="170" width="194" height="92" rx="10" />
+  <text class="label" x="1076" y="197">capture after</text>
+  <text class="mono" x="1076" y="222">fingerprint unchanged?</text>
+  <text class="mono" x="1076" y="244">exitCode === 0?</text>
+
+  <rect class="successBox" x="1282" y="170" width="92" height="92" rx="10" />
+  <text class="label" x="1297" y="197">verdict</text>
+  <text class="mono" x="1297" y="222">passed</text>
+  <text class="mono" x="1297" y="244">submitted</text>
+
+  <path class="arrow" d="M 280 216 L 326 216" />
+  <path class="arrow" d="M 530 216 L 576 216" />
+  <path class="arrow" d="M 770 216 L 816 216" />
+  <path class="arrow" d="M 1010 216 L 1056 216" />
+  <path class="success" d="M 1250 216 L 1282 216" />
+
+  <rect class="warnBox" x="238" y="330" width="300" height="78" rx="10" />
+  <text class="label" x="258" y="357">command 不匹配</text>
+  <text class="small" x="258" y="382">拒绝调用；task 保持 submitted，未执行 source command。</text>
+  <path class="retry" d="M 428 262 L 388 330" />
+
+  <rect class="failBox" x="682" y="330" width="460" height="78" rx="10" />
+  <text class="label" x="702" y="357">command failed 或 source drift</text>
+  <text class="small" x="702" y="378">清除当前 submission / verdict，保留 evidence 与 approved plan；</text>
+  <text class="small" x="702" y="397">task 回到 in_progress。</text>
+  <path class="failure" d="M 913 262 L 846 330" />
+  <path class="failure" d="M 1153 262 L 1032 330" />
+
+  <rect class="phaseIntegrate" x="42" y="474" width="1356" height="360" rx="14" />
+  <text class="phaseTitle" x="66" y="506">Phase 2 · task_integrate：重验 source，再创建 commit 与 cherry-pick receipt</text>
+
+  <rect class="proof" x="66" y="538" width="190" height="94" rx="10" />
+  <text class="label" x="86" y="565">submitted + passed</text>
+  <text class="mono" x="86" y="590">verdict fingerprint</text>
+  <text class="mono" x="86" y="612">=== submission</text>
+
+  <rect class="step" x="296" y="538" width="214" height="94" rx="10" />
+  <text class="label" x="316" y="565">revalidate source / target</text>
+  <text class="mono" x="316" y="590">fingerprint · clean target</text>
+  <text class="mono" x="316" y="612">identity · no cherry-pick</text>
+
+  <rect class="git" x="550" y="538" width="188" height="94" rx="10" />
+  <text class="label" x="570" y="565">source commit</text>
+  <text class="mono" x="570" y="590">forge(task_id): title</text>
+  <text class="mono" x="570" y="612">Forge-* trailers</text>
+
+  <rect class="git" x="778" y="538" width="188" height="94" rx="10" />
+  <text class="label" x="798" y="565">cherry-pick</text>
+  <text class="mono" x="798" y="590">sourceCommit</text>
+  <text class="mono" x="798" y="612">→ Leader target</text>
+
+  <rect class="proof" x="1006" y="538" width="190" height="94" rx="10" />
+  <text class="label" x="1026" y="565">integration receipt</text>
+  <text class="mono" x="1026" y="590">source / targetBefore</text>
+  <text class="mono" x="1026" y="612">integratedCommit</text>
+
+  <rect class="successBox" x="1236" y="538" width="138" height="94" rx="10" />
+  <text class="label" x="1256" y="565">completed</text>
+  <text class="mono" x="1256" y="590">receipt stored</text>
+  <text class="mono" x="1256" y="612">trace updated</text>
+
+  <path class="arrow" d="M 256 585 L 296 585" />
+  <path class="arrow" d="M 510 585 L 550 585" />
+  <path class="arrow" d="M 738 585 L 778 585" />
+  <path class="arrow" d="M 966 585 L 1006 585" />
+  <path class="success" d="M 1196 585 L 1236 585" />
+  <text class="small" x="540" y="463">verdict passed 后，Leader 才能进入 Phase 2</text>
+
+  <rect class="failBox" x="76" y="710" width="354" height="86" rx="10" />
+  <text class="label" x="96" y="737">source drift</text>
+  <text class="small" x="96" y="762">record failed verification，回到 in_progress；</text>
+  <text class="small" x="96" y="781">不创建 source commit。</text>
+  <path class="failure" d="M 365 632 L 276 710" />
+
+  <rect class="warnBox" x="472" y="710" width="366" height="86" rx="10" />
+  <text class="label" x="492" y="737">target precheck failed</text>
+  <text class="small" x="492" y="757">dirty target · identity missing</text>
+  <text class="small" x="492" y="775">cherry-pick active；task 保持 submitted + passed</text>
+  <text class="small" x="492" y="791">修正 target 后可重试</text>
+  <path class="retry" d="M 440 632 L 606 710" />
+
+  <rect class="failBox" x="880" y="710" width="454" height="86" rx="10" />
+  <text class="label" x="900" y="737">cherry-pick conflict</text>
+  <text class="small" x="900" y="762">立即 cherry-pick --abort，保留 source commit，</text>
+  <text class="small" x="900" y="781">task → blocked（本次 root run 终态）。</text>
+  <path class="failure" d="M 872 632 L 1036 710" />
+
+  <text class="small" x="48" y="872">c17c 不处理“Git side effect 成功后、receipt 写入前崩溃”的窗口；跨进程恢复、幂等与对账留给 c18。</text>
+</svg>

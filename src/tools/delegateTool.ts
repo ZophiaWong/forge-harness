@@ -78,7 +78,8 @@ export const delegateToolDefinition: ToolDefinition = {
       },
       maxToolRounds: {
         type: ["number", "null"],
-        description: "Optional child tool round cap. Use null to inherit the parent maxToolRounds.",
+        description:
+          "Optional child model-round cap, including the final response. Use null to inherit the parent maxToolRounds.",
       },
       runInBackground: {
         type: ["boolean", "null"],
@@ -120,9 +121,13 @@ export function createDelegateTool(options: CreateDelegateToolOptions): Register
             throw new Error("delegate taskId requires a root task graph binding");
           }
           const linkedTask = await options.taskStore.get(args.taskId);
-          if (linkedTask.task.status !== "in_progress") {
+          if (
+            linkedTask.task.status !== "in_progress"
+            || linkedTask.task.owner?.role !== "leader"
+            || linkedTask.task.kind !== args.profile
+          ) {
             throw new Error(
-              `delegate taskId "${args.taskId}" must reference an in_progress team task`,
+              `delegate taskId "${args.taskId}" must reference an in_progress Leader-owned ${args.profile} task; first use task_transition action="assign" assignee="leader"`,
             );
           }
         }

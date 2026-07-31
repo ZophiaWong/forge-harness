@@ -398,6 +398,25 @@ describe("child session profiles", () => {
     expect(task).toContain("/chapter-handoff Inspect the previous chapter gap.");
   });
 
+  it("permits linked research children to append task evidence without editing files", () => {
+    const task = formatChildProfileTask({
+      profile: "research",
+      task: "Inspect the delegated task and append evidence.",
+      taskId: "task_001",
+    });
+
+    expect(task).toContain(
+      "task_add_evidence is permitted coordination metadata and does not edit project files",
+    );
+    expect(task).toContain("Use it when the delegated task requests evidence");
+    expect(task).toContain(
+      "Follow the explicit delegated task before doing any broader investigation",
+    );
+    expect(task).toContain(
+      "do not inspect unrelated files after the requested evidence is recorded",
+    );
+  });
+
   it("lists changed files from git porcelain status without inline diff", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-child-status-"));
     await fs.writeFile(path.join(cwd, "unchanged.txt"), "base\n", "utf8");
@@ -548,6 +567,55 @@ describe("AsyncChildSessionManager", () => {
       }),
     ]);
   });
+
+  it("waits for child activity at the final gate and returns the terminal handoff", async () => {
+    const deferred = createDeferred<ChildSessionRunResult>();
+    const manager = createAsyncChildSessionManager({
+      runner: {
+        run: vi.fn(),
+        start: vi.fn().mockReturnValue({
+          childSessionId: "child-1",
+          profile: "research",
+          promise: deferred.promise,
+          status: "running",
+          tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+        }),
+      },
+    });
+    await manager.start({
+      maxToolRounds: 4,
+      parentCallId: "call_1",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: true,
+      task: "Inspect docs.",
+    });
+
+    let settled = false;
+    const finalGate = manager.settleBeforeFinal().then((notifications) => {
+      settled = true;
+      return notifications;
+    });
+    await flushPromises();
+    expect(settled).toBe(false);
+
+    deferred.resolve({
+      childSessionId: "child-1",
+      finalAnswer: "Research complete.",
+      profile: "research",
+      status: "completed",
+      tracePath: "/repo/.forge/sessions/child-1/trace.jsonl",
+    });
+
+    await expect(finalGate).resolves.toEqual([
+      expect.objectContaining({
+        childSessionId: "child-1",
+        finalAnswer: "Research complete.",
+        status: "completed",
+      }),
+    ]);
+    expect(manager.pendingCount()).toBe(0);
+  });
 });
 
 async function execGit(cwd: string, args: string[]): Promise<void> {
@@ -582,9 +650,14 @@ async function createRootTaskFixture(options: { git?: boolean } = {}) {
   await store.create(leader, {
     acceptance: ["The child reports findings"],
     description: "Investigate the child runtime integration.",
+    kind: "research",
     title: "Investigate child integration",
   });
-  await store.update(leader, "task_001", { status: "in_progress" });
+  await store.transition(leader, {
+    action: "assign",
+    assignee: { role: "leader" },
+    id: "task_001",
+  });
   return { binding, repo, session, store };
 }
 

@@ -19,15 +19,18 @@ const teammateStartDefinition: ToolDefinition = {
       name: { type: "string" },
       profile: { enum: ["research", "edit"], type: "string" },
       instructions: { type: "string" },
-      message: { type: "string" },
-      taskId: { type: ["string", "null"] },
+      message: {
+        description:
+          "First mailbox message, executed immediately after startup. Any referenced task must already be ready or assigned.",
+        type: "string",
+      },
       maxToolRounds: {
         description:
-          "Model-round cap for each mailbox batch. Reserve room for inspection, retries, and a final response.",
+          "Model-round cap for each mailbox batch. Reserve room for claim, inspection, evidence, submission, retries, and a final response.",
         type: ["number", "null"],
       },
     },
-    required: ["name", "profile", "instructions", "message", "taskId", "maxToolRounds"],
+    required: ["name", "profile", "instructions", "message", "maxToolRounds"],
     type: "object",
   },
   strict: true,
@@ -48,7 +51,8 @@ const teammateListDefinition: ToolDefinition = {
 };
 
 const teammateRejoinDefinition: ToolDefinition = {
-  description: "Explicitly rejoin a failed teammate with a fresh session and a required recovery message.",
+  description:
+    "Explicitly rejoin a failed teammate with a fresh session and a required recovery message. Rejoin does not unblock tasks already frozen by owner failure.",
   name: "teammate_rejoin",
   parameters: {
     additionalProperties: false,
@@ -57,6 +61,22 @@ const teammateRejoinDefinition: ToolDefinition = {
       recovery: { type: "string" },
     },
     required: ["name", "recovery"],
+    type: "object",
+  },
+  strict: true,
+  type: "function",
+};
+
+const teammateShutdownDefinition: ToolDefinition = {
+  description: "Explicitly stop or retire one idle long-lived teammate.",
+  name: "teammate_shutdown",
+  parameters: {
+    additionalProperties: false,
+    properties: {
+      mode: { enum: ["shutdown", "retire"], type: "string" },
+      name: { type: "string" },
+    },
+    required: ["name", "mode"],
     type: "object",
   },
   strict: true,
@@ -106,6 +126,7 @@ export function createTeammateTools(options: CreateTeammateToolsOptions): Regist
     createStartTool(options.manager),
     shared[0] as RegisteredTool,
     createRejoinTool(options.manager),
+    createShutdownTool(options.manager),
     shared[1] as RegisteredTool,
     createBroadcastTool(options.manager),
   ];
@@ -119,11 +140,33 @@ function createStartTool(manager: TeammateManager): RegisteredTool {
       if (!args) {
         return failed(
           "teammate_start",
-          "arguments must include name, research/edit profile, non-empty instructions/message, and optional taskId/maxToolRounds",
+          "arguments must include name, research/edit profile, non-empty instructions/message, and optional maxToolRounds",
         );
       }
       const summary = await manager.start(args);
       return completed("teammate_start", formatSummary(summary), { teammate: summary });
+    },
+  };
+}
+
+function createShutdownTool(manager: TeammateManager): RegisteredTool {
+  return {
+    definition: teammateShutdownDefinition,
+    async handler(input) {
+      const args = parseObject(input.rawArguments);
+      if (
+        !args
+        || !hasExactKeys(args, ["mode", "name"])
+        || !isNonEmptyString(args.name)
+        || (args.mode !== "shutdown" && args.mode !== "retire")
+      ) {
+        return failed("teammate_shutdown", "arguments must include name and shutdown/retire mode");
+      }
+      const summary = await manager.shutdown({
+        mode: args.mode,
+        name: args.name.trim(),
+      });
+      return completed("teammate_shutdown", formatSummary(summary), { teammate: summary });
     },
   };
 }
@@ -235,23 +278,17 @@ function parseStartArguments(raw: string): {
   message: string;
   name: string;
   profile: "research" | "edit";
-  taskId?: string;
 } | undefined {
   const args = parseObject(raw);
   if (
     !args
     || Object.keys(args).some(
-      (key) => !["instructions", "maxToolRounds", "message", "name", "profile", "taskId"].includes(key),
+      (key) => !["instructions", "maxToolRounds", "message", "name", "profile"].includes(key),
     )
     || !isNonEmptyString(args.name)
     || !isNonEmptyString(args.instructions)
     || !isNonEmptyString(args.message)
     || (args.profile !== "research" && args.profile !== "edit")
-    || (
-      args.taskId !== undefined
-      && args.taskId !== null
-      && !isNonEmptyString(args.taskId)
-    )
     || (
       args.maxToolRounds !== undefined
       && args.maxToolRounds !== null
@@ -266,7 +303,6 @@ function parseStartArguments(raw: string): {
     message: args.message.trim(),
     name: args.name.trim(),
     profile: args.profile,
-    ...(typeof args.taskId === "string" ? { taskId: args.taskId.trim() } : {}),
   };
 }
 
