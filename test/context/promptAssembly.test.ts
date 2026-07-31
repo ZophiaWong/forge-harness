@@ -208,4 +208,16 @@ describe("prompt assembly", () => {
       "Only the Leader may create, change, complete, or delete team tasks.",
     );
   });
+
+  it("teaches the Leader to use event-driven teammate settling instead of polling", () => {
+    const assembly = assemblePrompt({
+      assets: { skills: [] },
+      task: "Coordinate long-lived teammates.",
+    });
+
+    expect(assembly.instructions).toContain("Do not poll teammate_list");
+    expect(assembly.instructions).toContain("candidate final answer");
+    expect(assembly.instructions).toContain("wait for teammate activity");
+    expect(assembly.instructions).toContain("inject mailbox results");
+  });
 });

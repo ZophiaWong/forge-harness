@@ -66,6 +66,8 @@ export function formatTeammateSessionTask(config: TeammateWorkerConfig): string 
     `Your stable profile is "${config.definition.profile}" for this root session.`,
     "Keep conversation history, todo state, tool state, and compaction state across mailbox turns.",
     "Treat every mailbox batch as one new user turn. Preserve each message id, sender, and kind when reasoning.",
+    "Do not call todo unless the current Leader message explicitly requests local todo planning.",
+    "For short mailbox turns, call only the tools needed by the current message and then return a final response.",
     ...profileContract,
     "You may use teammate_list and message_send. You may not delegate, broadcast, schedule cron work, or load MCP/plugin tools.",
     ...(config.definition.taskId

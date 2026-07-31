@@ -22,6 +22,15 @@ describe("teammate tools", () => {
       "teammate_list",
       "message_send",
     ]);
+    const start = leader.find((tool) => tool.definition.name === "teammate_start")?.definition;
+    const properties = (
+      start?.parameters as {
+        properties?: Record<string, { description?: string }>;
+      } | undefined
+    )?.properties;
+    expect(start?.description).toContain("immediately");
+    expect(properties?.maxToolRounds?.description).toContain("mailbox batch");
+    expect(properties?.maxToolRounds?.description).toContain("final response");
   });
 
   it("resolves start arguments and binds direct-message sender identity", async () => {
