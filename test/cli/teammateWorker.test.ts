@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatTeammateMailboxTurn,
+  formatTeammateSessionTask,
   startTeammateWorkerHost,
   type TeammateWorkerChannel,
 } from "../../src/cli/teammateWorker.js";
@@ -96,6 +97,14 @@ describe("teammate worker", () => {
     expect(formatted).toContain("kind: direct");
     expect(formatted).toContain("id: msg_researcher_000002");
     expect(formatted).toContain("kind: broadcast");
+  });
+
+  it("reserves short mailbox turn budgets for a final response", () => {
+    const task = formatTeammateSessionTask(workerConfig("/workspace"));
+
+    expect(task).toContain("Do not call todo unless the current Leader message explicitly requests");
+    expect(task).toContain("For short mailbox turns");
+    expect(task).toContain("return a final response");
   });
 
   it("exposes only edit-profile tools and brokers each write approval over IPC", async () => {
