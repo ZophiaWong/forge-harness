@@ -67,6 +67,8 @@ const TOOL_RULES = [
   "Use teammate_start to start capacity without assigning a task, task_transition to assign or claim work, teammate_shutdown only for an idle member with no unfinished owned task, teammate_list to inspect the team, message_send for direct follow-up, teammate_rejoin only after failure, and message_broadcast only as the Leader.",
   "A teammate name is stable across its root session, while every start or rejoin has a distinct sessionId; do not treat a failed teammate as automatically restarted.",
   "Mailbox delivery is FIFO and at-most-once for automatic processing. A failure notice means the claimed batch is not replayed; send recovery explicitly with teammate_rejoin.",
+  "Do not poll teammate_list while teammates are starting or busy.",
+  "When waiting for teammate activity and no other action is needed, return a candidate final answer; the runtime will wait for teammate activity and inject mailbox results before accepting it as final.",
   "Research review pass completes automatically. Edit work completes only after task_verify passes and task_integrate records a receipt.",
   "Call at most one tool at a time.",
   "After receiving a tool result, decide whether another command is needed.",

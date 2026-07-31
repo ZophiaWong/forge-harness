@@ -208,4 +208,16 @@ describe("prompt assembly", () => {
       "Edit work completes only after task_verify passes and task_integrate records a receipt.",
     );
   });
+
+  it("teaches the Leader to use event-driven teammate settling instead of polling", () => {
+    const assembly = assemblePrompt({
+      assets: { skills: [] },
+      task: "Coordinate long-lived teammates.",
+    });
+
+    expect(assembly.instructions).toContain("Do not poll teammate_list");
+    expect(assembly.instructions).toContain("candidate final answer");
+    expect(assembly.instructions).toContain("wait for teammate activity");
+    expect(assembly.instructions).toContain("inject mailbox results");
+  });
 });
