@@ -32,3 +32,7 @@ Selected skills reduce prompt load, but selection depends on an explicit leading
 ## Boundary
 
 The c17c design does not include RAG, embeddings, a vector store, semantic code indexing, cross-Session memory synthesis, or automatic context-quality evaluation. Those are separate systems, not implied by compaction.
+
+## Deep dive
+
+For a frozen source-level comparison with the research evidence ledger, read [Context Construction and Compaction](https://github.com/ZophiaWong/forge-harness/blob/research/agent-runtime-design-studies/docs/design-studies/03-context-construction-and-compaction.md) on the separate research branch.

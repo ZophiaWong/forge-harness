@@ -32,3 +32,7 @@ Per-Session plugin trust avoids a hidden persistent allowlist. It also makes int
 ## Boundary
 
 Forge is not a process sandbox, container runtime, network proxy, package manager, extension marketplace, malware scanner, or persistent trust database. Plugin preflight validates declared structure and ownership, not arbitrary code safety.
+
+## Deep dive
+
+For a frozen source-level comparison with the research evidence ledger, read [Tool Runtime and Action Boundary](https://github.com/ZophiaWong/forge-harness/blob/research/agent-runtime-design-studies/docs/design-studies/02-tool-runtime-and-action-boundary.md) on the separate research branch.
