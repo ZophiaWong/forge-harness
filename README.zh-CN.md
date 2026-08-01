@@ -2,9 +2,27 @@
 
 [English](README.md)
 
-Forge Harness 是一个可运行的 TypeScript Coding Agent Runtime，重点研究受控执行、上下文控制、运行时证据、确定性完成条件、隔离委派、可信扩展与多 Agent 协调。
+Forge Harness 是一个可运行的 TypeScript Coding Agent Runtime。模型声称任务已经完成时，Runtime 将它视为 candidate answer，而不是完成证据。权限、执行证据、隔离工作区和验证命令共同决定本次运行能否结束。
 
-Runtime 的功能边界冻结在 `c17c Coordination / Completion Protocol`。仓库以源码形式提供，适合阅读、在本地运行和研究工程设计。中文教程仍是独立的学习路径，用来解释这些机制为什么出现、如何逐章演进。
+当前实现停在 `c17c Coordination / Completion Protocol`。仓库以源码形式提供，可供阅读和本地运行，不包含托管服务。中文教程单独解释这些机制如何逐章演进。
+
+## 一次实际完成记录
+
+当前的 [c17c live snapshot](docs/assets/evidence/c17c-team-completion.json) 记录了一次模型实跑：
+
+```text
+pre-approval writes  blocked
+edit plan            approved
+artifact write       completed in teammate Worktree
+task verification    passed
+Git integration      receipt recorded
+premature candidate  deferred
+teammates            stopped, unread=0
+root verification    passed
+session              completed in 31 rounds
+```
+
+这条记录只对应一次运行，不代表模型以后一定会有相同行为。`npm run smoke:c17c-capstone` 不调用模型，只确定性检查 TaskGraph ownership、review、verification、Git integration 和 CompletionGate 不变量，不会复现这次实跑。
 
 ## Runtime 概览
 

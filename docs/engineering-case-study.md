@@ -74,6 +74,20 @@ The fix did not weaken TaskGraph or CompletionGate rules. The model-visible cont
 
 This is a useful boundary between deterministic and nondeterministic behavior. Runtime gates are fixed and tested. Prompt sequencing and round budgets can improve the chance that a model reaches those gates, but they do not turn model behavior into a guarantee.
 
+## Known maintenance pressure
+
+At c17c, five source files are longer than 1,000 lines. Their current boundaries are intentional, but each file now combines several maintenance concerns:
+
+| Module | Current pressure | Behavior-preserving extraction seam |
+| --- | --- | --- |
+| [`src/core/minimalLoop.ts`](../src/core/minimalLoop.ts) | Round control shares a module with context compaction, notifications, tool-result projection, verification recovery, and finalization. Their ordering is correctness-sensitive. | Characterize round and finalization order first, then extract notification assembly and finalization helpers without changing the loop contract. |
+| [`src/domain/teamTask.ts`](../src/domain/teamTask.ts) | Domain types share a module with persisted-schema parsing, graph invariants, and available-action calculation. | Separate codecs and graph validation while keeping the exported domain types and accepted schema unchanged. |
+| [`src/runtime/teamTaskStore.ts`](../src/runtime/teamTaskStore.ts) | File locking and atomic writes sit beside every actor check and protocol transition. | Separate storage mechanics from transition handlers while keeping the store as the only mutation authority. |
+| [`src/tools/teamTaskTools.ts`](../src/tools/teamTaskTools.ts) | Tool definitions, argument parsing, role-specific filtering, response formatting, Git integration, and teammate resolution are combined. | Extract definitions and adapter formatting from command handlers. Protocol transitions must remain in the store. |
+| [`src/extensions/teammates.ts`](../src/extensions/teammates.ts) | Process lifecycle, mailbox delivery, approval brokerage, and shutdown accounting share one manager implementation. | Separate process, mailbox, and approval routing behind the existing `TeammateManager` interface. |
+
+Refactoring these modules is maintenance work within the c17c boundary. It should begin with characterization tests for ordering, failure codes, source fingerprints, and integration receipts, then move one responsibility at a time. It must not add c18 behavior or change Trace semantics.
+
 ## Validation strategy
 
 The repository uses four evidence levels:

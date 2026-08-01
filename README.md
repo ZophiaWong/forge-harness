@@ -2,9 +2,27 @@
 
 [简体中文](README.zh-CN.md)
 
-Forge Harness is a runnable TypeScript coding-agent Runtime focused on governed execution, context control, Runtime evidence, deterministic completion, isolated delegation, trusted extensions, and multi-agent coordination.
+Forge Harness is a runnable TypeScript coding-agent Runtime. A model's claim that a task is complete is a proposal, not proof. Permissions, execution evidence, isolated workspaces, and verifier commands determine whether the run may finish.
 
-The Runtime is frozen at `c17c Coordination / Completion Protocol`. The repository is source-only and intended for inspection, local execution, and engineering study. The Chinese tutorial remains a separate path that explains how each mechanism evolved.
+The implementation stops at `c17c Coordination / Completion Protocol`. The repository provides source code for local inspection and execution, not a hosted service. The Chinese tutorial separately explains how the mechanisms evolved.
+
+## One observed completion
+
+The current [c17c live snapshot](docs/assets/evidence/c17c-team-completion.json) records one model-driven run:
+
+```text
+pre-approval writes  blocked
+edit plan            approved
+artifact write       completed in teammate Worktree
+task verification    passed
+Git integration      receipt recorded
+premature candidate  deferred
+teammates            stopped, unread=0
+root verification    passed
+session              completed in 31 rounds
+```
+
+This records one run and does not guarantee future model behavior. `npm run smoke:c17c-capstone` is a deterministic, model-free check of TaskGraph ownership, review, verification, Git integration, and CompletionGate invariants. It does not replay the live run.
 
 ## Runtime at a glance
 
