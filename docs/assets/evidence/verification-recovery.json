@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "curated-runtime-evidence",
+  "capability": "verification-recovery",
+  "capture": {
+    "kind": "live-model-run",
+    "runtimeBoundary": "c17c",
+    "sourceCommit": "75714f2",
+    "sessionAlias": "root",
+    "workspace": "generated-git-worktree"
+  },
+  "scenario": {
+    "task": "Return a short answer after the verifier passes.",
+    "verifier": "A marker check that creates the marker and fails on its first invocation, then passes on its next invocation.",
+    "recoveryBudget": 1
+  },
+  "outcome": {
+    "status": "completed",
+    "rounds": 5,
+    "verification": "passed",
+    "recoveryAttempts": 1
+  },
+  "eventSequence": [
+    {
+      "step": 1,
+      "round": 1,
+      "event": "candidate-answer"
+    },
+    {
+      "step": 2,
+      "round": 1,
+      "event": "verification-result",
+      "status": "failed",
+      "exitCode": 1
+    },
+    {
+      "step": 3,
+      "round": 1,
+      "event": "recovery-attempt",
+      "attempt": 1,
+      "maxAttempts": 1
+    },
+    {
+      "step": 4,
+      "round": 2,
+      "event": "tool-result",
+      "tool": "ls",
+      "policy": "allow",
+      "status": "completed"
+    },
+    {
+      "step": 5,
+      "round": 3,
+      "event": "tool-result",
+      "tool": "bash",
+      "policy": "ask",
+      "status": "blocked",
+      "reason": "interactive approval was unavailable"
+    },
+    {
+      "step": 6,
+      "round": 4,
+      "event": "tool-result",
+      "tool": "write",
+      "policy": "ask",
+      "status": "blocked",
+      "reason": "interactive approval was unavailable"
+    },
+    {
+      "step": 7,
+      "round": 5,
+      "event": "candidate-answer"
+    },
+    {
+      "step": 8,
+      "round": 5,
+      "event": "verification-result",
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "step": 9,
+      "round": 5,
+      "event": "final-answer-recorded"
+    },
+    {
+      "step": 10,
+      "round": 5,
+      "event": "session-ended",
+      "status": "completed"
+    }
+  ],
+  "assertions": {
+    "failedCandidateWasNotFinal": true,
+    "recoveryWasRecorded": true,
+    "recoveryBudgetWasRespected": true,
+    "finalWasRecordedOnlyAfterPass": true,
+    "mutatingCallsRequiredApproval": true,
+    "sessionCompleted": true
+  },
+  "redactions": [
+    "session identifiers",
+    "timestamps",
+    "absolute paths",
+    "model metadata",
+    "full prompts",
+    "tool call identifiers",
+    "free-form model text"
+  ],
+  "limitations": [
+    "The verifier intentionally creates its marker while producing the first failure, so this scenario validates Runtime recovery flow rather than a model-authored repair.",
+    "The final model text did not accurately describe the marker state. The Runtime accepted it because the configured command passed; the verifier did not check answer semantics.",
+    "The run used a non-interactive terminal, so approval-requiring mutation calls were blocked."
+  ]
+}

@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1050" viewBox="0 0 1600 1050" role="img" aria-labelledby="title desc">
+  <title id="title">Forge Harness c17c runtime architecture</title>
+  <desc id="desc">A layered diagram showing the CLI and model loop, governance and tools, context control, runtime evidence, isolated delegation, TaskGraph coordination, Git integration, CompletionGate, and root verification.</desc>
+  <defs>
+    <style>
+      .bg { fill: #0b1020; }
+      .panel { fill: #131b30; stroke: #32405f; stroke-width: 2; }
+      .box { fill: #18233b; stroke-width: 2; rx: 14; }
+      .l1 { stroke: #65a6ff; }
+      .l2 { stroke: #ffb45e; }
+      .l3 { stroke: #b593ff; }
+      .l4 { stroke: #6fd0a5; }
+      .l5 { stroke: #57c8d8; }
+      .neutral { stroke: #8290aa; }
+      .title { fill: #f4f7ff; font: 700 34px Inter, Arial, sans-serif; }
+      .subtitle { fill: #aebbd2; font: 400 17px Inter, Arial, sans-serif; }
+      .band { fill: #91a0ba; font: 700 15px Inter, Arial, sans-serif; letter-spacing: 1.5px; }
+      .name { fill: #f4f7ff; font: 700 18px Inter, Arial, sans-serif; }
+      .small { fill: #bdc9dc; font: 400 14px Inter, Arial, sans-serif; }
+      .tiny { fill: #9dacC5; font: 400 12px Inter, Arial, sans-serif; }
+      .mono { fill: #dce6f7; font: 500 13px "SFMono-Regular", Consolas, monospace; }
+      .arrow { fill: none; stroke: #8594ad; stroke-width: 2.2; marker-end: url(#arrow); }
+      .arrow-l1 { fill: none; stroke: #65a6ff; stroke-width: 2.5; marker-end: url(#arrowL1); }
+      .arrow-l4 { fill: none; stroke: #6fd0a5; stroke-width: 2.5; marker-end: url(#arrowL4); }
+      .arrow-l5 { fill: none; stroke: #57c8d8; stroke-width: 2.5; marker-end: url(#arrowL5); }
+      .dash { stroke-dasharray: 7 7; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8594ad"/></marker>
+    <marker id="arrowL1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#65a6ff"/></marker>
+    <marker id="arrowL4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6fd0a5"/></marker>
+    <marker id="arrowL5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#57c8d8"/></marker>
+  </defs>
+
+  <rect class="bg" width="1600" height="1050"/>
+  <text class="title" x="70" y="62">Forge Harness c17c runtime architecture</text>
+  <text class="subtitle" x="70" y="92">One governed root run: controlled action, bounded context, durable evidence, isolated delegation, and fail-closed completion.</text>
+
+  <rect class="panel" x="50" y="125" width="1500" height="830" rx="22"/>
+
+  <text class="band" x="78" y="165">ENTRY AND STARTUP</text>
+  <rect class="box neutral" x="80" y="185" width="205" height="92"/>
+  <text class="name" x="182" y="219" text-anchor="middle">User / CLI</text>
+  <text class="small" x="182" y="246" text-anchor="middle">task, flags, approvals</text>
+
+  <rect class="box l4" x="338" y="185" width="250" height="92"/>
+  <text class="name" x="463" y="218" text-anchor="middle">Session bootstrap</text>
+  <text class="small" x="463" y="244" text-anchor="middle">session.json · trace.jsonl</text>
+  <text class="small" x="463" y="264" text-anchor="middle">root task-graph.json</text>
+
+  <rect class="box l2" x="641" y="185" width="282" height="92"/>
+  <text class="name" x="782" y="218" text-anchor="middle">Startup trust boundary</text>
+  <text class="small" x="782" y="244" text-anchor="middle">preflight · trust decisions</text>
+  <text class="small" x="782" y="264" text-anchor="middle">approved plugins and MCP only</text>
+
+  <rect class="box l5" x="976" y="185" width="250" height="92"/>
+  <text class="name" x="1101" y="218" text-anchor="middle">Workspace binding</text>
+  <text class="small" x="1101" y="244" text-anchor="middle">optional root Git Worktree</text>
+  <text class="small" x="1101" y="264" text-anchor="middle">base commit recorded</text>
+
+  <path class="arrow" d="M285 231 H338"/>
+  <path class="arrow" d="M588 231 H641"/>
+  <path class="arrow" d="M923 231 H976"/>
+  <path class="arrow" d="M1226 231 H1390 V344"/>
+
+  <text class="band" x="78" y="330">L1 LOOP &amp; EXECUTION</text>
+  <rect class="box l1" x="80" y="350" width="285" height="132"/>
+  <text class="name" x="222" y="386" text-anchor="middle">Prompt and context input</text>
+  <text class="small" x="222" y="414" text-anchor="middle">task · memory · selected skills</text>
+  <text class="small" x="222" y="437" text-anchor="middle">observations · notifications</text>
+  <text class="small" x="222" y="460" text-anchor="middle">compacted older rounds</text>
+
+  <rect class="box l1" x="445" y="350" width="270" height="132"/>
+  <text class="name" x="580" y="386" text-anchor="middle">Minimal loop</text>
+  <text class="mono" x="580" y="416" text-anchor="middle">model_request</text>
+  <text class="mono" x="580" y="440" text-anchor="middle">tool_call | candidate</text>
+  <text class="small" x="580" y="463" text-anchor="middle">one tool call per round</text>
+
+  <rect class="box neutral" x="795" y="350" width="220" height="132"/>
+  <text class="name" x="905" y="386" text-anchor="middle">Model API</text>
+  <text class="small" x="905" y="414" text-anchor="middle">reasoning is nondeterministic</text>
+  <text class="small" x="905" y="437" text-anchor="middle">Runtime contracts are explicit</text>
+
+  <rect class="box l2" x="1095" y="350" width="285" height="132"/>
+  <text class="name" x="1237" y="386" text-anchor="middle">Permission gate</text>
+  <text class="mono" x="1237" y="416" text-anchor="middle">allow · ask · deny</text>
+  <text class="small" x="1237" y="440" text-anchor="middle">risk + reason + approval</text>
+  <text class="small" x="1237" y="463" text-anchor="middle">before tool execution</text>
+
+  <path class="arrow-l1" d="M365 416 H445"/>
+  <path class="arrow-l1" d="M715 397 H795"/>
+  <path class="arrow-l1" d="M795 451 H715"/>
+  <path class="arrow" d="M715 416 H760 V520 H1095 V464"/>
+
+  <text class="band" x="78" y="535">L2 ACTION BOUNDARY · L3 CONTEXT CONTROL</text>
+  <rect class="box l3" x="80" y="555" width="285" height="140"/>
+  <text class="name" x="222" y="590" text-anchor="middle">Context manager</text>
+  <text class="small" x="222" y="618" text-anchor="middle">Observation projection</text>
+  <text class="small" x="222" y="641" text-anchor="middle">history budget and compaction</text>
+  <text class="small" x="222" y="664" text-anchor="middle">mailbox and async return flow</text>
+
+  <rect class="box l2" x="445" y="555" width="270" height="140"/>
+  <text class="name" x="580" y="590" text-anchor="middle">Tool Runtime</text>
+  <text class="small" x="580" y="618" text-anchor="middle">built-in tools</text>
+  <text class="small" x="580" y="641" text-anchor="middle">team and delegation tools</text>
+  <text class="small" x="580" y="664" text-anchor="middle">approved MCP adapters</text>
+
+  <rect class="box l4" x="795" y="555" width="220" height="140"/>
+  <text class="name" x="905" y="590" text-anchor="middle">Evidence recorder</text>
+  <text class="small" x="905" y="618" text-anchor="middle">ordered Trace events</text>
+  <text class="small" x="905" y="641" text-anchor="middle">RuntimeState projection</text>
+  <text class="small" x="905" y="664" text-anchor="middle">hook_result evidence</text>
+
+  <rect class="box l5" x="1095" y="555" width="285" height="140"/>
+  <text class="name" x="1237" y="590" text-anchor="middle">Delegated runtimes</text>
+  <text class="small" x="1237" y="618" text-anchor="middle">background tasks · cron</text>
+  <text class="small" x="1237" y="641" text-anchor="middle">fresh child Sessions</text>
+  <text class="small" x="1237" y="664" text-anchor="middle">long-lived teammates</text>
+
+  <path class="arrow" d="M1095 416 H1048 V625 H715"/>
+  <path class="arrow" d="M445 625 H365"/>
+  <path class="arrow-l4" d="M715 625 H795"/>
+  <path class="arrow-l5" d="M715 655 H1095"/>
+  <path class="arrow dash" d="M222 555 V482"/>
+  <path class="arrow dash" d="M905 555 V482"/>
+
+  <text class="band" x="78" y="730">L4 EVIDENCE &amp; RELIABILITY · L5 COORDINATION &amp; SCALE</text>
+  <rect class="box l4" x="80" y="770" width="285" height="132"/>
+  <text class="name" x="222" y="804" text-anchor="middle">Session ledger</text>
+  <text class="small" x="222" y="832" text-anchor="middle">Trace · metadata · projections</text>
+  <text class="small" x="222" y="855" text-anchor="middle">verification and recovery</text>
+  <text class="small" x="222" y="878" text-anchor="middle">curated public evidence</text>
+
+  <rect class="box l5" x="445" y="770" width="270" height="132"/>
+  <text class="name" x="580" y="804" text-anchor="middle">Shared TaskGraph</text>
+  <text class="small" x="580" y="832" text-anchor="middle">ownership · dependencies</text>
+  <text class="small" x="580" y="855" text-anchor="middle">evidence · verdicts</text>
+  <text class="small" x="580" y="878" text-anchor="middle">atomic file-backed revisions</text>
+
+  <rect class="box l5" x="795" y="770" width="220" height="132"/>
+  <text class="name" x="905" y="804" text-anchor="middle">Git integration</text>
+  <text class="small" x="905" y="832" text-anchor="middle">review · fingerprint</text>
+  <text class="small" x="905" y="855" text-anchor="middle">verify · cherry-pick</text>
+  <text class="small" x="905" y="878" text-anchor="middle">integration receipt</text>
+
+  <rect class="box l5" x="1095" y="770" width="285" height="132"/>
+  <text class="name" x="1237" y="804" text-anchor="middle">CompletionGate</text>
+  <text class="small" x="1237" y="832" text-anchor="middle">tasks · team · async · Git</text>
+  <text class="small" x="1237" y="855" text-anchor="middle">ready / incomplete / failed</text>
+  <text class="small" x="1237" y="878" text-anchor="middle">then root verification</text>
+
+  <path class="arrow-l4" d="M905 695 V752 H222 V770"/>
+  <path class="arrow-l5" d="M1237 695 V746 H580 V770"/>
+  <path class="arrow-l5" d="M715 836 H795"/>
+  <path class="arrow-l5" d="M1015 836 H1095"/>
+  <path class="arrow-l1" d="M1380 836 H1470 V505 H745 V482 H715"/>
+  <text class="tiny" x="1240" y="498">ready returns to the loop for root verification</text>
+
+  <text class="tiny" x="80" y="990">Solid arrows show the primary decision path. Dashed arrows show projections back into the next model input. A ready CompletionGate permits root verification; it does not make model behavior deterministic.</text>
+  <circle cx="82" cy="1020" r="6" fill="#65a6ff"/><text class="tiny" x="96" y="1025">L1 execution</text>
+  <circle cx="220" cy="1020" r="6" fill="#ffb45e"/><text class="tiny" x="234" y="1025">L2 governance</text>
+  <circle cx="372" cy="1020" r="6" fill="#b593ff"/><text class="tiny" x="386" y="1025">L3 context</text>
+  <circle cx="492" cy="1020" r="6" fill="#6fd0a5"/><text class="tiny" x="506" y="1025">L4 evidence</text>
+  <circle cx="620" cy="1020" r="6" fill="#57c8d8"/><text class="tiny" x="634" y="1025">L5 coordination</text>
+</svg>

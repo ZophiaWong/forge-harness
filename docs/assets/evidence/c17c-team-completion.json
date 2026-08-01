@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "curated-runtime-evidence",
+  "capability": "c17c-team-completion",
+  "capture": {
+    "kind": "live-model-run",
+    "runtimeBoundary": "c17c",
+    "sourceCommit": "75714f2",
+    "sessionAliases": [
+      "root",
+      "research-child",
+      "protocol-researcher",
+      "protocol-editor"
+    ],
+    "workspace": "generated-git-worktrees"
+  },
+  "scenario": {
+    "tasks": [
+      {
+        "alias": "research-child-task",
+        "kind": "research",
+        "owner": "leader"
+      },
+      {
+        "alias": "research-teammate-task",
+        "kind": "research",
+        "owner": "protocol-researcher"
+      },
+      {
+        "alias": "edit-teammate-task",
+        "kind": "edit",
+        "owner": "protocol-editor"
+      }
+    ],
+    "editContract": "Create a two-line coordination artifact with a trailing newline, verify both exact lines, and integrate the registered source."
+  },
+  "outcome": {
+    "status": "completed",
+    "rounds": 31,
+    "taskGraphRevision": 18,
+    "rootVerification": "passed",
+    "completionGateFailures": 0
+  },
+  "assertions": {
+    "trustedPluginAndMcpLookupCompleted": true,
+    "allThreeTasksCompleted": true,
+    "taskGraphHealthy": true,
+    "researchChildRecordedOwnEvidence": true,
+    "researchTeammateRecordedOwnEvidence": true,
+    "researchTeammateSubmittedOwnResult": true,
+    "leaderReviewedBothResearchResults": true,
+    "editTeammateOwnedTask": true,
+    "preApprovalWriteAttemptsBlocked": true,
+    "editPlanApprovedBeforeMutation": true,
+    "editTeammateRecordedArtifactEvidence": true,
+    "artifactEndedWithTrailingNewline": true,
+    "sourceFingerprintRetainedThroughVerification": true,
+    "editContractVerificationPassed": true,
+    "gitIntegrationReceiptRecorded": true,
+    "bothTeammatesStopped": true,
+    "bothTeammateMailboxesHadZeroUnreadMessages": true,
+    "prematureCandidateDeferredUntilAllTasksCompleted": true,
+    "rootVerificationPrecededFinalAnswer": true,
+    "sessionCompleted": true
+  },
+  "eventSequence": [
+    {
+      "step": 1,
+      "event": "trusted-plugin-activated"
+    },
+    {
+      "step": 2,
+      "event": "external-issue-lookup-completed"
+    },
+    {
+      "step": 3,
+      "event": "teammates-started",
+      "actors": [
+        "protocol-researcher",
+        "protocol-editor"
+      ]
+    },
+    {
+      "step": 4,
+      "event": "task-graph-created",
+      "taskCount": 3
+    },
+    {
+      "step": 5,
+      "event": "research-actors-recorded-evidence-and-submitted-results"
+    },
+    {
+      "step": 6,
+      "event": "research-teammate-result-reviewed",
+      "status": "passed",
+      "taskGraphRevision": 10
+    },
+    {
+      "step": 7,
+      "event": "edit-plan-reviewed",
+      "status": "approved",
+      "taskGraphRevision": 13
+    },
+    {
+      "step": 8,
+      "event": "edit-source-submitted",
+      "changedFiles": 1,
+      "fingerprinted": true,
+      "taskGraphRevision": 15
+    },
+    {
+      "step": 9,
+      "event": "edit-contract-verification",
+      "status": "passed",
+      "taskGraphRevision": 16
+    },
+    {
+      "step": 10,
+      "event": "git-integration-receipt-recorded",
+      "taskGraphRevision": 17
+    },
+    {
+      "step": 11,
+      "event": "teammates-shutdown",
+      "status": "stopped",
+      "unreadMessages": 0
+    },
+    {
+      "step": 12,
+      "event": "premature-candidate-deferred",
+      "remainingTaskStatus": "submitted"
+    },
+    {
+      "step": 13,
+      "event": "research-child-result-reviewed",
+      "status": "passed",
+      "taskGraphRevision": 18
+    },
+    {
+      "step": 14,
+      "event": "root-verification-result",
+      "status": "passed"
+    },
+    {
+      "step": 15,
+      "event": "final-answer-recorded"
+    },
+    {
+      "step": 16,
+      "event": "session-ended",
+      "status": "completed"
+    }
+  ],
+  "redactions": [
+    "session identifiers",
+    "timestamps",
+    "absolute paths",
+    "generated branch names",
+    "model metadata",
+    "full prompts",
+    "tool call identifiers",
+    "free-form model text",
+    "full commit and fingerprint values"
+  ],
+  "limitations": [
+    "The Leader sent more editor messages than the live prompt requested, and the editor attempted two writes before plan approval. Both writes were blocked by policy; the first successful mutation occurred only after approval.",
+    "The model produced a premature completion candidate while the Leader-owned research task was still submitted. The Runtime withheld root verification and finalization until the missing review completed.",
+    "Model-selected message sequencing and round count are not deterministic and may differ in future runs.",
+    "A ready CompletionGate has no dedicated c17c Trace event. Readiness is inferred from completed TaskGraph state, stopped teammates with empty mailboxes, no gate failure, root verification, final answer, and completed Session state."
+  ]
+}
