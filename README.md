@@ -1,20 +1,53 @@
 # Forge Harness
 
-Forge Harness is a tutorial project for building a coding agent harness from scratch in TypeScript.
+[简体中文](README.zh-CN.md)
 
-The course starts with one real loop:
+Forge Harness is a runnable TypeScript coding-agent Runtime focused on governed execution, context control, Runtime evidence, deterministic completion, isolated delegation, trusted extensions, and multi-agent coordination.
+
+The Runtime is frozen at `c17c Coordination / Completion Protocol`. The repository is source-only and intended for inspection, local execution, and engineering study. The Chinese tutorial remains a separate path that explains how each mechanism evolved.
+
+## Runtime at a glance
+
+![Forge Harness c17c Runtime architecture](docs/assets/architecture-overview.svg)
+
+A root run owns the full decision path:
 
 ```text
-user -> LLM -> tool_call -> tool_result -> LLM -> done
+prompt assembly
+  -> model response
+  -> permission policy and optional approval
+  -> Tool Runtime
+  -> bounded observation and Trace evidence
+  -> TaskGraph, child, teammate, and Git obligations
+  -> CompletionGate
+  -> root verifier
+  -> final answer
 ```
 
-Then each chapter pulls one problem out of that loop and turns it into a small harness mechanism.
+The five Forge layers are architecture lenses, not chapter order:
 
-## Status
+| Layer | Responsibility |
+| --- | --- |
+| `L1 Loop & Execution` | Model turns, tool dispatch, and final-answer flow. |
+| `L2 Governance & Action Boundary` | Permission decisions, approvals, path boundaries, and extension trust. |
+| `L3 Context & Knowledge` | Prompt assembly, memory, selected skills, observations, and compaction. |
+| `L4 State, Evidence & Reliability` | Session metadata, Trace events, RuntimeState, verification, and receipts. |
+| `L5 Coordination & Scale` | Background work, Worktrees, child Sessions, TaskGraph, teammates, and CompletionGate. |
 
-This branch contains the documentation baseline plus the runnable checkpoints through `c17c Coordination / Completion Protocol`: `c01 Minimal Real Loop`, `c02 Tool Runtime`, `c03 Permission Governance`, `c04 Reviewable File Editing`, `c05 Context Projection`, `c06 Session / Trace`, `c07 Runtime State Model`, `c08 Verification / Recovery`, `c09 Hooks`, `c10 Task / Todo`, `c11 System Prompt / Skills / Memory`, `c12 Context Compaction`, `c13a Background Tool Tasks`, `c13b Scheduled Jobs / Cron`, `c14 Worktree Isolation`, `c15a Child Sessions / Handoff`, `c15b Async Child Sessions / Parallel Handoff With Edit Preview`, `c16a MCP Tool Integration`, `c16b Plugin Loading / Registration`, `c17a Shared Team Task Graph`, `c17b Long-Lived Teammates / Mailbox`, and `c17c Coordination / Completion Protocol`.
+Read the [Architecture overview](docs/architecture-overview.md) for module ownership, state boundaries, and the c17c completion protocol.
 
-## Setup
+## What is governed
+
+- Built-in and MCP tool calls cross an explicit `allow`, `ask`, or `deny` policy before execution.
+- Tool results use one structured path into bounded observations, RuntimeState, and the append-only Trace.
+- A candidate answer is not final until pending activity settles, CompletionGate is ready, and the configured verifier passes.
+- Edit-capable root, child, and teammate work can use generated Git Worktrees with recorded source identity.
+- Plugins pass descriptor preflight and a per-Session trust decision before import or MCP startup.
+- c17c requires actor-owned evidence, review, edit-plan approval, source verification, Git integration receipts, teammate shutdown, and completed team state.
+
+The [Evidence Index](docs/evidence-index.md) maps each statement to source, tests, deterministic smoke runs, optional live evidence, and a stated limitation.
+
+## Requirements and setup
 
 Use Node.js `20.19.0` or newer.
 
@@ -24,7 +57,7 @@ cp .env.example .env
 npm run build
 ```
 
-Fill in `.env`:
+Set the model connection in `.env`:
 
 ```text
 OPENAI_API_KEY=...
@@ -32,81 +65,102 @@ OPENAI_MODEL=gpt-5.4-mini
 OPENAI_BASE_URL=
 ```
 
-Leave `OPENAI_BASE_URL` empty unless you use a proxy or an OpenAI-compatible gateway.
+Leave `OPENAI_BASE_URL` empty for the default OpenAI endpoint. A compatible gateway can be configured explicitly.
 
-## Clean run artifacts
+## Run the CLI
 
-Runs that use `--worktree` or child sessions accumulate data under `.forge/sessions/` and `.forge/worktrees/`. Clean those artifacts with:
+Start with a bounded read task:
+
+```bash
+npm run start -- "Read package.json and summarize the available Runtime commands. Do not modify files."
+```
+
+Add a root verifier when completion needs a command-level invariant:
+
+```bash
+npm run start -- --verify "npm run build" "Inspect the project and report readiness only after the verifier passes."
+```
+
+Bind the root run to a generated Git Worktree when the task may edit files:
+
+```bash
+npm run start -- --worktree "Inspect the repository and make one explicitly requested change."
+```
+
+These commands call the model service configured in `.env`. Mutation, plugin trust, external tools, verification, and Git integration may require interactive approval.
+
+## Deterministic validation
+
+The main checks do not call a model service:
+
+```bash
+npm run docs:check
+npm run typecheck
+npm run test
+npm run build
+```
+
+Two focused c17c smoke tests exercise the integration path without model output:
+
+```bash
+npm run smoke:c17c-capstone
+npm run smoke:c17c-child
+```
+
+The capstone smoke combines TaskGraph ownership, review, verification, Git integration, and CompletionGate. The child smoke focuses on one-shot edit-source integration. Neither proves future model adherence or external service availability.
+
+## Demo runbooks
+
+- [Verification / Recovery](docs/demos/verification-recovery.md)
+- [Worktree isolation](docs/demos/worktree-isolation.md)
+- [Async child handoff](docs/demos/async-child-handoff.md)
+- [MCP and plugin trust](docs/demos/mcp-plugin-trust.md)
+- [c17c team completion](docs/demos/c17c-team-completion.md)
+
+Each runbook separates a repeatable deterministic check from an optional model-driven run.
+
+## Documentation
+
+- [Architecture overview](docs/architecture-overview.md): current c17c execution, state, trust, isolation, and completion boundaries.
+- [Engineering case study](docs/engineering-case-study.md): the failures that forced each Runtime mechanism and the alternatives not taken.
+- [Evidence Index](docs/evidence-index.md): claim-to-source, test, smoke, and live-evidence mapping.
+- [Design Studies](docs/design-studies/README.md): context management, Tool Runtime, Session persistence, and multi-agent coordination.
+- [Tutorial roadmap](docs/02-tutorial-roadmap.md): the two-part Chinese learning path.
+- [Project architecture](docs/01-project-architecture.md): tutorial-era target boundaries and checkpoint mapping.
+- [Appendix](docs/appendix/minimal-mcp-server.md): local MCP and plugin fixtures used by the extension chapters.
+- [Agent instructions](AGENTS.md): repository rules for coding agents.
+
+## Tutorial path
+
+The tutorial answers a different question from the Runtime documentation: how did the system reach its current shape?
+
+- `Part 1: Core Harness` develops the single-agent execution, governance, context, evidence, and verification path.
+- `Part 2: Scale & Extensions` adds background work, Worktrees, isolated delegation, MCP, plugins, TaskGraph, teammates, and c17c completion.
+
+Start at [c00 Orientation](docs/tutorial/c00-orientation.md) or use the [Tutorial roadmap](docs/02-tutorial-roadmap.md). The tutorial remains in Chinese and is not rewritten as portfolio or release material.
+
+## Clean local run artifacts
+
+Runs can accumulate local data under `.forge/sessions/` and `.forge/worktrees/`:
 
 ```bash
 npm run clean:runs
 ```
 
-The command shows the artifact counts and asks for `y/N` confirmation. CI jobs and scripts can skip confirmation:
+The command reports counts and asks for `y/N`. Automation can opt in explicitly:
 
 ```bash
 npm run clean:runs -- --yes
 ```
 
-Cleanup is limited to `.forge/sessions/` and `.forge/worktrees/`. Registered worktrees are removed through Git before those directories are deleted. `.forge/mcp.json`, plugins, memory, skills, and Git branches are preserved.
+Cleanup removes registered generated Worktrees through Git, then deletes only the two generated roots. It preserves `.forge/mcp.json`, plugins, memory, skills, and Git branches.
 
-## Docs
+## Boundaries
 
-- [c00 Orientation](docs/tutorial/c00-orientation.md): first checkpoint for the course direction and docs-only baseline.
-- [c01 Minimal Real Loop](docs/tutorial/c01-minimal-real-loop.md): first runnable checkpoint with a real LLM tool-call round trip.
-- [c02 Tool Runtime](docs/tutorial/c02-tool-runtime.md): registry, dispatcher, and unified tool results for `bash`, `read`, and `ls`.
-- [c03 Permission Governance](docs/tutorial/c03-permission-governance.md): pre-tool permission decisions for `allow`, `ask`, and `deny`.
-- [c04 Reviewable File Editing](docs/tutorial/c04-reviewable-file-editing.md): structured `edit` and `write` tools with diff-like results.
-- [c05 Context Projection](docs/tutorial/c05-context-projection.md): `grep` / `find` search tools plus `Observation` and projected tool feedback.
-- [c06 Session / Trace](docs/tutorial/c06-session-trace.md): local session metadata and JSONL trace events for each run.
-- [c07 Runtime State Model](docs/tutorial/c07-runtime-state-model.md): in-memory `RuntimeState` projection for the current run.
-- [c08 Verification / Recovery](docs/tutorial/c08-verification-recovery.md): deterministic checks before final answer, with one recovery attempt on failure.
-- [c09 Hooks](docs/tutorial/c09-hooks.md): lifecycle event emitter and observe-only hooks for cross-cutting behavior.
-- [c10 Task / Todo](docs/tutorial/c10-task-todo.md): in-run task state, todo snapshots, and visible acceptance criteria.
-- [c11 System Prompt / Skills / Memory](docs/tutorial/c11-system-prompt-skills-memory.md): prompt assembly from base rules, project memory, skill catalog, and slash-selected skills.
-- [c12 Context Compaction](docs/tutorial/c12-context-compaction.md): LLM summary handoff for older conversation history, with trace evidence.
-- [c13a Background Tool Tasks](docs/tutorial/c13a-background-tool-tasks.md): session-scoped background bash tasks with notification return flow.
-- [c13b Scheduled Jobs / Cron](docs/tutorial/c13b-scheduled-jobs-cron.md): durable cron schedules, worker wakeup, and fresh scheduled run traces.
-- [c14 Worktree Isolation](docs/tutorial/c14-worktree-isolation.md): explicit `--worktree` runs that bind a session to an isolated git worktree.
-- [c15a Child Sessions / Handoff](docs/tutorial/c15a-child-sessions-handoff.md): synchronous fresh child sessions with profile boundaries, isolated edit worktrees, and handoff evidence.
-- [c15b Async Child Sessions / Parallel Handoff With Edit Preview](docs/tutorial/c15b-async-child-sessions-parallel-handoff.md): async research/edit child sessions, notification return flow, final gate, and isolated edit preview metadata.
-- [c16a MCP Tool Integration](docs/tutorial/c16a-mcp-tool-integration.md): one trusted foreground stdio MCP server integrated with Tool Runtime, permission, ToolResult, and trace.
-- [c16b Plugin Loading / Registration](docs/tutorial/c16b-plugin-loading-registration.md): strict local plugin preflight, per-session trust, namespaced skills/hooks, and plugin-provided multi-server MCP registration.
-- [c17a Shared Team Task Graph](docs/tutorial/c17a-shared-team-task-graph.md): shared dependencies, role-scoped transitions, acceptance evidence, and atomic root-session snapshots across Leader and child sessions.
-- [c17b Long-Lived Teammates / Mailbox](docs/tutorial/c17b-long-lived-teammates-mailbox.md): root-session scoped named teammate processes, persistent mailboxes, direct/broadcast delivery, stable edit worktrees, and explicit rejoin.
-- [c17c Coordination / Completion Protocol](docs/tutorial/c17c-coordination-completion-protocol.md): explicit ownership, atomic claim, edit plan approval, source verification, Git integration receipts, teammate shutdown, and a fail-closed team completion gate.
-- [Minimal MCP Server Fixture](docs/appendix/minimal-mcp-server.md): local external-system fixture used by c16a.
-- [Minimal Plugin Fixtures](docs/appendix/minimal-plugin-fixtures.md): one full and one skill-only local plugin used by c16b.
-- [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.
-- [Tutorial roadmap](docs/02-tutorial-roadmap.md): chapter order, milestones, and where each chapter comes from.
-- [Writing style](docs/03-writing-style.md): how tutorial chapters should read.
-- [Agent instructions](AGENTS.md): rules for coding agents working in this repo.
+The c17c Runtime does not implement crash-safe resume, Attempts, idempotent replay, reconciliation, distributed coordination, remote workers, high availability, an operating-system sandbox, a plugin marketplace, RAG, a vector database, a web UI, or a hosted control plane.
 
-## Who this is for
+Git Worktrees isolate file changes, not processes, credentials, network access, or host permissions. Approved plugin hooks are trusted in-process code. Live model runs are examples, while deterministic tests and smoke commands are the repeatable evidence layer.
 
-This project is for engineers who want to understand coding agent runtime design by building one small piece at a time.
+## License
 
-You should be comfortable reading TypeScript and running CLI tools. You do not need to know agent framework internals.
-
-## Course shape
-
-The course has two parts:
-
-- `Part 1: Core Harness` builds the single-agent runtime.
-- `Part 2: Scale & Extensions` handles longer tasks, wider boundaries, and external tools after the core is stable.
-
-The detailed route is in [docs/02-tutorial-roadmap.md](docs/02-tutorial-roadmap.md).
-
-## What "production-like" means here
-
-`production-like` does not mean SaaS, dashboards, multi-tenant auth, or a complete platform.
-
-In this course it means the harness can govern actions, record what happened, recover useful state, verify work before final answer, and accept new mechanisms without turning the loop into special cases.
-
-See [docs/01-project-architecture.md](docs/01-project-architecture.md) for the system model.
-
-## Non-goals
-
-The early course does not start with LangGraph, AutoGen, MCP, a multi-agent platform, a benchmark suite, or a UI. c16a adds one local MCP boundary only after Tool Runtime, Permission Governance, trace, and lifecycle are already in place. c16b then adds loading for already-configured local plugins. c17a adds a root-session scoped shared task graph, c17b adds named long-lived teammates and persistent mailboxes, and c17c adds the smallest ownership, review, verification, integration, shutdown, and completion protocol around them.
-
-c16b still does not add a marketplace, downloader, persistent trust store, or package manager. c17c intentionally stops at one root run: attempts, resume, idempotency, reconciliation, event replay, and recovery from a crash between a successful Git side effect and receipt persistence stay in c18.
+Licensed under the [Apache License 2.0](LICENSE).
