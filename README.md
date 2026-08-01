@@ -75,6 +75,7 @@ Cleanup is limited to `.forge/sessions/` and `.forge/worktrees/`. Registered wor
 - [c17a Shared Team Task Graph](docs/tutorial/c17a-shared-team-task-graph.md): shared dependencies, role-scoped transitions, acceptance evidence, and atomic root-session snapshots across Leader and child sessions.
 - [c17b Long-Lived Teammates / Mailbox](docs/tutorial/c17b-long-lived-teammates-mailbox.md): root-session scoped named teammate processes, persistent mailboxes, direct/broadcast delivery, stable edit worktrees, and explicit rejoin.
 - [c17c Coordination / Completion Protocol](docs/tutorial/c17c-coordination-completion-protocol.md): explicit ownership, atomic claim, edit plan approval, source verification, Git integration receipts, teammate shutdown, and a fail-closed team completion gate.
+- [Agent Runtime Design Studies](docs/design-studies/README.md): evidence-grounded comparisons of Forge, Pi, and a provenance-limited Claude local snapshot across loop, tools, context, sessions, coordination, and extension trust.
 - [Minimal MCP Server Fixture](docs/appendix/minimal-mcp-server.md): local external-system fixture used by c16a.
 - [Minimal Plugin Fixtures](docs/appendix/minimal-plugin-fixtures.md): one full and one skill-only local plugin used by c16b.
 - [Project architecture](docs/01-project-architecture.md): target harness shape, module boundaries, and chapter mapping.

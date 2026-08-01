@@ -1,0 +1,6 @@
+RUN  v4.1.10 (research worktree)
+
+Test Files  1 passed (1)
+Tests       1 passed (1)
+Duration    447ms (transform 243ms, setup 0ms, import 342ms, tests 16ms, environment 0ms)
+Exit code   0
