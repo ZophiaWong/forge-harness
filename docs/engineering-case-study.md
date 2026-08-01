@@ -86,7 +86,7 @@ At c17c, five source files are longer than 1,000 lines. Their current boundaries
 | [`src/tools/teamTaskTools.ts`](../src/tools/teamTaskTools.ts) | Tool definitions, argument parsing, role-specific filtering, response formatting, Git integration, and teammate resolution are combined. | Extract definitions and adapter formatting from command handlers. Protocol transitions must remain in the store. |
 | [`src/extensions/teammates.ts`](../src/extensions/teammates.ts) | Process lifecycle, mailbox delivery, approval brokerage, and shutdown accounting share one manager implementation. | Separate process, mailbox, and approval routing behind the existing `TeammateManager` interface. |
 
-Refactoring these modules is maintenance work within the c17c boundary. It should begin with characterization tests for ordering, failure codes, source fingerprints, and integration receipts, then move one responsibility at a time. It must not add c18 behavior or change Trace semantics.
+Refactoring these modules is maintenance work within the c17c boundary. It should begin with characterization tests for ordering, failure codes, source fingerprints, and integration receipts, then move one responsibility at a time. It must not extend the frozen c17c boundary or change Trace semantics.
 
 ## Validation strategy
 

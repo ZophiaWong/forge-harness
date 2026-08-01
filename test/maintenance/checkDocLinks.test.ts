@@ -58,6 +58,24 @@ describe("documentation link checker", () => {
     );
   });
 
+  it("reports a missing fragment in an existing Markdown target", async () => {
+    const root = await createFixture();
+    await mkdir(resolve(root, "docs"));
+    await writeFile(
+      resolve(root, "README.md"),
+      "Read the [missing section](docs/guide.md#missing-section).\n",
+    );
+    await writeFile(resolve(root, "docs/guide.md"), "# Existing section\n");
+
+    const result = await runChecker(root);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "README.md: missing local target docs/guide.md#missing-section\n",
+    );
+  });
+
   it("accepts supported fragments, images, external URLs, and paths with spaces", async () => {
     const root = await createFixture();
     await mkdir(resolve(root, "assets"));

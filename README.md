@@ -65,7 +65,7 @@ Read the [Architecture overview](docs/architecture-overview.md) for module owner
 
 The [Evidence Index](docs/evidence-index.md) maps each statement to source, tests, deterministic smoke runs, optional live evidence, and a stated limitation.
 
-## Requirements and setup
+## Setup
 
 Use Node.js `20.19.0` or newer.
 
