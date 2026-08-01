@@ -40,3 +40,7 @@ The graph and mailboxes are local files, so the design fits one root run on one 
 ## Boundary
 
 Forge does not provide remote workers, nested teams, dynamic leader transfer, automatic task retry, task unblocking, exactly-once processing, high availability, or cross-run reconciliation. Those concerns belong to a later reliability model and are intentionally absent from the frozen c17c Runtime.
+
+## Deep dive
+
+For a frozen source-level comparison with the research evidence ledger, read [Delegation and Coordination](https://github.com/ZophiaWong/forge-harness/blob/research/agent-runtime-design-studies/docs/design-studies/05-delegation-and-coordination.md) on the separate research branch.

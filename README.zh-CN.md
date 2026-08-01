@@ -143,6 +143,7 @@ Capstone smoke 串起 TaskGraph ownership、review、verification、Git integrat
 - [工程案例](docs/engineering-case-study.md)：哪些具体失败迫使 Runtime 增加机制，以及没有采用哪些替代方案。
 - [证据索引](docs/evidence-index.md)：能力陈述与源码、测试、smoke、live evidence 的对应关系。
 - [Design Studies](docs/design-studies/README.md)：上下文管理、Tool Runtime、Session persistence 和多 Agent 协调。
+- [Agent Runtime 深度研究](https://github.com/ZophiaWong/forge-harness/tree/research/agent-runtime-design-studies/docs/design-studies)：独立 research branch 上的源码研究，对照 Forge、Pi 与 provenance 受限的 Claude 本地快照，讨论 loop completion、tool boundary、context、Session、coordination 和 extension trust。
 - [教程路线图](docs/02-tutorial-roadmap.md)：两部分中文学习路径。
 - [项目架构](docs/01-project-architecture.md)：教程视角下的目标边界与 checkpoint 对应关系。
 - [Appendix](docs/appendix/minimal-mcp-server.md)：扩展章节使用的本地 MCP 与 plugin fixtures。

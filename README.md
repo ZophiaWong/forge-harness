@@ -143,6 +143,7 @@ Each runbook separates a repeatable deterministic check from an optional model-d
 - [Engineering case study](docs/engineering-case-study.md): the failures that forced each Runtime mechanism and the alternatives not taken.
 - [Evidence Index](docs/evidence-index.md): claim-to-source, test, smoke, and live-evidence mapping.
 - [Design Studies](docs/design-studies/README.md): context management, Tool Runtime, Session persistence, and multi-agent coordination.
+- [Deep Agent Runtime Research](https://github.com/ZophiaWong/forge-harness/tree/research/agent-runtime-design-studies/docs/design-studies): separate-branch source studies comparing Forge, Pi, and a provenance-limited Claude local snapshot across loop completion, tool boundaries, context, Sessions, coordination, and extension trust.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): the two-part Chinese learning path.
 - [Project architecture](docs/01-project-architecture.md): tutorial-era target boundaries and checkpoint mapping.
 - [Appendix](docs/appendix/minimal-mcp-server.md): local MCP and plugin fixtures used by the extension chapters.

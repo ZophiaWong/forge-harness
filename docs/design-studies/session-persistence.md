@@ -32,3 +32,7 @@ Raw Session directories contain prompts, model text, identifiers, timestamps, an
 ## Boundary
 
 There is no crash-safe resume, Attempt model, idempotent replay, reconciliation pass, schema migration framework, retention service, remote evidence store, or cryptographic attestation. The cleanup command removes generated local artifacts; it is not an archival policy.
+
+## Deep dive
+
+For a frozen source-level comparison with the research evidence ledger, read [Session Persistence and Branching](https://github.com/ZophiaWong/forge-harness/blob/research/agent-runtime-design-studies/docs/design-studies/04-session-persistence-and-branching.md) on the separate research branch.
