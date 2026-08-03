@@ -74,6 +74,16 @@ The fix did not weaken TaskGraph or CompletionGate rules. The model-visible cont
 
 This is a useful boundary between deterministic and nondeterministic behavior. Runtime gates are fixed and tested. Prompt sequencing and round budgets can improve the chance that a model reaches those gates, but they do not turn model behavior into a guarantee.
 
+## Decision 7: compare behavioral contracts before deployment
+
+Focused tests prove deterministic Runtime code paths, but they cannot show whether a prompt, tool description, loop change, or dependency update changed real-model behavior. A single curated live snapshot also cannot answer that question because it has no compatible before/after population.
+
+Forge therefore adds an offline eval outside the tutorial chapter sequence. Five fixed scenarios exercise governed reading, verifier recovery, compaction retention, asynchronous child handoff, and the c17c team protocol. Each uses a fresh minimal Git fixture and deterministic assertions over Trace, Git, TaskGraph, mailbox, and artifact facts. The eval reuses production bootstrap functions instead of maintaining a second mock Runtime.
+
+The baseline stores pass counts for each scenario and each outcome assertion. A regression in one count cannot be canceled by an improvement in another. Hard-invariant violations outrank infrastructure failures; provider or evidence failures remain `INVALID` rather than being mislabeled as model behavior. Missing or incompatible baselines are explicit outcomes instead of silently comparing different experiments.
+
+Token usage and model-call duration are useful for explaining change, but v1 does not convert tokens into price or make efficiency a release gate. It also avoids semantic LLM judging, significance claims, automatic pull-request calls, and resampling until a green run appears. The first independent valid comparable batch is the evidence sample, even when its verdict is red.
+
 ## Known maintenance pressure
 
 At c17c, five source files are longer than 1,000 lines. Their current boundaries are intentional, but each file now combines several maintenance concerns:
@@ -96,6 +106,7 @@ The repository uses four evidence levels:
 2. Focused Vitest cases exercise individual boundaries and failure paths.
 3. Deterministic smoke tests combine TaskGraph, verification, Git integration, and CompletionGate without model calls.
 4. Sanitized live snapshots record selected integrated runs without committing raw prompts, paths, identifiers, or model text.
+5. Offline regression reports compare fixed behavioral counts across compatible real-model batches without publishing raw attempt evidence.
 
 The [Evidence Index](evidence-index.md) maps each capability to its implementation, deterministic checks, optional live evidence, and stated limitation. This keeps broad claims from outrunning the repository.
 

@@ -18,6 +18,7 @@ import type {
   TeammateWorkerConfig,
 } from "../extensions/teammates.js";
 import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
+import { createAllowlistPermissionPolicy } from "../governance/allowlistPolicy.js";
 import type { PermissionApprover } from "../governance/types.js";
 import { createGitIntegrationService } from "../runtime/gitIntegration.js";
 import { createJsonlTraceRecorder } from "../runtime/traceRecorder.js";
@@ -243,7 +244,9 @@ export function startTeammateWorkerHost(
       lifecycleEmitter,
       maxToolRounds: config.definition.maxToolRounds,
       model: config.model,
-      permissionPolicy: createDefaultPermissionPolicy(),
+      permissionPolicy: config.permissionRules
+        ? createAllowlistPermissionPolicy(createDefaultPermissionPolicy(), config.permissionRules)
+        : createDefaultPermissionPolicy(),
       promptAssets: await loadRepoPromptAssets(config.baseCwd),
       ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
       task: formatTeammateSessionTask(config),

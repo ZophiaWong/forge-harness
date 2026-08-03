@@ -66,6 +66,7 @@ sequenceDiagram
 | `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、replay。 | `c06`, `c07`, `c08`, `c13`, `c14`, `c16b`, `c17a` 到 `c18` |
 | `src/domain/` | shared runtime terms and protocols。 | `c17a` 到 `c18` 随需要补齐 |
 | `src/extensions/` | hooks、skills、background runs、subagents、MCP、plugin loading、team runtime 和 coordination protocol。 | `c09` 到 `c17c` |
+| `src/eval/` | 固定 pre-deployment scenarios、确定性 grader、experiment identity、baseline、regression report 与独立 CLI。它复用 production bootstrap，但不属于新教程章节。 | evergreen Runtime hardening |
 
 不要提前建一个 `src/state/` god module。状态应该以 domain data 和 runtime projection 的形式存在，由使用它的模块持有。
 

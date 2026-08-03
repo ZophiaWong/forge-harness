@@ -17,8 +17,9 @@ The implementation defines the boundary. Tests and smoke runs exercise it withou
 | `npm run build` | TypeScript emits the CLI and Runtime into `dist/`. | That a model-driven task will complete. |
 | `npm run smoke:c17c-capstone` | A deterministic temporary-Git scenario reaches integrated edit evidence and a ready CompletionGate. | Plugin startup, interactive approval, or model adherence to the live protocol. |
 | `npm run smoke:c17c-child` | A deterministic one-shot edit-child source can be verified and integrated. | Async scheduling or a live model handoff. |
+| `npm run eval -- run --model <model>` | A fixed 13-attempt behavioral batch produces a sanitized summary and regression report against a compatible baseline. | General coding ability, deterministic model reasoning, statistical significance, or production-user behavior. |
 
-The GitHub Actions workflow runs documentation checks, type checking, the complete test suite, and the build. Live Demo commands stay outside CI because they require credentials, interactive trust or approval, and nondeterministic model output.
+The ordinary GitHub Actions workflow runs documentation checks, type checking, the complete test suite, and the build without calling a model. The separate eval workflow is manual `workflow_dispatch` only because it needs credentials and nondeterministic model output.
 
 ## Capability map
 
@@ -114,8 +115,18 @@ Claim: an edit task must retain the reviewed source fingerprint, pass its exact 
 - Runbook: [c17c team completion](demos/c17c-team-completion.md)
 - Boundary: a ready gate is inferred from its checked state. c17c records `completion_gate_failed` for terminal failures but does not add a separate ready Trace event.
 
+### Offline behavioral regression
+
+Claim: a candidate Runtime can run fixed Forge-specific behavioral contracts before deployment, report optional token/latency telemetry, and detect any lower scenario or assertion pass count without allowing improvements elsewhere to compensate.
+
+- Implementation: [`src/eval/`](../src/eval), model telemetry in [`minimalLoop.ts`](../src/core/minimalLoop.ts), and optional telemetry fields in [`trace.ts`](../src/runtime/trace.ts)
+- Focused tests: [`test/eval/`](../test/eval), including synthetic grader cases, comparator priority, fingerprint stability, baseline eligibility, safe cleanup, and scripted Runtime integration
+- Manual workflow: [`eval.yml`](../.github/workflows/eval.yml)
+- Operating guide: [Offline eval and regression reports](offline-eval.md)
+- Boundary: “offline” means outside user traffic, not offline from the model provider. Token and latency do not gate the verdict. v1 has no LLM judge, price table, multi-model ranking, or statistical claim.
+
 ## Interpreting the evidence
 
-The strongest repeatable evidence is the deterministic test and smoke layer. The live layer adds integration context, including model and approval behavior, but it is a recorded example rather than a guarantee.
+The strongest repeatable evidence is the deterministic test and smoke layer. A regression report adds cross-version behavioral evidence for one fixed experiment identity. The live layer adds integration context, including model and approval behavior, but it is a recorded example rather than a guarantee.
 
 No current evidence supports claims of high availability, crash recovery, distributed consensus, OS sandboxing, arbitrary untrusted plugin execution, or deterministic model reasoning. Those claims are outside the frozen Runtime scope.

@@ -127,6 +127,18 @@ npm run smoke:c17c-child
 
 Capstone smoke 串起 TaskGraph ownership、review、verification、Git integration 与 CompletionGate；child smoke 聚焦 one-shot edit source 的集成。它们不证明未来模型一定遵守协议，也不验证外部服务是否可用。
 
+## Offline behavioral eval
+
+Pre-deployment eval 会用固定 Forge 场景执行 13 次真实模型 attempt，再用确定性 grader 的通过数与版本化 baseline 比较：
+
+```bash
+npm run eval -- run --model <model>
+```
+
+这里的 “offline” 指不承载真实用户流量，不代表断网；运行仍会调用模型 API。Token 与 latency 只进入报告，不影响 behavioral verdict。v1 不包含 LLM-as-a-judge、价格表、多模型榜单、自动 PR 触发或 nightly model run。
+
+[Offline eval and regression reports](docs/offline-eval.md)说明了 canonical scenarios、baseline promotion、exit code、手动 GitHub workflow 与清理边界。这是 evergreen Runtime hardening，不占用教程 `c18`。
+
 ## Demo 操作手册
 
 - [Verification / Recovery](docs/demos/verification-recovery.md)
@@ -142,6 +154,7 @@ Capstone smoke 串起 TaskGraph ownership、review、verification、Git integrat
 - [架构总览](docs/architecture-overview.md)：当前 c17c 的执行、状态、信任、隔离与完成边界。
 - [工程案例](docs/engineering-case-study.md)：哪些具体失败迫使 Runtime 增加机制，以及没有采用哪些替代方案。
 - [证据索引](docs/evidence-index.md)：能力陈述与源码、测试、smoke、live evidence 的对应关系。
+- [Offline eval](docs/offline-eval.md)：canonical scenarios、comparability、baseline promotion、报告与限制。
 - [Design Studies](docs/design-studies/README.md)：上下文管理、Tool Runtime、Session persistence 和多 Agent 协调。
 - [教程路线图](docs/02-tutorial-roadmap.md)：两部分中文学习路径。
 - [项目架构](docs/01-project-architecture.md)：教程视角下的目标边界与 checkpoint 对应关系。

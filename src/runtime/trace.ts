@@ -1,6 +1,7 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
+import type { ModelCallTelemetry } from "../domain/model.js";
 import type {
   TeamTaskFailureCode,
   TeamTaskGraphHealth,
@@ -164,6 +165,7 @@ export type TraceEventPayload =
       omittedSourceCharCount: number;
       missingHeadings: RequiredCompactionHeading[];
       summary: string;
+      telemetry?: ModelCallTelemetry;
     }
   | {
       type: "context_compaction_failed";
@@ -179,6 +181,7 @@ export type TraceEventPayload =
       round: number;
       outputText: string;
       functionCallCount: number;
+      telemetry?: ModelCallTelemetry;
     }
   | {
       type: "tool_call";

@@ -111,6 +111,47 @@ describe("teammate worker", () => {
     );
   });
 
+  it("enforces serialized permission rules inside the teammate worker", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammate-allowlist-"));
+    await fs.writeFile(path.join(root, "forbidden.txt"), "must not be read\n", "utf8");
+    const config = workerConfig(root);
+    config.permissionRules = [{ arguments: { path: "allowed.txt" }, name: "read" }];
+    const responses = [{
+      output: [{
+        arguments: JSON.stringify({ path: "forbidden.txt" }),
+        call_id: "call_forbidden",
+        name: "read",
+        type: "function_call" as const,
+      }],
+      output_text: "",
+    }, { output: [], output_text: "blocked as expected" }];
+    const channel = new FakeWorkerChannel();
+    startTeammateWorkerHost(channel, {
+      responseCreate: async () => {
+        const response = responses.shift();
+        if (!response) {
+          throw new Error("unexpected model request");
+        }
+        return response;
+      },
+    });
+
+    channel.emit({ config, sessionId: config.sessionId, type: "initialize" });
+    await channel.waitFor("ready");
+    channel.emit({
+      messages: [message("msg_researcher_000001", 1, "read only the allowed file")],
+      sessionId: config.sessionId,
+      type: "run_batch",
+    });
+    await channel.waitFor("turn_result");
+
+    const trace = await fs.readFile(config.tracePath, "utf8");
+    expect(trace).toContain('"callId":"call_forbidden"');
+    expect(trace).toContain('"action":"deny"');
+    expect(trace).toContain('"status":"blocked"');
+    expect(trace).not.toContain("must not be read");
+  });
+
   it("exposes only edit-profile tools and brokers each write approval over IPC", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammate-edit-worker-"));
     await fs.writeFile(path.join(root, "README.md"), "before\n", "utf8");

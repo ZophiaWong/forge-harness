@@ -25,6 +25,32 @@ import {
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 
 describe("TeammateManager", () => {
+  it("serializes caller-provided permission rules into the worker config", async () => {
+    const fixture = await createFixture(["session-a"], {
+      workerPermissionRules: (definition) => [{
+        arguments: { id: definition.name === "researcher" ? "task_002" : "never" },
+        name: "task_get",
+      }],
+    });
+
+    const started = fixture.manager.start({
+      instructions: "Research only the assigned task.",
+      message: "Remain idle.",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+
+    expect(process.sent[0]).toMatchObject({
+      config: {
+        permissionRules: [{ arguments: { id: "task_002" }, name: "task_get" }],
+      },
+      type: "initialize",
+    });
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+  });
+
   it("persists a stable definition, waits for ready, and dispatches the claimed first batch", async () => {
     const fixture = await createFixture(["session-a"]);
 
@@ -869,6 +895,7 @@ async function createFixture(
     | "onLog"
     | "shutdownTimeoutMs"
     | "terminateTimeoutMs"
+    | "workerPermissionRules"
     | "workspaceFactory"
   >> = {},
 ) {

@@ -31,7 +31,10 @@ import type {
   TeamTaskAssignee,
   TeamTaskResultSource,
 } from "../domain/teamTask.js";
-import type { PermissionApprover } from "../governance/types.js";
+import type {
+  PermissionAllowlistRule,
+  PermissionApprover,
+} from "../governance/types.js";
 import {
   createSessionId,
   type SessionTaskGraphBinding,
@@ -68,6 +71,7 @@ export interface CreateTeammateManagerOptions {
   taskGraph?: SessionTaskGraphBinding;
   teamRoot: string;
   terminateTimeoutMs?: number;
+  workerPermissionRules?: (definition: TeammateDefinition) => PermissionAllowlistRule[];
   workspaceFactory?: TeammateWorkspaceFactory;
 }
 
@@ -452,11 +456,13 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   };
 
   const startProcess = async (member: ManagedTeammate): Promise<void> => {
+    const permissionRules = options.workerPermissionRules?.(member.definition);
     const config: TeammateWorkerConfig = {
       baseCwd: options.baseCwd,
       cwd: member.definition.workspace?.path ?? options.baseCwd,
       definition: member.definition,
       model: options.model ?? DEFAULT_MODEL,
+      ...(permissionRules !== undefined ? { permissionRules } : {}),
       rootSessionId: options.rootSessionId,
       sessionId: member.runtime.sessionId,
       ...(options.taskGraph

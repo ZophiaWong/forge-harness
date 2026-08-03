@@ -1163,6 +1163,14 @@ describe("runMinimalLoop", () => {
           "## Next Step",
           "Continue with recent reads.",
         ].join("\n"),
+        telemetry: {
+          durationMs: 25,
+          usage: {
+            inputTokens: 300,
+            outputTokens: 40,
+            totalTokens: 340,
+          },
+        },
       },
       {
         output: [],
@@ -1205,6 +1213,14 @@ describe("runMinimalLoop", () => {
         missingHeadings: [],
         round: 4,
         summary: expect.stringContaining("# Compacted Context"),
+        telemetry: {
+          durationMs: 25,
+          usage: {
+            inputTokens: 300,
+            outputTokens: 40,
+            totalTokens: 340,
+          },
+        },
         trigger: "auto",
         type: "context_compacted",
       }),
@@ -2087,7 +2103,85 @@ describe("runMinimalLoop", () => {
     expect(OpenAIMock).toHaveBeenCalledWith({
       apiKey: "test-key",
       baseURL: "https://gateway.example/v1",
+      maxRetries: 2,
+      timeout: 120_000,
     });
+  });
+
+  it("records normalized API usage and measured duration on model responses", async () => {
+    const trace = createTraceRecorder();
+    createOpenAIResponseMock.mockResolvedValueOnce({
+      output: [],
+      output_text: "done",
+      usage: {
+        input_tokens: 1_200,
+        input_tokens_details: {
+          cached_tokens: 800,
+        },
+        output_tokens: 140,
+        output_tokens_details: {
+          reasoning_tokens: 80,
+        },
+        total_tokens: 1_340,
+      },
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      task: "answer directly",
+    });
+
+    expect(trace.events).toContainEqual({
+      functionCallCount: 0,
+      outputText: "done",
+      round: 1,
+      telemetry: {
+        durationMs: expect.any(Number),
+        usage: {
+          cachedInputTokens: 800,
+          inputTokens: 1_200,
+          outputTokens: 140,
+          reasoningTokens: 80,
+          totalTokens: 1_340,
+        },
+      },
+      type: "model_response",
+    });
+    const responseEvent = trace.events.find((event) => event.type === "model_response");
+    expect(responseEvent?.telemetry?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("keeps available token totals when a compatible gateway omits usage details", async () => {
+    const trace = createTraceRecorder();
+    createOpenAIResponseMock.mockResolvedValueOnce({
+      output: [],
+      output_text: "done",
+      usage: {
+        input_tokens: 90,
+        output_tokens: 10,
+        total_tokens: 100,
+      },
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      task: "answer directly",
+    });
+
+    expect(trace.events).toContainEqual(expect.objectContaining({
+      telemetry: expect.objectContaining({
+        usage: {
+          inputTokens: 90,
+          outputTokens: 10,
+          totalTokens: 100,
+        },
+      }),
+      type: "model_response",
+    }));
   });
 
   it("treats an empty baseURL as the default OpenAI endpoint", async () => {
@@ -2105,6 +2199,8 @@ describe("runMinimalLoop", () => {
 
     expect(OpenAIMock).toHaveBeenCalledWith({
       apiKey: "test-key",
+      maxRetries: 2,
+      timeout: 120_000,
     });
   });
 
@@ -2133,6 +2229,8 @@ describe("runMinimalLoop", () => {
     expect(OpenAIMock).toHaveBeenCalledWith({
       apiKey: "test-key",
       baseURL: "https://env-gateway.example/v1",
+      maxRetries: 2,
+      timeout: 120_000,
     });
   });
 

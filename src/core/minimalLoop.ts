@@ -1,4 +1,10 @@
+import { performance } from "node:perf_hooks";
+
 import OpenAI from "openai";
+import type {
+  Response as OpenAIResponse,
+  ResponseCreateParamsNonStreaming,
+} from "openai/resources/responses/responses";
 
 import {
   buildCompactionSource,
@@ -18,6 +24,7 @@ import {
   type PromptAssemblySummary,
 } from "../context/promptAssembly.js";
 import { createContextProjection, type ContextProjection } from "../context/projection.js";
+import type { ModelCallTelemetry, ModelUsage } from "../domain/model.js";
 import {
   createAsyncChildSessionManager,
   formatChildSessionNotification,
@@ -67,6 +74,10 @@ import type { ToolCallRequest, ToolDefinition, ToolResult, ToolRuntime } from ".
 export const DEFAULT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_MAX_TOOL_ROUNDS = 48;
 export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 1;
+export const DEFAULT_MODEL_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_MODEL_REQUEST_MAX_RETRIES = 2;
+
+export type { ModelCallTelemetry, ModelUsage } from "../domain/model.js";
 
 export interface UserInputItem {
   role: "user";
@@ -109,6 +120,7 @@ export interface ResponseCreateRequest {
 export interface MinimalResponse {
   output: ResponseOutputItem[];
   output_text: string;
+  telemetry?: ModelCallTelemetry;
 }
 
 export type ResponseCreate = (request: ResponseCreateRequest) => Promise<MinimalResponse>;
@@ -447,6 +459,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
             functionCallCount: toolCalls.length,
             outputText: response.output_text,
             round,
+            ...(response.telemetry ? { telemetry: response.telemetry } : {}),
             type: "model_response",
           });
 
@@ -828,6 +841,7 @@ async function compactInputHistory(
     sourceRoundCount: source.sourceRoundCount,
     summary: inspection.summary,
     summaryCharCount: inspection.summary.length,
+    ...(response.telemetry ? { telemetry: response.telemetry } : {}),
     trigger: options.trigger,
     type: "context_compacted" as const,
   };
@@ -1039,16 +1053,46 @@ async function cleanupBackgroundTasks(backgroundTasks: BackgroundTaskManager | u
   await backgroundTasks.flushEvents();
 }
 
-function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: string | undefined): ResponseCreate {
+export function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: string | undefined): ResponseCreate {
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is required.");
   }
 
-  const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    maxRetries: DEFAULT_MODEL_REQUEST_MAX_RETRIES,
+    timeout: DEFAULT_MODEL_REQUEST_TIMEOUT_MS,
+  });
 
   return async (request) => {
-    const response = await client.responses.create(request as Parameters<typeof client.responses.create>[0]);
-    return response as unknown as MinimalResponse;
+    const startedAt = performance.now();
+    const response: OpenAIResponse = await client.responses.create(
+      request as unknown as ResponseCreateParamsNonStreaming,
+    );
+    const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+    const usage: ModelUsage | undefined = response.usage
+      ? {
+          ...(response.usage.input_tokens_details?.cached_tokens !== undefined
+            ? { cachedInputTokens: response.usage.input_tokens_details.cached_tokens }
+            : {}),
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          ...(response.usage.output_tokens_details?.reasoning_tokens !== undefined
+            ? { reasoningTokens: response.usage.output_tokens_details.reasoning_tokens }
+            : {}),
+          totalTokens: response.usage.total_tokens,
+        }
+      : undefined;
+
+    return {
+      output: response.output as unknown as ResponseOutputItem[],
+      output_text: response.output_text,
+      telemetry: {
+        durationMs,
+        ...(usage ? { usage } : {}),
+      },
+    };
   };
 }
 

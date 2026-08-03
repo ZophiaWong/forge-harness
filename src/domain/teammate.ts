@@ -1,4 +1,5 @@
 import type { ChildSessionProfile, SessionTaskGraphBinding } from "../runtime/session.js";
+import type { PermissionAllowlistRule } from "../governance/types.js";
 import type {
   TeamMessage,
   TeammateWorkspaceReference,
@@ -94,6 +95,7 @@ export interface TeammateWorkerConfig {
   cwd: string;
   definition: TeammateDefinition;
   model: string;
+  permissionRules?: PermissionAllowlistRule[];
   rootSessionId: string;
   sessionId: string;
   taskGraph?: SessionTaskGraphBinding;
