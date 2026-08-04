@@ -123,6 +123,7 @@ Claim: a candidate Runtime can run fixed Forge-specific behavioral contracts bef
 - Focused tests: [`test/eval/`](../test/eval), including synthetic grader cases, comparator priority, fingerprint stability, baseline eligibility, safe cleanup, and scripted Runtime integration
 - Manual workflow: [`eval.yml`](../.github/workflows/eval.yml)
 - Operating guide: [Offline eval and regression reports](offline-eval.md)
+- Curated evidence: [offline eval regression report](assets/evidence/offline-eval-regression-report.md), retained as a historical pre-hardening sample of an earlier independent 13-attempt `UNCHANGED` run. It is not evidence for the hardened contract or current experiment identity; current evidence requires a new valid canonical baseline and the first independent comparable candidate run, without resampling for a preferred verdict.
 - Boundary: “offline” means outside user traffic, not offline from the model provider. Token and latency do not gate the verdict. v1 has no LLM judge, price table, multi-model ranking, or statistical claim.
 
 ## Interpreting the evidence

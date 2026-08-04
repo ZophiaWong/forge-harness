@@ -84,6 +84,8 @@ The baseline stores pass counts for each scenario and each outcome assertion. A 
 
 Token usage and model-call duration are useful for explaining change, but v1 does not convert tokens into price or make efficiency a release gate. It also avoids semantic LLM judging, significance claims, automatic pull-request calls, and resampling until a green run appears. The first independent valid comparable batch is the evidence sample, even when its verdict is red.
 
+The linked [regression report](assets/evidence/offline-eval-regression-report.md) is retained as a historical pre-hardening sample. It records an earlier independent 13-attempt `UNCHANGED` run, not evidence for the hardened contract or current experiment identity. Current evidence requires a new valid canonical baseline followed by the first independent comparable candidate run, without resampling for a preferred verdict.
+
 ## Known maintenance pressure
 
 At c17c, five source files are longer than 1,000 lines. Their current boundaries are intentional, but each file now combines several maintenance concerns:
