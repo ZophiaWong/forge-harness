@@ -58,6 +58,43 @@ describe("eval artifact cleanup", () => {
     await expect(fs.stat(runRoot)).resolves.toBeDefined();
   });
 
+  it("returns an empty result when the repository has no .forge directory", async () => {
+    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-repo-"));
+    tempRoots.push(repositoryRoot);
+    const removeWorktree = vi.fn(async () => {});
+
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot: path.join(repositoryRoot, ".forge", "evals"),
+      repositoryRoot,
+      removeWorktree,
+    })).resolves.toEqual({
+      removedRunIds: [],
+      skippedActiveRunIds: [],
+      skippedUnmarkedNames: [],
+    });
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty result when .forge has no evals directory", async () => {
+    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-repo-"));
+    tempRoots.push(repositoryRoot);
+    await fs.mkdir(path.join(repositoryRoot, ".forge"));
+    const removeWorktree = vi.fn(async () => {});
+
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot: path.join(repositoryRoot, ".forge", "evals"),
+      repositoryRoot,
+      removeWorktree,
+    })).resolves.toEqual({
+      removedRunIds: [],
+      skippedActiveRunIds: [],
+      skippedUnmarkedNames: [],
+    });
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
   it("removes completed runs after registered worktrees while preserving active and unmarked directories", async () => {
     const evalRoot = await createEvalRoot();
     const completed = await createRun(evalRoot, "run-001", "completed", [{
