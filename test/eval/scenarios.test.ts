@@ -103,6 +103,82 @@ function assertionStatus(
   return grade.assertions.find((assertion) => assertion.id === id)?.status;
 }
 
+function childStarted(sequence: number, childSessionId = "child-session"): RecordedTraceEvent {
+  return recorded(sequence, {
+    childSessionId,
+    parentCallId: "delegate",
+    profile: "research",
+    round: sequence,
+    runInBackground: true,
+    task: "Read child.txt and return CHILD_TOKEN=delta.",
+    tracePath: `/private/${childSessionId}.jsonl`,
+    type: "child_session_started",
+  });
+}
+
+function childFinished(sequence: number, childSessionId = "child-session"): RecordedTraceEvent {
+  return recorded(sequence, {
+    childSessionId,
+    parentCallId: "delegate",
+    profile: "research",
+    round: sequence,
+    runInBackground: true,
+    status: "completed",
+    tracePath: `/private/${childSessionId}.jsonl`,
+    type: "child_session_finished",
+  });
+}
+
+function childHandoff(sequence: number, childSessionId = "child-session"): RecordedTraceEvent {
+  return recorded(sequence, {
+    childSessionId,
+    finalAnswer: "CHILD_TOKEN=delta",
+    parentCallId: "delegate",
+    profile: "research",
+    round: sequence,
+    tracePath: `/private/${childSessionId}.jsonl`,
+    type: "child_session_handoff",
+  });
+}
+
+function teammateRegistered(
+  sequence: number,
+  name: "protocol-editor" | "protocol-researcher",
+): RecordedTraceEvent {
+  return recorded(sequence, {
+    name,
+    profile: name === "protocol-editor" ? "edit" : "research",
+    sessionId: `${name}-session`,
+    state: "starting",
+    tracePath: `/private/${name}.jsonl`,
+    type: "teammate_registered",
+    unreadCount: 0,
+  });
+}
+
+function passedVerification(sequence: number): RecordedTraceEvent {
+  return recorded(sequence, {
+    exitCode: 0,
+    name: "command",
+    round: sequence,
+    status: "passed",
+    summary: "verification passed",
+    type: "verification_result",
+  });
+}
+
+function c17cEvidence(rootEvents: RecordedTraceEvent[] = []): EvalAttemptEvidence {
+  return baseEvidence("c17c-team-completion", rootEvents);
+}
+
+function requiredTask(graph: TeamTaskGraphFile, id: string) {
+  const found = graph.tasks.find((task) => task.id === id);
+  if (!found) {
+    throw new Error(`missing test task ${id}`);
+  }
+  return found;
+}
+
 describe("canonical eval scenarios", () => {
   it("registers the fixed 13-attempt suite with serializable manifests", () => {
     const scenarios = listEvalScenarios();
@@ -217,6 +293,126 @@ describe("canonical eval scenarios", () => {
     const grade = getEvalScenario("async-child-handoff").grade(evidence);
 
     expect(assertionStatus(grade, "handoff-before-final")).toBe("failed");
+  });
+
+  it("does not treat an extra ordered recovery cycle as a hard ordering contradiction", () => {
+    const evidence = baseEvidence("verification-recovery", [
+      recorded(1, {
+        exitCode: 1,
+        name: "eval-recovery",
+        round: 1,
+        status: "failed",
+        summary: "first failure",
+        type: "verification_result",
+      }),
+      recorded(2, {
+        attempt: 1,
+        maxAttempts: 2,
+        round: 1,
+        summary: "first recovery",
+        type: "recovery_attempt",
+      }),
+      recorded(3, {
+        exitCode: 1,
+        name: "eval-recovery",
+        round: 2,
+        status: "failed",
+        summary: "second failure",
+        type: "verification_result",
+      }),
+      recorded(4, {
+        attempt: 2,
+        maxAttempts: 2,
+        round: 2,
+        summary: "second recovery",
+        type: "recovery_attempt",
+      }),
+      passedVerification(5),
+      recorded(6, { answer: "RECOVERY_OK", round: 3, type: "final_answer" }),
+    ]);
+
+    const grade = getEvalScenario("verification-recovery").grade(evidence);
+
+    expect(assertionStatus(grade, "verification-order")).toBe("unavailable");
+  });
+
+  it("fails pinned-task retention when a post-compaction request loses the task", () => {
+    const evidence = baseEvidence("compaction-retention", [recorded(1, {
+      afterCharCount: 250,
+      beforeCharCount: 2_000,
+      compactedRoundCount: 1,
+      keptRecentRoundCount: 1,
+      missingHeadings: [],
+      omittedSourceCharCount: 0,
+      reason: "soft budget",
+      round: 1,
+      sourceItemCount: 2,
+      sourceRoundCount: 1,
+      summary: "retained context",
+      summaryCharCount: 16,
+      trigger: "auto",
+      type: "context_compacted",
+    })]);
+    evidence.modelRequestChecks = [{ afterCompaction: true, pinnedTaskPresent: false, round: 2 }];
+
+    const grade = getEvalScenario("compaction-retention").grade(evidence);
+
+    expect(assertionStatus(grade, "pinned-task-retained")).toBe("failed");
+  });
+
+  it.each(["absent", "root-aliased", "duplicate"] as const)(
+    "fails separate child trace evidence when the trace is %s",
+    (variant) => {
+      const childSessionId = variant === "root-aliased" ? "root-session" : "child-session";
+      const evidence = baseEvidence("async-child-handoff", [childStarted(1, childSessionId)]);
+      if (variant === "duplicate") {
+        evidence.sessions.push(
+          session("child", [], { sessionId: childSessionId }),
+          session("child", [], { sessionId: childSessionId }),
+        );
+      }
+
+      const grade = getEvalScenario("async-child-handoff").grade(evidence);
+
+      expect(assertionStatus(grade, "separate-child-trace")).toBe("failed");
+    },
+  );
+
+  it("fails duplicate child handoffs before root final", () => {
+    const evidence = baseEvidence("async-child-handoff", [
+      childStarted(1),
+      childHandoff(2),
+      childHandoff(3),
+      recorded(4, { answer: "wrong", round: 4, type: "final_answer" }),
+    ]);
+
+    const grade = getEvalScenario("async-child-handoff").grade(evidence);
+
+    expect(assertionStatus(grade, "handoff-before-final")).toBe("failed");
+  });
+
+  it("checks every root final that follows a child start", () => {
+    const evidence = baseEvidence("async-child-handoff", [
+      recorded(1, { answer: "early", round: 1, type: "final_answer" }),
+      childStarted(2),
+      recorded(3, { answer: "late", round: 3, type: "final_answer" }),
+    ]);
+
+    const grade = getEvalScenario("async-child-handoff").grade(evidence);
+
+    expect(assertionStatus(grade, "handoff-before-final")).toBe("failed");
+  });
+
+  it("fails pending-zero when child finish occurs after root session end", () => {
+    const evidence = baseEvidence("async-child-handoff", [
+      childStarted(1),
+      recorded(2, { rounds: 2, status: "completed", type: "session_ended" }),
+      childFinished(3),
+    ]);
+
+    const grade = getEvalScenario("async-child-handoff").grade(evidence);
+
+    expect(assertionStatus(grade, "pending-zero")).toBe("failed");
   });
 
   it("requires exactly one failed verification recovery before the final answer", () => {
@@ -467,6 +663,8 @@ describe("canonical eval scenarios", () => {
 
     expect(assertionStatus(grade, "artifact-exact")).toBe("passed");
     expect(assertionStatus(grade, "task-ownership")).toBe("passed");
+    expect(assertionStatus(grade, "plugin-activation")).toBe("passed");
+    expect(assertionStatus(grade, "research-evidence-origin")).toBe("passed");
     expect(assertionStatus(grade, "edit-plan-before-write")).toBe("passed");
     expect(assertionStatus(grade, "fingerprint-and-receipt")).toBe("passed");
     expect(assertionStatus(grade, "team-quiescent")).toBe("passed");
@@ -482,6 +680,181 @@ describe("canonical eval scenarios", () => {
     }));
     const duplicateLookupGrade = getEvalScenario("c17c-team-completion").grade(evidence);
     expect(assertionStatus(duplicateLookupGrade, "plugin-lookup")).toBe("failed");
+  });
+
+  it("fails team quiescence when shutdown calls occur only after root final", () => {
+    const evidence = c17cEvidence([
+      teammateRegistered(1, "protocol-researcher"),
+      teammateRegistered(2, "protocol-editor"),
+      recorded(3, { answer: "premature", round: 3, type: "final_answer" }),
+      ...callEvents({
+        arguments: { mode: "shutdown", name: "protocol-researcher" },
+        callId: "late-stop-researcher",
+        name: "teammate_shutdown",
+        sequence: 4,
+      }),
+      ...callEvents({
+        arguments: { mode: "shutdown", name: "protocol-editor" },
+        callId: "late-stop-editor",
+        name: "teammate_shutdown",
+        sequence: 7,
+      }),
+    ]);
+    evidence.team = {
+      leaderUnreadCount: 0,
+      members: [
+        { name: "protocol-editor", state: "stopped", unreadCount: 0 },
+        { name: "protocol-researcher", state: "stopped", unreadCount: 0 },
+      ],
+    };
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "team-quiescent")).toBe("failed");
+  });
+
+  it("checks every root final after teammate registration for earlier shutdowns", () => {
+    const evidence = c17cEvidence([
+      recorded(1, { answer: "before team", round: 1, type: "final_answer" }),
+      teammateRegistered(2, "protocol-researcher"),
+      teammateRegistered(3, "protocol-editor"),
+      recorded(4, { answer: "after team", round: 4, type: "final_answer" }),
+      ...callEvents({
+        arguments: { mode: "shutdown", name: "protocol-researcher" },
+        callId: "late-stop-researcher",
+        name: "teammate_shutdown",
+        sequence: 5,
+      }),
+      ...callEvents({
+        arguments: { mode: "shutdown", name: "protocol-editor" },
+        callId: "late-stop-editor",
+        name: "teammate_shutdown",
+        sequence: 8,
+      }),
+    ]);
+    evidence.team = {
+      leaderUnreadCount: 0,
+      members: [
+        { name: "protocol-editor", state: "stopped", unreadCount: 0 },
+        { name: "protocol-researcher", state: "stopped", unreadCount: 0 },
+      ],
+    };
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "team-quiescent")).toBe("failed");
+  });
+
+  it("fails completion-before-final after verification when integration is missing", () => {
+    const evidence = c17cEvidence([
+      passedVerification(1),
+      recorded(2, { answer: "premature", round: 2, type: "final_answer" }),
+    ]);
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "completion-before-final")).toBe("failed");
+  });
+
+  it("fails an observed contradictory plugin activation contract", () => {
+    const evidence = c17cEvidence([recorded(1, {
+      components: {
+        hooks: {
+          active: [],
+          declared: ["issue-workflow:audit"],
+          failed: [{ id: "issue-workflow:audit", reason: "fixture failure" }],
+        },
+        mcpServers: {
+          active: [],
+          declared: ["issue-workflow-demo"],
+          failed: [{ id: "issue-workflow-demo", reason: "fixture failure" }],
+        },
+        skills: {
+          active: [],
+          declared: ["issue-workflow:triage"],
+          failed: [{ id: "issue-workflow:triage", reason: "fixture failure" }],
+        },
+      },
+      pluginName: "issue-workflow",
+      status: "failed",
+      tools: {
+        declared: ["mcp_issue-workflow-demo_lookup_issue"],
+        denied: [],
+        exposed: [],
+        extra: [],
+        incompatible: [],
+        missing: ["mcp_issue-workflow-demo_lookup_issue"],
+      },
+      type: "plugin_activation_result",
+      version: "0.1.0",
+    })]);
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "plugin-activation")).toBe("failed");
+  });
+
+  it("fails observed c17c task ownership and research-origin contradictions", () => {
+    const ownershipGraph = completedC17cGraph();
+    requiredTask(ownershipGraph, "task_002").owner = { role: "leader" };
+    const ownershipEvidence = c17cEvidence();
+    ownershipEvidence.taskGraph = ownershipGraph;
+
+    const originGraph = completedC17cGraph();
+    const task1Evidence = requiredTask(originGraph, "task_001").evidence[0];
+    if (!task1Evidence) {
+      throw new Error("missing task_001 test evidence");
+    }
+    task1Evidence.reportedByRole = "leader";
+    const originEvidence = c17cEvidence();
+    originEvidence.taskGraph = originGraph;
+
+    expect(assertionStatus(
+      getEvalScenario("c17c-team-completion").grade(ownershipEvidence),
+      "task-ownership",
+    )).toBe("failed");
+    expect(assertionStatus(
+      getEvalScenario("c17c-team-completion").grade(originEvidence),
+      "research-evidence-origin",
+    )).toBe("failed");
+  });
+
+  it("fails an editor write before plan approval", () => {
+    const graph = completedC17cGraph();
+    const evidence = c17cEvidence();
+    evidence.taskGraph = graph;
+    evidence.sessions.push(session("teammate", callEvents({
+      arguments: {
+        content: "issue: FH-16\nstatus: integrated by c17c\n",
+        path: "c17c-coordination-demo.txt",
+      },
+      callId: "early-write",
+      name: "write",
+      sequence: 1,
+      sessionId: "editor-session",
+    }).map((event) => ({ ...event, timestamp: "2026-08-02T23:59:00.000Z" })), {
+      name: "protocol-editor",
+      profile: "edit",
+    }));
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "edit-plan-before-write")).toBe("failed");
+  });
+
+  it("fails contradictory submission, verdict, and receipt fingerprints", () => {
+    const graph = completedC17cGraph();
+    const task3 = requiredTask(graph, "task_003");
+    if (!task3.integrationReceipt) {
+      throw new Error("missing task_003 integration receipt");
+    }
+    task3.integrationReceipt.fingerprint = "different-fingerprint";
+    const evidence = c17cEvidence();
+    evidence.taskGraph = graph;
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "fingerprint-and-receipt")).toBe("failed");
   });
 });
 

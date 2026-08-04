@@ -380,9 +380,11 @@ function gradeVerificationRecovery(evidence: EvalAttemptEvidence): EvalGrade {
     && (failed[0]?.sequence ?? Infinity) < (recoveries[0]?.sequence ?? -1)
     && (recoveries[0]?.sequence ?? Infinity) < (passed[0]?.sequence ?? -1)
     && (passed[0]?.sequence ?? Infinity) < (finals[0]?.sequence ?? -1);
-  const recoveryPrecedesFailure = recoveries.some((recovery) => (
-    failed.some((failure) => recovery.sequence < failure.sequence)
-  ));
+  const recoveryPrecedesFailure = recoveries.some((recovery) => {
+    const earlierFailureCount = failed.filter((failure) => failure.sequence < recovery.sequence).length;
+    const earlierRecoveryCount = recoveries.filter((other) => other.sequence < recovery.sequence).length;
+    return earlierFailureCount <= earlierRecoveryCount;
+  });
   const finalLacksEarlierPass = mechanismObserved && finals.some((final) => (
     !passed.some((verification) => verification.sequence < final.sequence)
   ));
@@ -441,7 +443,7 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
   const started = root.events.filter(isEvent("child_session_started"));
   const finished = root.events.filter(isEvent("child_session_finished"));
   const handoffs = root.events.filter(isEvent("child_session_handoff"));
-  const final = root.events.find(isEvent("final_answer"));
+  const finals = root.events.filter(isEvent("final_answer"));
   const sessionEnded = root.events.find(isEvent("session_ended"));
   const startedIds = started.map((event) => event.childSessionId);
   const separateChildTraceViolated = new Set(startedIds).size !== startedIds.length
@@ -449,17 +451,27 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
       start.childSessionId === root.sessionId
       || childSessions.filter((child) => child.sessionId === start.childSessionId).length !== 1
     ));
-  const handoffBeforeFinalViolated = Boolean(final) && started
-    .filter((start) => start.sequence < (final?.sequence ?? -1))
-    .some((start) => {
-      const matches = handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId);
-      return matches.length !== 1
-        || (matches[0]?.sequence ?? -1) <= start.sequence
-        || (matches[0]?.sequence ?? Infinity) >= (final?.sequence ?? -1);
-    });
-  const pendingAtSessionEnd = Boolean(sessionEnded) && started.some((start) => (
-    !finished.some((terminal) => terminal.childSessionId === start.childSessionId)
-  ));
+  const validHandoffBeforeFinal = (
+    start: (typeof started)[number],
+    final: (typeof finals)[number],
+  ): boolean => {
+    const matches = handoffs.filter((handoff) => (
+      handoff.childSessionId === start.childSessionId && handoff.sequence < final.sequence
+    ));
+    return matches.length === 1 && start.sequence < (matches[0]?.sequence ?? -1);
+  };
+  const handoffBeforeFinalViolated = finals.some((final) => started
+    .filter((start) => start.sequence < final.sequence)
+    .some((start) => !validHandoffBeforeFinal(start, final)));
+  const hasQualifyingFinish = (start: (typeof started)[number]): boolean => Boolean(sessionEnded)
+    && finished.some((terminal) => (
+      terminal.childSessionId === start.childSessionId
+      && start.sequence < terminal.sequence
+      && terminal.sequence < (sessionEnded?.sequence ?? -1)
+    ));
+  const pendingAtSessionEnd = Boolean(sessionEnded) && started
+    .filter((start) => start.sequence < (sessionEnded?.sequence ?? -1))
+    .some((start) => !hasQualifyingFinish(start));
   const rootReadPaths = toolCalls(root).filter((call) => call.toolName === "read").map((call) => jsonPath(call.argumentsText));
   const childReadPaths = childSessions.flatMap((child) => toolCalls(child)
     .filter((call) => call.toolName === "read")
@@ -486,21 +498,18 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
     }),
     hardEvidence("handoff-before-final", {
       complete: started.length > 0
-        && Boolean(final)
+        && started.every((start) => finals.some((final) => start.sequence < final.sequence))
+        && !handoffBeforeFinalViolated
         && started.every((start) => {
-          const matches = handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId);
-          return matches.length === 1
-            && start.sequence < (matches[0]?.sequence ?? -1)
-            && (matches[0]?.sequence ?? Infinity) < (final?.sequence ?? -1);
+          const laterFinals = finals.filter((final) => start.sequence < final.sequence);
+          return laterFinals.every((final) => validHandoffBeforeFinal(start, final));
         }),
       violated: handoffBeforeFinalViolated,
     }),
     hardEvidence("pending-zero", {
       complete: started.length > 0
         && Boolean(sessionEnded)
-        && started.every((start) => (
-          finished.some((terminal) => terminal.childSessionId === start.childSessionId)
-        )),
+        && started.every((start) => hasQualifyingFinish(start)),
       violated: pendingAtSessionEnd,
     }),
     hard("git-unchanged", gitUnchanged(evidence)),
@@ -530,15 +539,18 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
     .filter(Number.isFinite)
     .sort((left, right) => left - right)[0];
   const planApprovedAt = task3?.plan?.approvedAt ? Date.parse(task3.plan.approvedAt) : undefined;
-  const final = root.events.find(isEvent("final_answer"));
-  const verification = root.events.filter(isEvent("verification_result")).find((event) => event.status === "passed");
+  const finals = root.events.filter(isEvent("final_answer"));
+  const final = finals[0];
+  const verificationResults = root.events.filter(isEvent("verification_result"));
+  const verification = verificationResults.find((event) => event.status === "passed");
   const integrateCall = rootCalls.find((call) => call.toolName === "task_integrate");
   const completionGateFailures = root.events.filter(isEvent("completion_gate_failed"));
   const teammateRegistrations = root.events.filter(isEvent("teammate_registered"));
-  const shutdownNames = rootCalls
+  const shutdownCalls = rootCalls
     .filter((call) => call.toolName === "teammate_shutdown")
-    .map((call) => parseObject(call.argumentsText)?.name)
-    .filter((name): name is string => typeof name === "string");
+    .map((call) => ({ name: parseObject(call.argumentsText)?.name, sequence: call.sequence }))
+    .filter((call): call is { name: string; sequence: number } => typeof call.name === "string");
+  const shutdownNames = shutdownCalls.map((call) => call.name);
   const expectedMemberNames = ["protocol-editor", "protocol-researcher"];
   const externalTask1Roles = externalEvidenceRoles(task1);
   const externalTask2Roles = externalEvidenceRoles(task2);
@@ -564,36 +576,36 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
   const expectedTeamMembers = expectedMemberNames
     .map((name) => evidence.team?.members.find((member) => member.name === name))
     .filter((member) => member !== undefined);
-  const registeredExpectedNames = teammateRegistrations
-    .map((registration) => registration.name)
-    .filter((name) => expectedMemberNames.includes(name));
   const teamQuiescentComplete = expectedMemberNames.every((name) => (
     evidence.team?.members.some((member) => (
       member.name === name && member.state === "stopped" && member.unreadCount === 0
     ))
     && shutdownNames.includes(name)
   )) && evidence.team?.leaderUnreadCount === 0;
-  const finalAfterRegistration = Boolean(final) && teammateRegistrations.some((registration) => (
-    registration.sequence < (final?.sequence ?? -1)
+  const finalsAfterRegistration = finals.filter((candidateFinal) => (
+    teammateRegistrations.some((registration) => registration.sequence < candidateFinal.sequence)
   ));
   const teamQuiescentViolated = (teammateRegistrations.length > 0 || expectedTeamMembers.length > 0) && (
     expectedTeamMembers.some((member) => member.state !== "stopped" || member.unreadCount > 0)
     || (evidence.team?.leaderUnreadCount ?? 0) > 0
-    || (finalAfterRegistration && registeredExpectedNames.some((name) => !shutdownNames.includes(name)))
+    || finalsAfterRegistration.some((candidateFinal) => expectedMemberNames.some((name) => (
+      !shutdownCalls.some((call) => call.name === name && call.sequence < candidateFinal.sequence)
+    )))
   );
   const completionMechanismObserved = Boolean(task1 || task2 || task3 || integrateCall)
+    || verificationResults.length > 0
     || completionGateFailures.length > 0;
   const completionBeforeFinalComplete = Boolean(final && verification && integrateCall)
     && (verification?.sequence ?? Infinity) < (final?.sequence ?? -1)
     && (integrateCall?.sequence ?? Infinity) < (final?.sequence ?? -1)
     && completionGateFailures.length === 0;
-  const completionBeforeFinalViolated = Boolean(final) && completionMechanismObserved && (
+  const completionBeforeFinalViolated = completionMechanismObserved && finals.some((candidateFinal) => (
     !verification
-    || (verification.sequence ?? Infinity) >= (final?.sequence ?? -1)
+    || verification.sequence >= candidateFinal.sequence
     || !integrateCall
-    || (integrateCall.sequence ?? Infinity) >= (final?.sequence ?? -1)
-    || completionGateFailures.some((failure) => failure.sequence < (final?.sequence ?? -1))
-  );
+    || integrateCall.sequence >= candidateFinal.sequence
+    || completionGateFailures.some((failure) => failure.sequence < candidateFinal.sequence)
+  ));
   const assertions = [
     outcome(
       "plugin-lookup",
