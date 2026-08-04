@@ -517,6 +517,58 @@ describe("eval trace evidence", () => {
     expect(new Set(events.map((event) => event.type))).toEqual(new Set(Object.keys(VALID_TRACE_PAYLOADS)));
   });
 
+  it("accepts producer-recorded session limits before Runtime validation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-evidence-"));
+    tempRoots.push(root);
+    const tracePath = path.join(root, "pre-validation-session-started.jsonl");
+    const maxToolRounds = [0, -3, 1.5];
+    const lines = maxToolRounds.map((value, index) => JSON.stringify({
+      cwd: "/repo",
+      maxToolRounds: value,
+      model: "gpt-test",
+      sequence: index + 1,
+      sessionId: "root",
+      task: "inspect",
+      timestamp: "2026-08-03T00:00:00.000Z",
+      type: "session_started",
+    }));
+    await fs.writeFile(tracePath, `${lines.join("\n")}\n`, "utf8");
+
+    const events = await readEvalTrace(tracePath);
+
+    expect(events.map((event) => (
+      event.type === "session_started" ? event.maxToolRounds : undefined
+    ))).toEqual(maxToolRounds);
+  });
+
+  it("rejects non-number and non-finite session limits after JSON serialization", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-evidence-"));
+    tempRoots.push(root);
+    const invalidValues: unknown[] = [null, "3", Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+    for (const [index, maxToolRounds] of invalidValues.entries()) {
+      const tracePath = path.join(root, `invalid-session-limit-${index}.jsonl`);
+      const serialized = JSON.stringify({
+        cwd: "/repo",
+        maxToolRounds,
+        model: "gpt-test",
+        sequence: 1,
+        sessionId: "root",
+        task: "inspect",
+        timestamp: "2026-08-03T00:00:00.000Z",
+        type: "session_started",
+      });
+      await fs.writeFile(tracePath, `${serialized}\n`, "utf8");
+
+      if (typeof maxToolRounds === "number" && !Number.isFinite(maxToolRounds)) {
+        expect(JSON.parse(serialized)).toMatchObject({ maxToolRounds: null });
+      }
+      await expect(readEvalTrace(tracePath), `invalid maxToolRounds fixture ${index}`).rejects.toThrow(
+        /invalid trace event.*line 1/,
+      );
+    }
+  });
+
   it("rejects invalid envelopes, unexpected fields, and nested trace payloads", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-evidence-"));
     tempRoots.push(root);

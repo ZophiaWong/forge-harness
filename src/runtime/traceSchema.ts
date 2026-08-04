@@ -411,7 +411,7 @@ const recordedTraceEventSchema = z.discriminatedUnion("type", [
   recorded({
     baseCwd: nonEmptyString.optional(),
     cwd: nonEmptyString,
-    maxToolRounds: positiveSafeInteger,
+    maxToolRounds: z.number().finite(),
     model: nonEmptyString,
     task: z.string(),
     type: z.literal("session_started"),
