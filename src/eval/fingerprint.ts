@@ -41,7 +41,7 @@ export function buildExperimentIdentity(options: BuildExperimentIdentityOptions)
   const requestFingerprint = fingerprint(options.requestSettings);
   const contractDigests = Object.fromEntries(
     Object.entries(options.contractSources)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareStableStrings(left, right))
       .map(([key, source]) => [key, fingerprint(source)]),
   );
   const suiteFingerprint = fingerprint({
@@ -51,7 +51,7 @@ export function buildExperimentIdentity(options: BuildExperimentIdentityOptions)
         id: scenario.id,
         manifest: scenario.manifest,
       }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
+      .sort((left, right) => compareStableStrings(left.id, right.id)),
   });
   const comparable = {
     endpointHash,
@@ -87,9 +87,13 @@ function toCanonicalValue(value: unknown): CanonicalValue {
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
     return Object.fromEntries(Object.keys(record)
-      .sort((left, right) => left.localeCompare(right))
+      .sort(compareStableStrings)
       .map((key) => [key, toCanonicalValue(record[key])]));
   }
 
   throw new Error(`canonical JSON does not support ${typeof value}`);
+}
+
+function compareStableStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

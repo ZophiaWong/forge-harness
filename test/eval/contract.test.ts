@@ -9,6 +9,7 @@ import {
   loadEvalContractSources,
   loadEvalContractSourcesFrom,
 } from "../../src/eval/contract.js";
+import { buildExperimentIdentity } from "../../src/eval/fingerprint.js";
 
 const tempRoots: string[] = [];
 const executableExtensions: Array<".js" | ".ts"> = [".ts", ".js"];
@@ -51,17 +52,18 @@ afterEach(async () => {
 
 describe("eval contract source loader", () => {
   it("loads the explicit executable module and recursive fixture key set in sorted order", async () => {
-    const sources = await loadEvalContractSources();
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const sources = await loadEvalContractSources(repositoryRoot);
 
     expect(Object.keys(sources)).toEqual(expectedRepositoryKeys);
     expect(sources["eval/scenarios"])
-      .toBe(await fs.readFile(path.join(repositoryRoot, "src", "eval", "scenarios.ts"), "utf8"));
+      .toBe(`base64:${(await fs.readFile(
+        path.join(repositoryRoot, "src", "eval", "scenarios.ts"),
+      )).toString("base64")}`);
     expect(sources["fixture/issue-workflow/skills/triage/SKILL.md"])
-      .toBe(await fs.readFile(
+      .toBe(`base64:${(await fs.readFile(
         path.join(repositoryRoot, "examples", "plugins", "issue-workflow", "skills", "triage", "SKILL.md"),
-        "utf8",
-      ));
+      )).toString("base64")}`);
   });
 
   it.each(executableExtensions)("selects only the executing module's %s siblings", async (extension) => {
@@ -69,12 +71,52 @@ describe("eval contract source loader", () => {
     const otherExtension = extension === ".ts" ? ".js" : ".ts";
     await writeSyntheticModules(tree.evalDirectory, otherExtension, "wrong-extension");
 
-    const sources = await loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href);
+    const sources = await loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root);
 
     expect(Object.keys(sources)).toEqual(expectedSyntheticKeys);
-    expect(sources["eval/bootstrap"]).toBe(`selected:${extension}:eval/bootstrap\n`);
-    expect(sources["runtime/traceSchema"]).toBe(`selected:${extension}:runtime/traceSchema\n`);
+    expect(sources["eval/bootstrap"])
+      .toBe(`base64:${Buffer.from(`selected:${extension}:eval/bootstrap\n`).toString("base64")}`);
+    expect(sources["runtime/traceSchema"])
+      .toBe(`base64:${Buffer.from(`selected:${extension}:runtime/traceSchema\n`).toString("base64")}`);
     expect(Object.values(sources).join("\n")).not.toContain("wrong-extension");
+  });
+
+  it("uses fixture bytes from the runtime repository rather than the executable module repository", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime-v1\n");
+    const moduleUrl = pathToFileURL(codeTree.modulePath).href;
+
+    const initial = identity(await loadEvalContractSourcesFrom(moduleUrl, runtimeTree.root));
+    await fs.writeFile(path.join(codeTree.fixtureRoot, "plugin.json"), "code-tree-mutated\n", "utf8");
+    const codeFixtureChanged = identity(await loadEvalContractSourcesFrom(moduleUrl, runtimeTree.root));
+    await fs.writeFile(path.join(runtimeTree.fixtureRoot, "plugin.json"), "runtime-v2\n", "utf8");
+    const runtimeFixtureChanged = identity(await loadEvalContractSourcesFrom(moduleUrl, runtimeTree.root));
+
+    expect(codeFixtureChanged).toEqual(initial);
+    expect(runtimeFixtureChanged.suiteFingerprint).not.toBe(initial.suiteFingerprint);
+  });
+
+  it("rejects a runtime repository that does not contain the expected fixture tree", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const invalidRuntimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-invalid-runtime-"));
+    tempRoots.push(invalidRuntimeRoot);
+
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(codeTree.modulePath).href, invalidRuntimeRoot))
+      .rejects.toThrow(/runtime repository.*issue-workflow|fixture root.*directory/i);
+  });
+
+  it("preserves invalid UTF-8 bytes without replacement-character collisions", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository(Buffer.from([0x80]));
+    const moduleUrl = pathToFileURL(codeTree.modulePath).href;
+
+    const firstSources = await loadEvalContractSourcesFrom(moduleUrl, runtimeTree.root);
+    await fs.writeFile(path.join(runtimeTree.fixtureRoot, "plugin.json"), Buffer.from([0x81]));
+    const secondSources = await loadEvalContractSourcesFrom(moduleUrl, runtimeTree.root);
+
+    expect(firstSources["fixture/issue-workflow/plugin.json"]).toBe("base64:gA==");
+    expect(secondSources["fixture/issue-workflow/plugin.json"]).toBe("base64:gQ==");
+    expect(identity(secondSources).suiteFingerprint).not.toBe(identity(firstSources).suiteFingerprint);
   });
 
   it("rejects a symlinked fixture root before reading it", async () => {
@@ -85,7 +127,7 @@ describe("eval contract source loader", () => {
     await fs.rm(tree.fixtureRoot, { recursive: true });
     await fs.symlink(external, tree.fixtureRoot, "dir");
 
-    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href))
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root))
       .rejects.toThrow(/fixture root.*symbolic link/i);
   });
 
@@ -96,7 +138,7 @@ describe("eval contract source loader", () => {
     await fs.writeFile(path.join(external, "secret.txt"), "must-not-read\n", "utf8");
     await fs.symlink(external, path.join(tree.fixtureRoot, "linked-directory"), "dir");
 
-    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href))
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root))
       .rejects.toThrow(/fixture entry.*symbolic link/i);
   });
 
@@ -106,15 +148,82 @@ describe("eval contract source loader", () => {
     await fs.writeFile(external, "must-not-read\n", "utf8");
     await fs.symlink(external, path.join(tree.fixtureRoot, "linked-file.txt"), "file");
 
-    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href))
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root))
       .rejects.toThrow(/fixture entry.*symbolic link/i);
+  });
+
+  it("rejects a symlinked ancestor in the runtime fixture path", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    const externalPlugins = path.join(runtimeTree.root, "external-plugins");
+    await fs.rename(path.join(runtimeTree.root, "examples", "plugins"), externalPlugins);
+    await fs.symlink(externalPlugins, path.join(runtimeTree.root, "examples", "plugins"), "dir");
+
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(codeTree.modulePath).href, runtimeTree.root))
+      .rejects.toThrow(/fixture.*ancestor|physical directory|symbolic link/i);
+  });
+
+  it("rejects a symlinked ancestor in the executable module path", async () => {
+    const tree = await createSyntheticContractTree(".ts");
+    const runtimeDirectory = path.join(tree.evalDirectory, "..", "runtime");
+    const externalRuntime = path.join(tree.root, "external-runtime");
+    await fs.rename(runtimeDirectory, externalRuntime);
+    await fs.symlink(externalRuntime, runtimeDirectory, "dir");
+
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root))
+      .rejects.toThrow(/module.*ancestor|physical directory|symbolic link/i);
+  });
+
+  it("rejects a file whose pathname identity changes after descriptor open", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    const external = path.join(runtimeTree.root, "external-file.txt");
+    await fs.writeFile(external, "outside bytes\n", "utf8");
+    let swapped = false;
+
+    await expect(loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+      {
+        async afterFileOpen({ key, pathname }) {
+          if (key !== "fixture/issue-workflow/plugin.json" || swapped) {
+            return;
+          }
+          swapped = true;
+          await fs.rename(pathname, `${pathname}.original`);
+          await fs.symlink(external, pathname, "file");
+        },
+      },
+    )).rejects.toThrow(/changed while reading|identity mismatch/i);
+    expect(swapped).toBe(true);
+  });
+
+  it("sorts Unicode fixture keys locale-independently without collapsing equivalent names", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    await fs.writeFile(path.join(runtimeTree.fixtureRoot, "z.txt"), "z\n", "utf8");
+    await fs.writeFile(path.join(runtimeTree.fixtureRoot, "ä.txt"), "precomposed\n", "utf8");
+    await fs.writeFile(path.join(runtimeTree.fixtureRoot, "a\u0308.txt"), "decomposed\n", "utf8");
+
+    const sources = await loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+    );
+
+    expect(Object.keys(sources).filter((key) => key.startsWith("fixture/"))).toEqual([
+      "fixture/issue-workflow/a\u0308.txt",
+      "fixture/issue-workflow/nested/data.txt",
+      "fixture/issue-workflow/plugin.json",
+      "fixture/issue-workflow/z.txt",
+      "fixture/issue-workflow/ä.txt",
+    ]);
   });
 
   it("rejects a missing expected contract module", async () => {
     const tree = await createSyntheticContractTree(".ts");
     await fs.rm(path.join(tree.evalDirectory, "runner.ts"));
 
-    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href))
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root))
       .rejects.toThrow(/eval\/runner.*regular file/i);
   });
 
@@ -124,7 +233,7 @@ describe("eval contract source loader", () => {
     await fs.rm(policyPath);
     await fs.mkdir(policyPath);
 
-    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href))
+    await expect(loadEvalContractSourcesFrom(pathToFileURL(tree.modulePath).href, tree.root))
       .rejects.toThrow(/eval\/policy.*regular file/i);
   });
 });
@@ -134,6 +243,32 @@ interface SyntheticContractTree {
   fixtureRoot: string;
   modulePath: string;
   root: string;
+}
+
+interface RuntimeRepository {
+  fixtureRoot: string;
+  root: string;
+}
+
+async function createRuntimeRepository(pluginBytes: Buffer | string): Promise<RuntimeRepository> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-runtime-root-"));
+  tempRoots.push(root);
+  const fixtureRoot = path.join(root, "examples", "plugins", "issue-workflow");
+  await fs.mkdir(path.join(fixtureRoot, "nested"), { recursive: true });
+  await fs.writeFile(path.join(fixtureRoot, "plugin.json"), pluginBytes);
+  await fs.writeFile(path.join(fixtureRoot, "nested", "data.txt"), "recursive fixture\n", "utf8");
+  return { fixtureRoot, root };
+}
+
+function identity(contractSources: Record<string, string>) {
+  return buildExperimentIdentity({
+    contractSources,
+    endpoint: "https://api.openai.com/v1",
+    model: "gpt-test",
+    providerId: "openai",
+    requestSettings: { reasoning: { effort: "low" } },
+    scenarios: [{ id: "governed-read-only", manifest: { graderVersion: 1 } }],
+  });
 }
 
 async function createSyntheticContractTree(extension: ".js" | ".ts"): Promise<SyntheticContractTree> {

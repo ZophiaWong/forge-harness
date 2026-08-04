@@ -25,6 +25,15 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
 });
 
+async function createRuntimeRepository(prefix: string): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempRoots.push(root);
+  const fixtureRoot = path.join(root, "examples", "plugins", "issue-workflow");
+  await fs.mkdir(fixtureRoot, { recursive: true });
+  await fs.writeFile(path.join(fixtureRoot, "plugin.json"), "{\"enabled\":true}\n", "utf8");
+  return root;
+}
+
 function fakeAttempt(
   scenarioId: string,
   ordinal: number,
@@ -61,15 +70,14 @@ function fakeAttempt(
 
 describe("eval suite runner", () => {
   it("fingerprints injected contract bytes without serializing their contents", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-contract-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-contract-");
     const attemptRunner = async (input: Parameters<NonNullable<Parameters<typeof runEvalSuite>[0]["attemptRunner"]>>[0]) => (
       fakeAttempt(input.scenario.id, input.ordinal)
     );
-    const firstSource = "/* eval-contract-secret-first */";
-    const secondSource = "/* eval-contract-secret-second */";
-    const firstLoader = vi.fn(async () => ({ "eval/scenarios": firstSource }));
-    const secondLoader = vi.fn(async () => ({ "eval/scenarios": secondSource }));
+    const firstSource = "base64:gA==";
+    const secondSource = "base64:gQ==";
+    const firstLoader = vi.fn(async (_runtimeRoot: string) => ({ "eval/scenarios": firstSource }));
+    const secondLoader = vi.fn(async (_runtimeRoot: string) => ({ "eval/scenarios": secondSource }));
 
     const first = await runEvalSuite({
       attemptRunner,
@@ -94,8 +102,18 @@ describe("eval suite runner", () => {
 
     expect(firstLoader).toHaveBeenCalledTimes(1);
     expect(secondLoader).toHaveBeenCalledTimes(1);
+    expect(firstLoader).toHaveBeenCalledWith(repositoryRoot);
+    expect(secondLoader).toHaveBeenCalledWith(repositoryRoot);
     expect(second.summary.identity.suiteFingerprint)
       .not.toBe(first.summary.identity.suiteFingerprint);
+    expect(Object.keys(first.summary.identity).sort()).toEqual([
+      "endpointHash",
+      "fingerprint",
+      "model",
+      "providerId",
+      "requestFingerprint",
+      "suiteFingerprint",
+    ]);
     for (const result of [first, second]) {
       const serializedArtifacts = [
         JSON.stringify(result.summary),
@@ -111,8 +129,7 @@ describe("eval suite runner", () => {
   });
 
   it("continues repetitions after behavioral failure with unavailable hard evidence", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-unavailable-hard-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-unavailable-hard-");
     const calls: number[] = [];
 
     const result = await runEvalSuite({
@@ -135,8 +152,7 @@ describe("eval suite runner", () => {
   });
 
   it("runs the canonical attempts serially, continues ordinary failures, and writes a partial invalid report", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-suite-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-suite-");
     await fs.mkdir(path.join(repositoryRoot, ".forge"), { recursive: true });
     const calls: string[] = [];
     let active = 0;
@@ -187,8 +203,7 @@ describe("eval suite runner", () => {
   });
 
   it("compares a scoped scenario against only that scenario in a full baseline", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-scoped-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-scoped-");
     const attemptRunner = vi.fn(async (input: Parameters<NonNullable<Parameters<typeof runEvalSuite>[0]["attemptRunner"]>>[0]) => (
       fakeAttempt(input.scenario.id, input.ordinal)
     ));
@@ -244,8 +259,7 @@ describe("eval suite runner", () => {
   });
 
   it("requires an explicit provider id whenever OPENAI_BASE_URL is customized", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-provider-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-provider-");
 
     await expect(runEvalSuite({
       attemptRunner: vi.fn(),
@@ -257,8 +271,7 @@ describe("eval suite runner", () => {
   });
 
   it("hashes whichever diagnostic tool-definition sources are present", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-diagnostics-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-diagnostics-");
     await fs.mkdir(path.join(repositoryRoot, "src", "tools"), { recursive: true });
     await fs.writeFile(
       path.join(repositoryRoot, "src", "tools", "defaultRuntime.ts"),
@@ -278,8 +291,7 @@ describe("eval suite runner", () => {
   });
 
   it("turns fixture-runner and baseline corruption into partial INVALID reports", async () => {
-    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-corrupt-"));
-    tempRoots.push(repositoryRoot);
+    const repositoryRoot = await createRuntimeRepository("forge-eval-corrupt-");
     const thrown = await runEvalSuite({
       attemptRunner: vi.fn(async () => {
         throw new Error("git init failed");
@@ -292,8 +304,7 @@ describe("eval suite runner", () => {
     expect(thrown.report.verdict).toBe("INVALID");
     expect(thrown.summary).toMatchObject({ issues: ["fixture_error", "partial_suite"], valid: false });
 
-    const cleanRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-corrupt-baseline-"));
-    tempRoots.push(cleanRoot);
+    const cleanRoot = await createRuntimeRepository("forge-eval-corrupt-baseline-");
     const attemptRunner = vi.fn(async (input: Parameters<NonNullable<Parameters<typeof runEvalSuite>[0]["attemptRunner"]>>[0]) => (
       fakeAttempt(input.scenario.id, input.ordinal)
     ));
