@@ -97,6 +97,7 @@ interface ManagedTeammate {
   process?: TeammateProcess;
   processExit?: Deferred<void>;
   processExitObserved?: boolean;
+  processGeneration?: symbol;
   ready?: Deferred<void>;
   recoveryMessageId?: string;
   runtime: TeammateRuntime;
@@ -443,21 +444,40 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   };
 
   const attachProcess = (member: ManagedTeammate, process: TeammateProcess): void => {
+    const generation = Symbol(member.definition.name);
+    const sessionId = member.runtime.sessionId;
+    let exitObserved = false;
     member.process = process;
     member.processExit = createDeferred<void>();
     member.processExitObserved = false;
+    member.processGeneration = generation;
     member.stopRequested = false;
     process.onMessage((message) => {
+      if (
+        exitObserved
+        || member.processExitObserved
+        || member.process !== process
+        || member.processGeneration !== generation
+        || member.runtime.sessionId !== sessionId
+        || message.sessionId !== sessionId
+      ) {
+        return;
+      }
       queueEvent(() => handleWorkerMessage(member, message));
     });
     process.onExit((code, signal) => {
+      exitObserved = true;
+      if (member.process !== process || member.processGeneration !== generation) {
+        return;
+      }
       member.processExitObserved = true;
       member.processExit?.resolve();
       queueEvent(async () => {
-        if (member.process !== process) {
+        if (member.process !== process || member.processGeneration !== generation) {
           return;
         }
         member.process = undefined;
+        member.processGeneration = undefined;
         if (
           !member.stopRequested
           && member.runtime.state !== "failed"
