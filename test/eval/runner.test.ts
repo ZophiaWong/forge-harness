@@ -9,15 +9,23 @@ import type {
   ResponseCreate,
   ResponseCreateRequest,
 } from "../../src/core/minimalLoop.js";
+import type { RunC17cRuntimeOptions } from "../../src/eval/c17c.js";
 import {
   classifyEvalExecutionError,
   runEvalAttempt,
 } from "../../src/eval/runner.js";
 import { getEvalScenario } from "../../src/eval/scenarios.js";
 
+const runC17cRuntimeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../src/eval/c17c.js", () => ({
+  runC17cRuntime: runC17cRuntimeMock,
+}));
+
 const tempRoots: string[] = [];
 
 afterEach(async () => {
+  runC17cRuntimeMock.mockReset();
   await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
 });
 
@@ -41,6 +49,10 @@ describe("eval attempt runner", () => {
   it("distinguishes a blocked verifier from a provider failure", () => {
     expect(classifyEvalExecutionError(new Error("Verification blocked."))).toEqual({
       reasonCode: "verifier_blocked",
+      status: "invalid",
+    });
+    expect(classifyEvalExecutionError(new Error("verifier_timeout"))).toEqual({
+      reasonCode: "verifier_timeout",
       status: "invalid",
     });
   });
@@ -164,6 +176,250 @@ describe("eval attempt runner", () => {
     expect(result.attempt.evidenceRefs).toContain(
       "attempts/governed-read-only/1/root-trace.jsonl",
     );
+  });
+
+  it("awaits aborted workflow teardown before returning timeout evidence", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-timeout-"));
+    tempRoots.push(attemptRoot);
+    const base = getEvalScenario("governed-read-only");
+    const events: string[] = [];
+    const scenario = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        runtime: { ...base.manifest.runtime, workflowTimeoutMs: 100 },
+      },
+    };
+    const responseCreate: ResponseCreate = async (_request, options) => (
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          events.push("aborted");
+          setTimeout(() => {
+            events.push("settled");
+            reject(options.signal?.reason);
+          }, 5);
+        }, { once: true });
+      })
+    );
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/governed-read-only/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario,
+    });
+    events.push("returned");
+
+    expect(result.attempt.execution).toEqual({
+      reasonCode: "workflow_timeout",
+      status: "invalid",
+    });
+    expect(events).toEqual(["aborted", "settled", "returned"]);
+    expect(result.sessions[0]?.events.at(-1)).toMatchObject({
+      status: "failed",
+      type: "session_ended",
+    });
+  });
+
+  it("keeps timeout ownership when the aborted model resolves later", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-timeout-resolve-"));
+    tempRoots.push(attemptRoot);
+    const base = getEvalScenario("governed-read-only");
+    const events: string[] = [];
+    const markerPath = path.join(attemptRoot, "workspace", "teardown.marker");
+    const scenario = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        runtime: { ...base.manifest.runtime, workflowTimeoutMs: 100 },
+      },
+    };
+    const responseCreate: ResponseCreate = async (_request, options) => (
+      new Promise((resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          events.push("aborted");
+          setTimeout(() => {
+            void fs.writeFile(markerPath, "settled\n", "utf8").then(() => {
+              events.push("settled");
+              resolve({ output: [], output_text: "late success" });
+            }, reject);
+          }, 5);
+        }, { once: true });
+      })
+    );
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/governed-read-only/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario,
+    });
+    events.push("returned");
+    const grade = JSON.parse(await fs.readFile(path.join(attemptRoot, "grade.json"), "utf8")) as {
+      git: { after: { statusEntries: string[] } };
+    };
+
+    expect(result.attempt.execution).toEqual({
+      reasonCode: "workflow_timeout",
+      status: "invalid",
+    });
+    expect(events).toEqual(["aborted", "settled", "returned"]);
+    expect(grade.git.after.statusEntries).toContain("?? teardown.marker");
+  });
+
+  it("keeps timeout ownership when the aborted model rejects with another error", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-timeout-reject-"));
+    tempRoots.push(attemptRoot);
+    const base = getEvalScenario("governed-read-only");
+    const events: string[] = [];
+    const scenario = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        runtime: { ...base.manifest.runtime, workflowTimeoutMs: 100 },
+      },
+    };
+    const responseCreate: ResponseCreate = async (_request, options) => (
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => {
+          events.push("aborted");
+          setTimeout(() => {
+            events.push("rejected");
+            reject(new Error("late provider failure"));
+          }, 5);
+        }, { once: true });
+      })
+    );
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/governed-read-only/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario,
+    });
+    events.push("returned");
+
+    expect(result.attempt.execution).toEqual({
+      reasonCode: "workflow_timeout",
+      status: "invalid",
+    });
+    expect(events).toEqual(["aborted", "rejected", "returned"]);
+  });
+
+  it("clears the losing deadline and reuses one root signal", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-deadline-loses-"));
+    tempRoots.push(attemptRoot);
+    const base = getEvalScenario("governed-read-only");
+    const observedSignals: AbortSignal[] = [];
+    let aborted = false;
+    let round = 0;
+    const scenario = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        runtime: { ...base.manifest.runtime, workflowTimeoutMs: 50 },
+      },
+    };
+    const responseCreate: ResponseCreate = async (_request, options) => {
+      if (!options?.signal) {
+        throw new Error("missing root workflow signal");
+      }
+      observedSignals.push(options.signal);
+      options.signal.addEventListener("abort", () => {
+        aborted = true;
+      }, { once: true });
+      round += 1;
+      return round === 1
+        ? {
+            output: [{
+              arguments: '{"path":"facts.txt"}',
+              call_id: "call_read",
+              name: "read",
+              type: "function_call",
+            }],
+            output_text: "",
+          }
+        : { output: [], output_text: "RELEASE_CHANNEL=stable" };
+    };
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/governed-read-only/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(result.attempt.execution).toEqual({ status: "completed" });
+    expect(observedSignals).toHaveLength(2);
+    expect(observedSignals[1]).toBe(observedSignals[0]);
+    expect(aborted).toBe(false);
+  });
+
+  it("passes the c17c deadline signal and awaits its abort cleanup", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-c17c-timeout-"));
+    tempRoots.push(attemptRoot);
+    const base = getEvalScenario("c17c-team-completion");
+    const events: string[] = [];
+    const scenario = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        runtime: { ...base.manifest.runtime, workflowTimeoutMs: 10 },
+      },
+    };
+    let runtimeSignal: AbortSignal | undefined;
+    runC17cRuntimeMock.mockImplementation(async (runtimeOptions: RunC17cRuntimeOptions) => {
+      runtimeSignal = runtimeOptions.signal;
+      if (!runtimeSignal) {
+        throw new Error("missing c17c workflow signal");
+      }
+      return new Promise((_resolve, reject) => {
+        runtimeSignal?.addEventListener("abort", () => {
+          events.push("aborted");
+          setTimeout(() => {
+            events.push("teammates_terminated");
+            events.push("plugin_closed");
+            reject(new Error("late c17c cleanup failure"));
+          }, 5);
+        }, { once: true });
+      });
+    });
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/c17c-team-completion/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate: async () => ({ output: [], output_text: "unused" }),
+      scenario,
+    });
+    events.push("returned");
+
+    expect(runtimeSignal).toBeDefined();
+    expect(result.attempt.execution).toEqual({
+      reasonCode: "workflow_timeout",
+      status: "invalid",
+    });
+    expect(events).toEqual([
+      "aborted",
+      "teammates_terminated",
+      "plugin_closed",
+      "returned",
+    ]);
   });
 
   it("runs the deterministic verifier failure and one Runtime recovery", async () => {

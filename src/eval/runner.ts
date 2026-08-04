@@ -86,71 +86,74 @@ export async function runEvalAttempt(
       options.scenario.manifest.task,
       modelRequestChecks,
     );
-    const childRunner = options.scenario.id === "async-child-handoff"
-      ? evalRuntimeBootstrap.createChildSessionRunner({
-          ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-          approver,
-          baseCwd: fixture.cwd,
-          ...(options.baseURL ? { baseURL: options.baseURL } : {}),
-          model: options.model,
-          parentLifecycleEmitter: lifecycleEmitter,
-          parentSessionId: rootTrace.metadata.id,
-          permissionPolicy: createEvalPermissionPolicy({
+    const result = await runWithWorkflowDeadline(
+      async (signal) => {
+        const childRunner = options.scenario.id === "async-child-handoff"
+          ? evalRuntimeBootstrap.createChildSessionRunner({
+              ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+              approver,
+              baseCwd: fixture.cwd,
+              ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+              model: options.model,
+              parentLifecycleEmitter: lifecycleEmitter,
+              parentSessionId: rootTrace.metadata.id,
+              permissionPolicy: createEvalPermissionPolicy({
+                scenario: options.scenario,
+                session: {
+                  profile: "research",
+                  role: "child",
+                  sessionId: "eval-child",
+                },
+              }),
+              responseCreate,
+              signal,
+              taskGraph: rootTrace.metadata.taskGraph,
+            })
+          : undefined;
+        const verifier = options.scenario.id === "verification-recovery"
+          ? createRecoveryVerifier(attemptRoot, options.scenario.manifest.runtime.verifierTimeoutMs)
+          : undefined;
+        if (options.scenario.id === "c17c-team-completion") {
+          const c17c = await runC17cRuntime({
+            ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+            approver,
+            ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+            model: options.model,
+            responseCreate,
+            rootTrace,
             scenario: options.scenario,
-            session: {
-              profile: "research",
-              role: "child",
-              sessionId: "eval-child",
-            },
-          }),
-          responseCreate,
-          taskGraph: rootTrace.metadata.taskGraph,
-        })
-      : undefined;
-    const verifier = options.scenario.id === "verification-recovery"
-      ? createRecoveryVerifier(attemptRoot, options.scenario.manifest.runtime.verifierTimeoutMs)
-      : undefined;
-    const runtimePromise = options.scenario.id === "c17c-team-completion"
-      ? runC17cRuntime({
+            signal,
+            workspace: fixture.cwd,
+          });
+          c17cResult = c17c;
+          return { finalAnswer: c17c.finalAnswer };
+        }
+        return evalRuntimeBootstrap.runMinimalLoop({
           ...(options.apiKey ? { apiKey: options.apiKey } : {}),
           approver,
           ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+          ...(childRunner ? { childSessionRunner: childRunner } : {}),
+          ...(options.scenario.manifest.runtime.contextCompaction
+            ? { contextCompaction: options.scenario.manifest.runtime.contextCompaction }
+            : {}),
+          cwd: fixture.cwd,
+          lifecycleEmitter,
+          maxRecoveryAttempts: 1,
+          maxToolRounds: options.scenario.manifest.runtime.rootMaxToolRounds,
           model: options.model,
+          permissionPolicy: createEvalPermissionPolicy({
+            base: evalRuntimeBootstrap.createDefaultPermissionPolicy(),
+            scenario: options.scenario,
+            session: { role: "root", sessionId: rootTrace.metadata.id },
+          }),
+          promptAssets: await evalRuntimeBootstrap.loadRepoPromptAssets(fixture.cwd),
           responseCreate,
-          rootTrace,
-          scenario: options.scenario,
-          workspace: fixture.cwd,
-        }).then((result) => {
-          c17cResult = result;
-          return { finalAnswer: result.finalAnswer };
-        })
-      : evalRuntimeBootstrap.runMinimalLoop({
-        ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-        approver,
-        ...(options.baseURL ? { baseURL: options.baseURL } : {}),
-        ...(childRunner ? { childSessionRunner: childRunner } : {}),
-        ...(options.scenario.manifest.runtime.contextCompaction
-          ? { contextCompaction: options.scenario.manifest.runtime.contextCompaction }
-          : {}),
-        cwd: fixture.cwd,
-        lifecycleEmitter,
-        maxRecoveryAttempts: 1,
-        maxToolRounds: options.scenario.manifest.runtime.rootMaxToolRounds,
-        model: options.model,
-        permissionPolicy: createEvalPermissionPolicy({
-          base: evalRuntimeBootstrap.createDefaultPermissionPolicy(),
-          scenario: options.scenario,
-          session: { role: "root", sessionId: rootTrace.metadata.id },
-        }),
-        promptAssets: await evalRuntimeBootstrap.loadRepoPromptAssets(fixture.cwd),
-        responseCreate,
-        task: options.scenario.manifest.task,
-        ...(verifier ? { verifier } : {}),
-      });
-    const result = await withTimeout(
-      runtimePromise,
+          signal,
+          task: options.scenario.manifest.task,
+          ...(verifier ? { verifier } : {}),
+        });
+      },
       options.scenario.manifest.runtime.workflowTimeoutMs,
-      "workflow_timeout",
     );
     execution = { finalAnswer: result.finalAnswer, status: "completed" };
   } catch (error) {
@@ -233,7 +236,7 @@ function observeResponseCreate(
   checks: EvalAttemptEvidence["modelRequestChecks"],
 ): ResponseCreate {
   let compactionCompleted = false;
-  return async (request) => {
+  return async (request, options) => {
     const compactionRequest = isCompactionRequest(request);
     if (!compactionRequest && compactionCompleted) {
       checks.push({
@@ -242,7 +245,7 @@ function observeResponseCreate(
         round: checks.length + 1,
       });
     }
-    const response = await base(request);
+    const response = await base(request, options);
     if (compactionRequest) {
       compactionCompleted = true;
     }
@@ -269,7 +272,7 @@ function createRecoveryVerifier(attemptRoot: string, timeoutMs: number): Verifie
   let invocation = 0;
   return {
     async verify(): Promise<VerificationResult> {
-      return withTimeout((async () => {
+      return withVerifierTimeout((async () => {
         invocation += 1;
         if (invocation === 1) {
           await fs.mkdir(path.dirname(markerPath), { recursive: true });
@@ -400,7 +403,37 @@ async function readOptionalFile(pathname: string): Promise<string | undefined> {
   }
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function runWithWorkflowDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error("workflow_timeout"));
+  }, timeoutMs);
+  try {
+    const result = await operation(controller.signal);
+    if (timedOut) {
+      throw new EvalInfrastructureError("workflow_timeout", "workflow_timeout");
+    }
+    return result;
+  } catch (error) {
+    if (timedOut) {
+      throw new EvalInfrastructureError("workflow_timeout", "workflow_timeout");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function withVerifierTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([

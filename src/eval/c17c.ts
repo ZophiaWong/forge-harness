@@ -45,6 +45,7 @@ export interface RunC17cRuntimeOptions {
   responseCreate: ResponseCreate;
   rootTrace: CliSessionTrace;
   scenario: EvalScenario;
+  signal?: AbortSignal;
   workspace: string;
 }
 
@@ -164,6 +165,7 @@ export async function runC17cRuntime(options: RunC17cRuntimeOptions): Promise<C1
           session: { profile: "research", role: "child", sessionId: "c17c-child" },
         }),
         responseCreate: options.responseCreate,
+        signal: options.signal,
         taskGraph: taskGraphBinding,
       }),
       cwd: options.workspace,
@@ -178,6 +180,7 @@ export async function runC17cRuntime(options: RunC17cRuntimeOptions): Promise<C1
       promptAssets,
       responseCreate: options.responseCreate,
       runtimeState: runtimeState.getState,
+      signal: options.signal,
       task: options.scenario.manifest.task,
       teamTasks: {
         actor: { role: "leader", sessionId: options.rootTrace.metadata.id },
@@ -207,14 +210,17 @@ export async function runC17cRuntime(options: RunC17cRuntimeOptions): Promise<C1
     if (!capturedGraph) {
       capturedGraph = await taskStore.read().catch(() => undefined);
     }
-    if (teammateManager) {
-      if (completed) {
-        await teammateManager.close();
-      } else {
-        await teammateManager.terminateAll();
+    try {
+      if (teammateManager) {
+        if (completed) {
+          await teammateManager.close();
+        } else {
+          await teammateManager.terminateAll();
+        }
       }
+    } finally {
+      await pluginActivation.close();
     }
-    await pluginActivation.close();
   }
 }
 
