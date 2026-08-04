@@ -36,6 +36,7 @@ vi.mock("../../src/extensions/teammates.js", async (importOriginal) => ({
 const tempRoots: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   startApprovedPluginMcpServersMock.mockReset();
   createTeammateManagerMock.mockReset();
   await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
@@ -154,7 +155,6 @@ it("keeps a completed root terminal while preserving later orchestration and cle
   const teammateCleanupError = new AggregateError([teammateError], "teammate cleanup failed");
   const pluginCleanupError = new AggregateError([pluginError], "plugin cleanup failed");
   const cleanupEvents: string[] = [];
-  let workflowSignal: AbortSignal | undefined;
   let flushCount = 0;
   const manager = fakeTeammateManager({
     async flushEvents() {
@@ -162,10 +162,8 @@ it("keeps a completed root terminal while preserving later orchestration and cle
       if (flushCount !== 1) {
         return;
       }
-      if (!workflowSignal) {
-        throw new Error("missing workflow signal");
-      }
-      await rejectAfterAbort(workflowSignal, orchestrationError);
+      vi.advanceTimersByTime(100);
+      throw orchestrationError;
     },
     async terminateAll() {
       cleanupEvents.push("teammates_terminated");
@@ -200,9 +198,9 @@ it("keeps a completed root terminal while preserving later orchestration and cle
     };
   });
 
-  const error = await runWithWorkflowDeadline((signal) => {
-    workflowSignal = signal;
-    return runC17cRuntime({
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const error = await runWithWorkflowDeadline((signal) => (
+    runC17cRuntime({
       approver: { async approve() { return { approved: false }; } },
       model: "gpt-test",
       responseCreate: async () => ({ output: [], output_text: "root completed" }),
@@ -210,8 +208,8 @@ it("keeps a completed root terminal while preserving later orchestration and cle
       scenario,
       signal,
       workspace: fixture.cwd,
-    });
-  }, 100).catch((caught: unknown) => caught);
+    })
+  ), 100).catch((caught: unknown) => caught);
 
   expect(error).toBeInstanceOf(Error);
   expect(error).toMatchObject({ reasonCode: "workflow_timeout" });
@@ -244,7 +242,6 @@ it("reports a later c17c timeout without fabricating a second root terminal", as
     },
   };
   const orchestrationError = new Error("post-root orchestration timed out");
-  let workflowSignal: AbortSignal | undefined;
   let flushCount = 0;
   createTeammateManagerMock.mockReturnValue(fakeTeammateManager({
     async flushEvents() {
@@ -252,10 +249,8 @@ it("reports a later c17c timeout without fabricating a second root terminal", as
       if (flushCount !== 1) {
         return;
       }
-      if (!workflowSignal) {
-        throw new Error("missing workflow signal");
-      }
-      await rejectAfterAbort(workflowSignal, orchestrationError);
+      vi.advanceTimersByTime(scenario.manifest.runtime.workflowTimeoutMs);
+      throw orchestrationError;
     },
   }));
   startApprovedPluginMcpServersMock.mockImplementation(async ({
@@ -282,14 +277,14 @@ it("reports a later c17c timeout without fabricating a second root terminal", as
     };
   });
 
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const result = await runEvalAttempt({
     attemptRoot,
     evidenceRefPrefix: "attempts/c17c-team-completion/1",
     model: "gpt-test",
     ordinal: 1,
     repositoryRoot: process.cwd(),
-    responseCreate: async (_request, options) => {
-      workflowSignal = options?.signal;
+    responseCreate: async () => {
       await fs.writeFile(
         path.join(attemptRoot, "workspace", C17C_ARTIFACT_PATH),
         C17C_ARTIFACT_CONTENT,
@@ -326,18 +321,6 @@ function fakeSession(): PluginMcpSessionLike {
     permissionPolicies: new Map(),
     toolDefinitions: () => [],
   };
-}
-
-async function rejectAfterAbort(signal: AbortSignal, error: Error): Promise<never> {
-  if (!signal.aborted) {
-    await new Promise<void>((resolve) => {
-      signal.addEventListener("abort", () => resolve(), { once: true });
-    });
-  }
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 5);
-  });
-  throw error;
 }
 
 function fakeTeammateManager(
