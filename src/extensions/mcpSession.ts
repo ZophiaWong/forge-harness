@@ -26,8 +26,9 @@ export class McpSessionStartError extends Error {
   constructor(
     readonly phase: "connect" | "discovery",
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "McpSessionStartError";
   }
 }
@@ -76,33 +77,39 @@ export class McpSession implements ToolRuntime {
       const result = await client.listTools(undefined, { timeout: options.server.connectTimeoutMs });
       const catalog = createMcpToolCatalog(options.server, result.tools);
       session = new McpSession(client, options.server, catalog, options.lifecycleEmitter);
-      session.connected = true;
-      session.startup = false;
       await options.lifecycleEmitter?.emit({
         ...catalog.diagnostics,
         serverId: options.server.id,
         type: "mcp_server_connected",
       });
+      session.connected = true;
+      session.startup = false;
       return session;
     } catch (error) {
       const message = formatError(error);
-      await options.lifecycleEmitter?.emit({
+      const startError = new McpSessionStartError(phase, message, { cause: error });
+      const secondaryErrors: unknown[] = [];
+      await captureFailure(secondaryErrors, () => options.lifecycleEmitter?.emit({
         phase,
         reason: message,
         serverId: options.server.id,
         type: "mcp_server_failed",
-      });
-      try {
-        await client.close();
-      } catch {
-        // Startup already failed; preserve the original connection or discovery error.
-      }
-      await options.lifecycleEmitter?.emit({
+      }));
+      await captureFailure(secondaryErrors, () => client.close());
+      await captureFailure(secondaryErrors, () => options.lifecycleEmitter?.emit({
         reason: "startup_failed",
         serverId: options.server.id,
         type: "mcp_server_stopped",
-      });
-      throw new McpSessionStartError(phase, message);
+      }));
+      if (secondaryErrors.length > 0) {
+        const failures = [startError, ...secondaryErrors];
+        throw new AggregateError(
+          failures,
+          `MCP server "${options.server.id}" startup failed: ${failures.map(formatError).join("; ")}`,
+          { cause: startError },
+        );
+      }
+      throw startError;
     }
   }
 
@@ -175,19 +182,31 @@ export class McpSession implements ToolRuntime {
   private async closeClient(): Promise<void> {
     this.expectedClose = true;
     this.connected = false;
+    const cleanupErrors: unknown[] = [];
 
     try {
       await this.client.close();
     } catch (error) {
-      await this.lifecycleEmitter?.emit({
+      cleanupErrors.push(error);
+      await captureFailure(cleanupErrors, () => this.lifecycleEmitter?.emit({
         phase: "close",
         reason: formatError(error),
         serverId: this.server.id,
         type: "mcp_server_failed",
-      });
+      }));
     }
 
-    await this.emitStopped("session_end");
+    await captureFailure(cleanupErrors, () => this.emitStopped("session_end"));
+    if (cleanupErrors.length === 1) {
+      throw cleanupErrors[0];
+    }
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(
+        cleanupErrors,
+        `MCP server "${this.server.id}" cleanup failed: ${cleanupErrors.map(formatError).join("; ")}`,
+        { cause: cleanupErrors[0] },
+      );
+    }
   }
 
   private handleTransportClose(): void {
@@ -253,4 +272,15 @@ function parseObjectArguments(argumentsText: string): Record<string, unknown> | 
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function captureFailure(
+  failures: unknown[],
+  operation: () => Promise<void> | void,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    failures.push(error);
+  }
 }

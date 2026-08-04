@@ -99,6 +99,7 @@ interface ManagedTeammate {
   ready?: Deferred<void>;
   recoveryMessageId?: string;
   runtime: TeammateRuntime;
+  stopRequested?: boolean;
 }
 
 export function createTeammateManager(options: CreateTeammateManagerOptions): TeammateManager {
@@ -121,6 +122,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   const members = new Map<string, ManagedTeammate>();
   let eventTail = Promise.resolve();
   let approvalTail = Promise.resolve();
+  let terminationPromise: Promise<void> | undefined;
   let activityVersion = 0;
   const activityWaiters = new Set<() => void>();
 
@@ -198,34 +200,35 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
     if (member.runtime.state === state && member.runtime.failure === failure) {
       return;
     }
-    const previousState = member.runtime.state;
-    member.runtime = {
+    const previousRuntime = member.runtime;
+    const nextRuntime: TeammateRuntime = {
       name: member.definition.name,
       schemaVersion: TEAM_RUNTIME_SCHEMA_VERSION,
-      sessionId: member.runtime.sessionId,
+      sessionId: previousRuntime.sessionId,
       state,
-      tracePath: member.runtime.tracePath,
+      tracePath: previousRuntime.tracePath,
       updatedAt: now().toISOString(),
       ...(failure ? { failure } : {}),
     };
-    await persistRuntime(member.runtime);
+    await persistRuntime(nextRuntime);
     const mailbox = await mailboxStore.inspect(member.definition.name);
     await options.lifecycleEmitter.emit({
       ...(failure ? { failure } : {}),
       name: member.definition.name,
-      previousState,
+      previousState: previousRuntime.state,
       profile: member.definition.profile,
-      sessionId: member.runtime.sessionId,
+      sessionId: nextRuntime.sessionId,
       state,
-      tracePath: member.runtime.tracePath,
+      tracePath: nextRuntime.tracePath,
       type: "teammate_state_changed",
       unreadCount: mailbox.unreadCount,
       ...(member.definition.workspace
         ? { workspace: { ...member.definition.workspace } }
         : {}),
     });
+    member.runtime = nextRuntime;
     options.onLog?.(
-      `[team] name=${member.definition.name} state=${state} session=${member.runtime.sessionId}`,
+      `[team] name=${member.definition.name} state=${state} session=${nextRuntime.sessionId}`,
     );
     notifyActivity();
   };
@@ -432,6 +435,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   const attachProcess = (member: ManagedTeammate, process: TeammateProcess): void => {
     member.process = process;
     member.processExit = createDeferred<void>();
+    member.stopRequested = false;
     process.onMessage((message) => {
       queueEvent(() => handleWorkerMessage(member, message));
     });
@@ -442,7 +446,11 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
           return;
         }
         member.process = undefined;
-        if (member.runtime.state !== "failed" && member.runtime.state !== "stopped") {
+        if (
+          !member.stopRequested
+          && member.runtime.state !== "failed"
+          && member.runtime.state !== "stopped"
+        ) {
           await failMember(
             member,
             appendProcessTail(
@@ -612,6 +620,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
     if (!process) {
       return;
     }
+    member.stopRequested = true;
     if (graceful) {
       process.send({
         sessionId: member.runtime.sessionId,
@@ -627,6 +636,36 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
     }
     process.kill("SIGKILL");
     process.disconnect();
+  };
+
+  const terminateMembers = async (): Promise<void> => {
+    const cleanupErrors: unknown[] = [];
+    const stopped: string[] = [];
+    const captureCleanup = async (operation: () => Promise<void>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    };
+    for (const member of members.values()) {
+      if (member.runtime.state !== "failed" && member.runtime.state !== "stopped") {
+        stopped.push(member.definition.name);
+        await captureCleanup(() => updateRuntime(member, "stopped"));
+      }
+      await captureCleanup(() => stopProcess(member, false));
+    }
+    await captureCleanup(() => options.lifecycleEmitter.emit({
+      mode: "terminate",
+      stopped,
+      type: "team_cleanup",
+    }));
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors,
+        `Teammate termination cleanup failed: ${cleanupErrors.map(errorMessage).join("; ")}`,
+      );
+    }
   };
 
   return {
@@ -910,34 +949,19 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       await dispatchUnread(member);
       return toSummary(member);
     },
-    async terminateAll() {
-      const cleanupErrors: unknown[] = [];
-      const stopped: string[] = [];
-      const captureCleanup = async (operation: () => Promise<void>): Promise<void> => {
-        try {
-          await operation();
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
-      };
-      for (const member of members.values()) {
-        if (member.runtime.state !== "failed" && member.runtime.state !== "stopped") {
-          stopped.push(member.definition.name);
-          await captureCleanup(() => updateRuntime(member, "stopped"));
-        }
-        await captureCleanup(() => stopProcess(member, false));
+    terminateAll() {
+      if (!terminationPromise) {
+        const operation = Promise.resolve().then(terminateMembers);
+        let shared!: Promise<void>;
+        shared = operation.catch((error: unknown) => {
+          if (terminationPromise === shared) {
+            terminationPromise = undefined;
+          }
+          throw error;
+        });
+        terminationPromise = shared;
       }
-      await captureCleanup(() => options.lifecycleEmitter.emit({
-        mode: "terminate",
-        stopped,
-        type: "team_cleanup",
-      }));
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          cleanupErrors,
-          `Teammate termination cleanup failed: ${cleanupErrors.map(errorMessage).join("; ")}`,
-        );
-      }
+      return terminationPromise;
     },
   };
 }

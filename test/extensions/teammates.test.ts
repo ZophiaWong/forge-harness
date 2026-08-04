@@ -532,13 +532,107 @@ describe("TeammateManager", () => {
     }));
     await fixture.manager.flushEvents();
     expect(await fixture.manager.list()).toEqual([
-      expect.objectContaining({ name: "alpha", state: "stopped" }),
+      expect.objectContaining({ name: "alpha", state: "busy" }),
       expect.objectContaining({ name: "beta", state: "stopped" }),
     ]);
 
     await expect(fixture.manager.terminateAll()).resolves.toBeUndefined();
+    expect(await fixture.manager.list()).toEqual([
+      expect.objectContaining({ name: "alpha", state: "stopped" }),
+      expect.objectContaining({ name: "beta", state: "stopped" }),
+    ]);
     expect(alpha.kill).toHaveBeenCalledTimes(1);
     expect(beta.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares overlapping termination and keeps later successful calls idempotent", async () => {
+    const cleanupEvents: TraceEventPayload[] = [];
+    const fixture = await createFixture(["session-a"], {
+      lifecycleEmitter: {
+        async emit(event) {
+          cleanupEvents.push(event);
+        },
+      },
+      terminateTimeoutMs: 1_000,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+
+    const first = fixture.manager.terminateAll();
+    const overlapping = fixture.manager.terminateAll();
+
+    expect(overlapping).toBe(first);
+    await waitUntil(() => process.kill.mock.calls.length > 0);
+    expect(process.kill).toHaveBeenCalledTimes(1);
+    process.exit(0, "SIGTERM");
+    await expect(Promise.all([first, overlapping])).resolves.toEqual([undefined, undefined]);
+    expect(cleanupEvents.filter((event) => event.type === "team_cleanup")).toHaveLength(1);
+
+    const later = fixture.manager.terminateAll();
+    expect(later).toBe(first);
+    await expect(later).resolves.toBeUndefined();
+    expect(process.kill).toHaveBeenCalledTimes(1);
+    expect(cleanupEvents.filter((event) => event.type === "team_cleanup")).toHaveLength(1);
+  });
+
+  it("retries a failed stopped-state persistence before becoming terminal", async () => {
+    const cleanupEvents: TraceEventPayload[] = [];
+    const fixture = await createFixture(["session-a"], {
+      lifecycleEmitter: {
+        async emit(event) {
+          cleanupEvents.push(event);
+        },
+      },
+      terminateTimeoutMs: 0,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    const persistenceError = new Error("stopped runtime persistence failed");
+    const writeSpy = vi.spyOn(fs, "writeFile").mockRejectedValueOnce(persistenceError);
+
+    const first = fixture.manager.terminateAll();
+    await expect(first).rejects.toSatisfy((error: unknown) => (
+      error instanceof AggregateError
+      && error.errors.length === 1
+      && error.errors[0] === persistenceError
+    ));
+    expect(JSON.parse(await fs.readFile(
+      path.join(fixture.teamRoot, "teammates", "researcher", "runtime.json"),
+      "utf8",
+    ))).toMatchObject({ state: "busy" });
+
+    const retry = fixture.manager.terminateAll();
+    expect(retry).not.toBe(first);
+    await expect(retry).resolves.toBeUndefined();
+    expect(JSON.parse(await fs.readFile(
+      path.join(fixture.teamRoot, "teammates", "researcher", "runtime.json"),
+      "utf8",
+    ))).toMatchObject({ state: "stopped" });
+    expect(cleanupEvents).toContainEqual(expect.objectContaining({
+      name: "researcher",
+      state: "stopped",
+      type: "teammate_state_changed",
+    }));
+
+    const later = fixture.manager.terminateAll();
+    expect(later).toBe(retry);
+    await expect(later).resolves.toBeUndefined();
+    expect(writeSpy).toHaveBeenCalledTimes(2);
+    writeSpy.mockRestore();
   });
 
   it("creates an edit workspace once and reuses the same binding after rejoin", async () => {
