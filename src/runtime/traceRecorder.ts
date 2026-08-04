@@ -8,6 +8,7 @@ import type {
 } from "./trace.js";
 
 export interface JsonlTraceRecorderOptions {
+  appendFile?: (tracePath: string, data: string, encoding: "utf8") => Promise<void>;
   now?: () => Date;
   sessionId: string;
   tracePath: string;
@@ -15,10 +16,15 @@ export interface JsonlTraceRecorderOptions {
 
 export function createJsonlTraceRecorder(options: JsonlTraceRecorderOptions): TraceRecorder {
   let sequence = 0;
+  let writeTail = Promise.resolve();
+  const appendFile = options.appendFile
+    ?? ((tracePath: string, data: string, encoding: "utf8") => (
+      fs.appendFile(tracePath, data, encoding)
+    ));
   const now = options.now ?? (() => new Date());
 
   return {
-    async record(event: TraceEventPayload) {
+    record(event: TraceEventPayload) {
       sequence += 1;
 
       const recordedEvent: RecordedTraceEvent = {
@@ -28,7 +34,11 @@ export function createJsonlTraceRecorder(options: JsonlTraceRecorderOptions): Tr
         timestamp: now().toISOString(),
       };
 
-      await fs.appendFile(options.tracePath, `${JSON.stringify(recordedEvent)}\n`, "utf8");
+      const write = writeTail.then(() => (
+        appendFile(options.tracePath, `${JSON.stringify(recordedEvent)}\n`, "utf8")
+      ));
+      writeTail = write;
+      return write;
     },
   };
 }

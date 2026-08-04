@@ -121,4 +121,100 @@ describe("JsonlTraceRecorder", () => {
       "teammate-2",
     ]);
   });
+
+  it("serializes concurrent appends in record invocation order", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-trace-"));
+    const tracePath = path.join(dir, "trace.jsonl");
+    const releaseFirst = createDeferred<void>();
+    const invocations: number[] = [];
+    const completions: number[] = [];
+    let writeNumber = 0;
+    const recorder = createJsonlTraceRecorder({
+      async appendFile(file, data, encoding) {
+        writeNumber += 1;
+        const current = writeNumber;
+        invocations.push(current);
+        if (current === 1) {
+          await releaseFirst.promise;
+        }
+        await fs.appendFile(file, data, encoding);
+        completions.push(current);
+      },
+      now: () => new Date("2026-08-04T10:00:00.000Z"),
+      sessionId: "root-session",
+      tracePath,
+    });
+
+    const first = recorder.record({
+      answer: "first",
+      round: 1,
+      type: "final_answer",
+    });
+    const second = recorder.record({
+      answer: "second",
+      round: 2,
+      type: "final_answer",
+    });
+    await Promise.resolve();
+
+    expect(invocations).toEqual([1]);
+    expect(completions).toEqual([]);
+
+    releaseFirst.resolve();
+    await second;
+    await first;
+
+    expect(invocations).toEqual([1, 2]);
+    expect(completions).toEqual([1, 2]);
+    const events = (await fs.readFile(tracePath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => parseRecordedTraceEvent(JSON.parse(line)));
+    expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+    expect(events.map((event) => event.type === "final_answer" ? event.answer : undefined))
+      .toEqual(["first", "second"]);
+  });
+
+  it("does not invoke later queued appends after an earlier append fails", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-trace-"));
+    const failure = new Error("trace append failed");
+    const releaseFailure = createDeferred<void>();
+    let invocations = 0;
+    const recorder = createJsonlTraceRecorder({
+      async appendFile() {
+        invocations += 1;
+        await releaseFailure.promise;
+        throw failure;
+      },
+      sessionId: "root-session",
+      tracePath: path.join(dir, "trace.jsonl"),
+    });
+
+    const first = recorder.record({
+      answer: "first",
+      round: 1,
+      type: "final_answer",
+    });
+    const second = recorder.record({
+      answer: "second",
+      round: 2,
+      type: "final_answer",
+    });
+    releaseFailure.resolve();
+
+    await expect(first).rejects.toBe(failure);
+    await expect(second).rejects.toBe(failure);
+    expect(invocations).toBe(1);
+  });
 });
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
