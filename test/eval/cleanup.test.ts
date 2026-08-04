@@ -163,6 +163,25 @@ describe("eval artifact cleanup", () => {
     await expect(fs.stat(outside)).resolves.toBeDefined();
   });
 
+  it("allows worktree path components that merely begin with two dots", async () => {
+    const evalRoot = await createEvalRoot();
+    const runRoot = await createRun(evalRoot, "run-001", "completed", [{
+      gitRoot: "..fixture",
+      path: "..fixture-worktree",
+    }]);
+    await fs.mkdir(path.join(runRoot, "..fixture"));
+    await fs.mkdir(path.join(runRoot, "..fixture-worktree"));
+    const removeWorktree = vi.fn(async () => {});
+
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot,
+      repositoryRoot: repositoryRootFor(evalRoot),
+      removeWorktree,
+    })).resolves.toMatchObject({ removedRunIds: ["run-001"] });
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a registered worktree path that resolves through a symlink", async () => {
     const evalRoot = await createEvalRoot();
     const runRoot = await createRun(evalRoot, "run-001", "completed", [{
@@ -200,5 +219,52 @@ describe("eval artifact cleanup", () => {
     await expect(cleanEvalRuns({ confirmed: true, evalRoot, repositoryRoot }))
       .rejects.toThrow(/\.forge.*symlink|real directory/);
     await expect(fs.stat(runRoot)).resolves.toBeDefined();
+  });
+
+  it("revalidates the repository ancestry between worktree removals", async () => {
+    const evalRoot = await createEvalRoot();
+    const repositoryRoot = repositoryRootFor(evalRoot);
+    const runRoot = await createRun(evalRoot, "run-001", "completed", [
+      { gitRoot: "fixture-one", path: "worktree-one" },
+      { gitRoot: "fixture-two", path: "worktree-two" },
+    ]);
+    await Promise.all([
+      fs.mkdir(path.join(runRoot, "fixture-one")),
+      fs.mkdir(path.join(runRoot, "worktree-one")),
+      fs.mkdir(path.join(runRoot, "fixture-two")),
+      fs.mkdir(path.join(runRoot, "worktree-two")),
+    ]);
+
+    const externalForge = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-external-forge-"));
+    tempRoots.push(externalForge);
+    const externalRunRoot = await createRun(
+      path.join(externalForge, "evals"),
+      "run-001",
+      "completed",
+    );
+    const externalSentinel = path.join(externalRunRoot, "sentinel.txt");
+    await fs.writeFile(externalSentinel, "outside cleanup boundary", "utf8");
+
+    const removeWorktree = vi.fn(async () => {
+      if (removeWorktree.mock.calls.length !== 1) return;
+      await fs.rename(path.join(repositoryRoot, ".forge"), path.join(repositoryRoot, ".forge-before-swap"));
+      await fs.symlink(externalForge, path.join(repositoryRoot, ".forge"));
+    });
+
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot,
+      repositoryRoot,
+      removeWorktree,
+    })).rejects.toThrow(/\.forge.*symlink|real directory|escaped the repository path chain/);
+
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("outside cleanup boundary");
+    await expect(fs.stat(path.join(
+      repositoryRoot,
+      ".forge-before-swap",
+      "evals",
+      "run-001",
+    ))).resolves.toBeDefined();
   });
 });

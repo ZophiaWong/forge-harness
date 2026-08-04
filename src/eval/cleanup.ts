@@ -97,8 +97,15 @@ export async function cleanEvalRuns(options: CleanEvalRunsOptions): Promise<Clea
   const removedRunIds: string[] = [];
   for (const run of prepared) {
     for (const worktree of run.worktrees) {
+      await assertWorktreeMutationBoundary(
+        options.repositoryRoot,
+        evalRoot,
+        run.root,
+        worktree,
+      );
       await removeWorktree(worktree);
     }
+    await assertRunMutationBoundary(options.repositoryRoot, evalRoot, run.root);
     await fs.rm(run.root, { recursive: true });
     removedRunIds.push(run.marker.runId);
   }
@@ -140,6 +147,60 @@ async function assertEvalRootBoundary(repositoryRootInput: string, evalRootInput
   return true;
 }
 
+async function assertWorktreeMutationBoundary(
+  repositoryRoot: string,
+  evalRoot: string,
+  runRoot: string,
+  worktree: RemoveEvalWorktreeInput,
+): Promise<void> {
+  const marker = await assertRunMutationBoundary(repositoryRoot, evalRoot, runRoot);
+  const currentWorktrees = marker.worktrees.map((current) => ({
+    gitRoot: resolveLexicallyInsideRun(runRoot, current.gitRoot),
+    worktreePath: resolveLexicallyInsideRun(runRoot, current.path),
+  }));
+  if (!currentWorktrees.some((current) => current.gitRoot === worktree.gitRoot
+    && current.worktreePath === worktree.worktreePath)) {
+    throw new Error("registered worktree changed before eval cleanup mutation");
+  }
+  await Promise.all([
+    assertRealPathInsideRun(runRoot, worktree.gitRoot),
+    assertRealPathInsideRun(runRoot, worktree.worktreePath),
+  ]);
+}
+
+async function assertRunMutationBoundary(
+  repositoryRoot: string,
+  evalRoot: string,
+  runRoot: string,
+): Promise<EvalRunMarker> {
+  if (!await assertEvalRootBoundary(repositoryRoot, evalRoot)) {
+    throw new Error("eval clean root disappeared before cleanup mutation");
+  }
+  const runStat = await fs.lstat(runRoot);
+  if (runStat.isSymbolicLink() || !runStat.isDirectory()) {
+    throw new Error("eval run root must be a real directory, not a symlink");
+  }
+  const [realEvalRoot, realRunRoot] = await Promise.all([
+    fs.realpath(evalRoot),
+    fs.realpath(runRoot),
+  ]);
+  const runId = path.basename(runRoot);
+  if (realRunRoot !== path.join(realEvalRoot, runId)) {
+    throw new Error("eval run root escaped the eval clean root");
+  }
+  const marker = await readMarker(path.join(runRoot, EVAL_RUN_MARKER));
+  if (!marker) {
+    throw new Error("eval run marker disappeared before cleanup mutation");
+  }
+  if (marker.runId !== runId) {
+    throw new Error(`eval run marker id ${marker.runId} does not match directory ${runId}`);
+  }
+  if (marker.status === "running") {
+    throw new Error(`eval run ${marker.runId} became active before cleanup mutation`);
+  }
+  return marker;
+}
+
 async function readMarker(markerPath: string): Promise<EvalRunMarker | undefined> {
   let raw: unknown;
   try {
@@ -170,7 +231,7 @@ function resolveLexicallyInsideRun(runRoot: string, relativePath: string): strin
   }
   const resolved = path.resolve(runRoot, relativePath);
   const relative = path.relative(runRoot, resolved);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isRelativePathInside(relative)) {
     throw new Error("registered worktree paths must stay inside the eval run");
   }
   return resolved;
@@ -186,9 +247,16 @@ async function assertRealPathInsideRun(runRoot: string, resolved: string): Promi
     fs.realpath(resolved),
   ]);
   const realRelative = path.relative(realRunRoot, realResolved);
-  if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+  if (!isRelativePathInside(realRelative)) {
     throw new Error("registered worktree paths must stay inside the eval run");
   }
+}
+
+function isRelativePathInside(relative: string): boolean {
+  return relative !== ""
+    && relative !== ".."
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
 }
 
 async function removeRegisteredWorktree(input: RemoveEvalWorktreeInput): Promise<void> {
