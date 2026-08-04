@@ -78,6 +78,8 @@ export const DEFAULT_MAX_RECOVERY_ATTEMPTS = 1;
 export const DEFAULT_MODEL_REQUEST_TIMEOUT_MS = 120_000;
 export const DEFAULT_MODEL_REQUEST_MAX_RETRIES = 2;
 
+const suppressedErrorsByError = new WeakMap<Error, readonly unknown[]>();
+
 export type { ModelCallTelemetry, ModelUsage } from "../domain/model.js";
 
 export interface UserInputItem {
@@ -326,6 +328,8 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
   let requestedCloseStatus: SessionEndStatus = "completed";
   let activeTurnSettlement = Promise.resolve();
   let releaseActiveTurn = (): void => undefined;
+  let activeTurnOwnsClose = false;
+  const activeTurnContext = new AsyncLocalStorage<true>();
   const closeCallbackContext = new AsyncLocalStorage<true>();
   let running = false;
   let responseCreate: ResponseCreate;
@@ -368,7 +372,12 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
     if (closeCallbackContext.getStore()) {
       return Promise.resolve();
     }
-    return closeSessionInternal(status);
+    const teardown = closeSessionInternal(status);
+    if (running && activeTurnContext.getStore()) {
+      activeTurnOwnsClose = true;
+      return Promise.resolve();
+    }
+    return teardown;
   };
   const beginActiveTurn = (): void => {
     let released = false;
@@ -447,9 +456,12 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
 
       let recoveryAttempts = 0;
       running = true;
+      activeTurnOwnsClose = false;
       beginActiveTurn();
 
-      try {
+      return activeTurnContext.run(true, async () => {
+        let failureAwaitedTeardown = false;
+        try {
         for (let turnRound = 1; turnRound <= turnMaxToolRounds; turnRound += 1) {
           options.signal?.throwIfAborted();
           const round = lastRound + 1;
@@ -713,23 +725,29 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
         }
 
         throw new Error(`Minimal loop stopped after ${turnMaxToolRounds} tool rounds without a final answer.`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const teardownErrors: unknown[] = [];
-        const teardown = closeSessionInternal("failed");
-        await captureCleanupError(
-          teardownErrors,
-          () => runCloseCallback(() => lifecycleEmitter.emit({ message, type: "session_failed" })),
-        );
-        running = false;
-        releaseActiveTurn();
-        await captureCleanupError(teardownErrors, () => teardown);
-        attachSuppressedErrors(error, teardownErrors);
-        throw error;
-      } finally {
-        running = false;
-        releaseActiveTurn();
-      }
+        } catch (error) {
+          failureAwaitedTeardown = true;
+          const message = error instanceof Error ? error.message : String(error);
+          const teardownErrors: unknown[] = [];
+          const teardown = closeSessionInternal("failed");
+          await captureCleanupError(
+            teardownErrors,
+            () => runCloseCallback(() => lifecycleEmitter.emit({ message, type: "session_failed" })),
+          );
+          running = false;
+          releaseActiveTurn();
+          await captureCleanupError(teardownErrors, () => teardown);
+          attachSuppressedErrors(error, teardownErrors);
+          throw error;
+        } finally {
+          const ownedTeardown = activeTurnOwnsClose ? closePromise : undefined;
+          running = false;
+          releaseActiveTurn();
+          if (!failureAwaitedTeardown && ownedTeardown) {
+            await ownedTeardown;
+          }
+        }
+      });
     },
   };
 }
@@ -1224,9 +1242,13 @@ function attachSuppressedErrors(primaryError: unknown, teardownErrors: unknown[]
     return;
   }
 
-  const primaryWithSuppressed = primaryError as Error & { suppressed?: unknown[] };
-  const suppressed = [...(primaryWithSuppressed.suppressed ?? [])];
-  for (const teardownError of teardownErrors.flatMap((error) => flattenTeardownErrors(error))) {
+  const newSuppressed = teardownErrors.flatMap((error) => flattenTeardownErrors(error));
+  if (newSuppressed.length === 0) {
+    return;
+  }
+
+  const suppressed = [...getSuppressedErrors(primaryError)];
+  for (const teardownError of newSuppressed) {
     if (teardownError !== primaryError && !suppressed.includes(teardownError)) {
       suppressed.push(teardownError);
     }
@@ -1235,16 +1257,49 @@ function attachSuppressedErrors(primaryError: unknown, teardownErrors: unknown[]
     return;
   }
 
+  suppressedErrorsByError.set(primaryError, suppressed);
   try {
-    Object.defineProperty(primaryWithSuppressed, "suppressed", {
+    Object.defineProperty(primaryError, "suppressed", {
       configurable: true,
       enumerable: true,
-      value: suppressed,
+      value: [...suppressed],
       writable: true,
     });
   } catch {
-    // A frozen primary error still takes precedence over teardown failures.
+    // The WeakMap remains the observable source for frozen or fixed Errors.
   }
+}
+
+export function getSuppressedErrors(primaryError: unknown): readonly unknown[] {
+  if (!(primaryError instanceof Error)) {
+    return [];
+  }
+
+  const stored = suppressedErrorsByError.get(primaryError);
+  if (stored) {
+    return [...stored];
+  }
+  return readExistingSuppressedErrors(primaryError);
+}
+
+function readExistingSuppressedErrors(primaryError: Error): unknown[] {
+  let hasSuppressed: boolean;
+  let existingSuppressed: unknown;
+  try {
+    hasSuppressed = "suppressed" in primaryError;
+    if (!hasSuppressed) {
+      return [];
+    }
+    existingSuppressed = (primaryError as Error & { suppressed?: unknown }).suppressed;
+  } catch {
+    return [];
+  }
+
+  const values = Array.isArray(existingSuppressed)
+    ? existingSuppressed
+    : [existingSuppressed];
+  const seen = new Set<unknown>();
+  return values.flatMap((error) => flattenTeardownErrors(error, seen));
 }
 
 function flattenTeardownErrors(error: unknown, seen = new Set<unknown>()): unknown[] {

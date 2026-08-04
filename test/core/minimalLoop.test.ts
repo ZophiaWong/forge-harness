@@ -24,6 +24,7 @@ vi.mock("openai", () => ({
 
 import {
   createMinimalLoopSession,
+  getSuppressedErrors,
   runMinimalLoop,
   type ResponseCreate,
 } from "../../src/core/minimalLoop.js";
@@ -317,6 +318,111 @@ describe("runMinimalLoop", () => {
       cleanupEvidenceError,
       terminalRecorderError,
     ]);
+  });
+
+  it("preserves a scalar existing suppressed value before appending cleanup failure", async () => {
+    const existingError = new Error("existing suppressed failure");
+    const cleanupError = new Error("new cleanup failure");
+    const primaryError = new Error("primary Runtime failure") as Error & { suppressed?: unknown };
+    primaryError.suppressed = existingError;
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "normalize scalar suppressed evidence",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(getSuppressedErrors(primaryError)).toEqual([existingError, cleanupError]);
+  });
+
+  it("retrieves cleanup and terminal failures for a frozen primary Error", async () => {
+    const cleanupError = new Error("frozen-primary cleanup failed");
+    const terminalRecorderError = new Error("frozen-primary terminal recorder failed");
+    const primaryError = Object.freeze(new Error("frozen primary Runtime failure"));
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            if (event.type === "session_ended") {
+              throw terminalRecorderError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "retain frozen primary teardown evidence",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(getSuppressedErrors(primaryError)).toEqual([cleanupError, terminalRecorderError]);
+  });
+
+  it("preserves a non-configurable suppressed value through the WeakMap accessor", async () => {
+    const existingValue = { source: "legacy cleanup" };
+    const cleanupError = new Error("new cleanup failure");
+    const primaryError = new Error("non-configurable primary Runtime failure");
+    Object.defineProperty(primaryError, "suppressed", {
+      configurable: false,
+      value: existingValue,
+      writable: false,
+    });
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "retain non-configurable teardown evidence",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect((primaryError as Error & { suppressed: unknown }).suppressed).toBe(existingValue);
+    expect(getSuppressedErrors(primaryError)).toEqual([existingValue, cleanupError]);
+  });
+
+  it("leaves a weird existing suppressed value unchanged when teardown succeeds", async () => {
+    const primaryError = new Error("primary Runtime failure") as Error & { suppressed?: unknown };
+    primaryError.suppressed = 17;
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "preserve weird existing evidence",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(primaryError.suppressed).toBe(17);
+    expect(getSuppressedErrors(primaryError)).toEqual([17]);
   });
 
   it("records a failed terminal status when cleanup fails after a final answer", async () => {
@@ -3235,6 +3341,101 @@ describe("createMinimalLoopSession", () => {
       expect.objectContaining({ status: "failed" }),
     ]);
   });
+
+  it("lets an awaited model_response recorder close reentrantly before its failure dominates", async () => {
+    const primaryError = new Error("model response recorder failed after close");
+    const events: TraceEventPayload[] = [];
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "model_response") {
+              await session.close("completed");
+              throw primaryError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => ({ output: [], output_text: "candidate" }),
+      task: "close from model response recording",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await expect(session.runTurn()).rejects.toBe(primaryError);
+
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  }, 500);
+
+  it("propagates owned teardown failure after awaited custom tool execution closes reentrantly", async () => {
+    const events: TraceEventPayload[] = [];
+    const teardownError = new Error("active tool teardown failed");
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    const responseCreate = createResponseCreate(
+      {
+        output: [{
+          arguments: "{}",
+          call_id: "call_close_from_tool",
+          name: "close_from_tool",
+          type: "function_call",
+        }],
+        output_text: "",
+      },
+      { output: [], output_text: "closed cleanly" },
+    );
+    const toolRuntime: ToolRuntime = {
+      async close() {
+        throw teardownError;
+      },
+      async execute() {
+        await session.close("completed");
+        return {
+          content: "close requested",
+          status: "completed",
+          toolName: "close_from_tool",
+        };
+      },
+      toolDefinitions: () => [{
+        description: "Request session close from active tool execution.",
+        name: "close_from_tool",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+          },
+        },
+      }),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "close from custom tool execution",
+      toolRuntime,
+    });
+
+    await expect(session.runTurn()).rejects.toThrow("active tool teardown failed");
+
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      answer: "closed cleanly",
+      type: "final_answer",
+    }));
+  }, 500);
 
   it("does not deadlock when tool cleanup awaits a recursive public close", async () => {
     let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
