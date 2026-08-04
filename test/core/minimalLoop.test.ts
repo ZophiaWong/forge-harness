@@ -3437,6 +3437,95 @@ describe("createMinimalLoopSession", () => {
     }));
   }, 500);
 
+  it("treats a stale Turn 1 descendant close during Turn 2 as an external caller", async () => {
+    const staleTrigger = createDeferred<void>();
+    const turnTwoStarted = createDeferred<void>();
+    const turnTwoResponse = createDeferred<Awaited<ReturnType<ResponseCreate>>>();
+    const cleanupError = new Error("stale descendant observed teardown failure");
+    const events: TraceEventPayload[] = [];
+    let modelCall = 0;
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    let staleCloseError: unknown;
+    let staleCloseSettled = false;
+    let staleCloseTask: Promise<void> | undefined;
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "model_response" && event.round === 1) {
+              staleCloseTask = (async () => {
+                await staleTrigger.promise;
+                try {
+                  await session.close("completed");
+                } catch (error) {
+                  staleCloseError = error;
+                } finally {
+                  staleCloseSettled = true;
+                }
+              })();
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        modelCall += 1;
+        if (modelCall === 1) {
+          return { output: [], output_text: "turn one complete" };
+        }
+        turnTwoStarted.resolve();
+        return turnTwoResponse.promise;
+      },
+      task: "keep stale callback ownership isolated by turn",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await expect(session.runTurn()).resolves.toEqual({
+      finalAnswer: "turn one complete",
+      rounds: 1,
+    });
+    if (!staleCloseTask) {
+      throw new Error("Turn 1 did not schedule its stale close descendant");
+    }
+
+    let turnTwoError: unknown;
+    let turnTwoResult: Awaited<ReturnType<typeof session.runTurn>> | undefined;
+    const turnTwo = session.runTurn("run turn two").then(
+      (result) => {
+        turnTwoResult = result;
+      },
+      (error: unknown) => {
+        turnTwoError = error;
+      },
+    );
+    await turnTwoStarted.promise;
+    staleTrigger.resolve();
+    await flushPromises();
+    const staleReturnedBeforeTurnTwoReleased = staleCloseSettled;
+
+    turnTwoResponse.resolve({ output: [], output_text: "turn two complete" });
+    await turnTwo;
+    await staleCloseTask;
+
+    expect(staleReturnedBeforeTurnTwoReleased).toBe(false);
+    expect(turnTwoError).toBeUndefined();
+    expect(turnTwoResult).toEqual({ finalAnswer: "turn two complete", rounds: 1 });
+    expect(staleCloseError).toBeInstanceOf(AggregateError);
+    expect(staleCloseError).toMatchObject({
+      message: expect.stringContaining(cleanupError.message),
+    });
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  });
+
   it("does not deadlock when tool cleanup awaits a recursive public close", async () => {
     let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
     const close = vi.fn(async () => {

@@ -328,8 +328,9 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
   let requestedCloseStatus: SessionEndStatus = "completed";
   let activeTurnSettlement = Promise.resolve();
   let releaseActiveTurn = (): void => undefined;
-  let activeTurnOwnsClose = false;
-  const activeTurnContext = new AsyncLocalStorage<true>();
+  let activeTurnToken: object | undefined;
+  let activeTurnCloseOwner: object | undefined;
+  const activeTurnContext = new AsyncLocalStorage<object>();
   const closeCallbackContext = new AsyncLocalStorage<true>();
   let running = false;
   let responseCreate: ResponseCreate;
@@ -373,8 +374,9 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
       return Promise.resolve();
     }
     const teardown = closeSessionInternal(status);
-    if (running && activeTurnContext.getStore()) {
-      activeTurnOwnsClose = true;
+    const contextToken = activeTurnContext.getStore();
+    if (running && contextToken && contextToken === activeTurnToken) {
+      activeTurnCloseOwner = contextToken;
       return Promise.resolve();
     }
     return teardown;
@@ -456,10 +458,12 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
 
       let recoveryAttempts = 0;
       running = true;
-      activeTurnOwnsClose = false;
+      const turnToken = {};
+      activeTurnToken = turnToken;
+      activeTurnCloseOwner = undefined;
       beginActiveTurn();
 
-      return activeTurnContext.run(true, async () => {
+      return activeTurnContext.run(turnToken, async () => {
         let failureAwaitedTeardown = false;
         try {
         for (let turnRound = 1; turnRound <= turnMaxToolRounds; turnRound += 1) {
@@ -740,7 +744,10 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
           attachSuppressedErrors(error, teardownErrors);
           throw error;
         } finally {
-          const ownedTeardown = activeTurnOwnsClose ? closePromise : undefined;
+          const ownedTeardown = activeTurnCloseOwner === turnToken ? closePromise : undefined;
+          if (activeTurnToken === turnToken) {
+            activeTurnToken = undefined;
+          }
           running = false;
           releaseActiveTurn();
           if (!failureAwaitedTeardown && ownedTeardown) {
