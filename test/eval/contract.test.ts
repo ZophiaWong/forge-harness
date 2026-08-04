@@ -198,6 +198,111 @@ describe("eval contract source loader", () => {
     expect(swapped).toBe(true);
   });
 
+  it("rejects an in-place same-inode overwrite after the first descriptor read", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    const pluginPath = path.join(runtimeTree.fixtureRoot, "plugin.json");
+    const before = await fs.stat(pluginPath, { bigint: true });
+    let overwritten = false;
+
+    await expect(loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+      {
+        async afterFirstFileRead({ key, pathname }) {
+          if (key !== "fixture/issue-workflow/plugin.json" || overwritten) {
+            return;
+          }
+          overwritten = true;
+          await fs.writeFile(pathname, "mutated fixture\n", "utf8");
+        },
+      },
+    )).rejects.toThrow(/content|metadata|unstable|changed while reading/i);
+
+    expect(overwritten).toBe(true);
+    expect((await fs.stat(pluginPath, { bigint: true })).ino).toBe(before.ino);
+  });
+
+  it("rejects metadata drift even when descriptor bytes stay unchanged", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    let metadataChanged = false;
+
+    await expect(loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+      {
+        async afterFirstFileRead({ key, pathname }) {
+          if (key !== "fixture/issue-workflow/plugin.json" || metadataChanged) {
+            return;
+          }
+          metadataChanged = true;
+          await fs.utimes(pathname, new Date(1_000), new Date(2_000));
+        },
+      },
+    )).rejects.toThrow(/metadata|unstable|changed while reading/i);
+    expect(metadataChanged).toBe(true);
+  });
+
+  it("rejects fixture additions made after the initial directory snapshot", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    const emptyDirectory = path.join(runtimeTree.fixtureRoot, "empty");
+    await fs.mkdir(emptyDirectory);
+    let added = false;
+
+    await expect(loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+      {
+        async afterDirectorySnapshot({ pathname }) {
+          if (pathname !== emptyDirectory || added) {
+            return;
+          }
+          added = true;
+          await fs.writeFile(path.join(pathname, "added.txt"), "late addition\n", "utf8");
+        },
+      },
+    )).rejects.toThrow(/directory.*changed|entry snapshot|unstable/i);
+    expect(added).toBe(true);
+  });
+
+  it("compares unsafe filesystem identities as bigint without precision loss", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    const unsafe = 9_007_199_254_740_992n;
+
+    await expect(loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+      {
+        adjustFileMetadata({ key, metadata, phase }) {
+          if (key !== "fixture/issue-workflow/plugin.json") {
+            return metadata;
+          }
+          if (phase.startsWith("descriptor")) {
+            return { ...metadata, dev: unsafe + 1n };
+          }
+          return { ...metadata, dev: unsafe };
+        },
+      },
+    )).rejects.toThrow(/identity|metadata/i);
+  });
+
+  it("includes legal hidden fixture names beginning with two dots", async () => {
+    const codeTree = await createSyntheticContractTree(".ts");
+    const runtimeTree = await createRuntimeRepository("runtime fixture\n");
+    await fs.writeFile(path.join(runtimeTree.fixtureRoot, "..config"), "hidden config\n", "utf8");
+
+    const sources = await loadEvalContractSourcesFrom(
+      pathToFileURL(codeTree.modulePath).href,
+      runtimeTree.root,
+    );
+
+    expect(sources["fixture/issue-workflow/..config"])
+      .toBe(`base64:${Buffer.from("hidden config\n").toString("base64")}`);
+  });
+
   it("sorts Unicode fixture keys locale-independently without collapsing equivalent names", async () => {
     const codeTree = await createSyntheticContractTree(".ts");
     const runtimeTree = await createRuntimeRepository("runtime fixture\n");

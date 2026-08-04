@@ -1,4 +1,4 @@
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,20 +16,46 @@ const CONTRACT_MODULES = [
   ["runtime/traceSchema", "../runtime/traceSchema"],
 ] as const;
 const FIXTURE_KEY_ROOT = "fixture/issue-workflow";
+const MAX_BUFFER_SIZE = BigInt(Number.MAX_SAFE_INTEGER);
 
-interface FileIdentity {
-  dev: number;
-  ino: number;
+type EntryType = "directory" | "file" | "other" | "symbolic-link";
+type FileObservationPhase =
+  | "descriptor-after"
+  | "descriptor-before"
+  | "path-after"
+  | "path-after-open"
+  | "path-before";
+
+interface ObservedMetadata {
+  ctimeNs: bigint;
+  dev: bigint;
+  ino: bigint;
+  mode: bigint;
+  mtimeNs: bigint;
+  size: bigint;
+  type: EntryType;
 }
 
 interface DirectoryGuard {
-  identity: FileIdentity;
   label: string;
+  metadata: ObservedMetadata;
   pathname: string;
 }
 
+interface DirectoryEntrySnapshot {
+  name: string;
+  type: EntryType;
+}
+
 interface EvalContractLoadTestHooks {
+  adjustFileMetadata?: (context: {
+    key: string;
+    metadata: ObservedMetadata;
+    phase: FileObservationPhase;
+  }) => ObservedMetadata;
+  afterDirectorySnapshot?: (context: { pathname: string }) => Promise<void>;
   afterFileOpen?: (context: { key: string; pathname: string }) => Promise<void>;
+  afterFirstFileRead?: (context: { key: string; pathname: string }) => Promise<void>;
 }
 
 export async function loadEvalContractSources(
@@ -150,69 +176,95 @@ async function visitFixtureDirectory(
   output: Array<[string, string]>,
   hooks: EvalContractLoadTestHooks,
 ): Promise<void> {
-  const entries = await readStableDirectoryEntries(directory, guards);
-  for (const entry of entries) {
-    await assertDirectoryGuards(guards);
-    const pathname = path.join(directory.pathname, entry.name);
-    const stats = await lstatOrReject(pathname, "eval contract fixture entry disappeared");
-    const key = fixtureKey(guards[3].pathname, pathname);
-    if (stats.isSymbolicLink()) {
-      throw new Error(`eval contract fixture entry must not be a symbolic link: ${key}`);
-    }
-    if (stats.isDirectory()) {
-      const child = await inspectPhysicalDirectory(
-        pathname,
-        `eval contract fixture directory ${key}`,
-      );
-      await visitFixtureDirectory(child, [...guards, child], output, hooks);
-      continue;
-    }
-    if (!stats.isFile()) {
-      throw new Error(`eval contract fixture entry must be a regular file: ${key}`);
-    }
-    output.push([key, encodeBytes(await readStableRegularFile(
-      pathname,
-      key,
-      guards,
-      hooks,
-      `eval contract fixture entry must be a regular file: ${key}`,
-    ))]);
-  }
-  await assertDirectoryGuards(guards);
-}
-
-async function readStableDirectoryEntries(
-  directory: DirectoryGuard,
-  guards: DirectoryGuard[],
-) {
+  // Portable Node has no openat or filesystem-snapshot primitive. These paired
+  // descriptor/path observations assume a cooperatively quiescent repository;
+  // a change completed and restored wholly between observations is unobservable.
   await assertDirectoryGuards(guards);
   const handle = await fs.open(directory.pathname, directoryOpenFlags());
   try {
-    const opened = await handle.stat();
-    if (!opened.isDirectory()) {
-      throw new Error(`${directory.label} changed before traversal`);
-    }
-    assertIdentity(
-      identity(opened),
-      directory.identity,
-      `${directory.label} identity mismatch after descriptor open`,
+    const descriptorBefore = metadata(await handle.stat({ bigint: true }));
+    assertMetadataType(descriptorBefore, "directory", `${directory.label} changed before traversal`);
+    assertMetadata(
+      descriptorBefore,
+      directory.metadata,
+      `${directory.label} metadata mismatch after descriptor open`,
     );
-    // Node has no portable openat/readdir-by-descriptor primitive. The pathname
-    // read is therefore fenced by descriptor and canonical-path identity checks;
-    // detected replacement always aborts before any collected bytes are returned.
-    // A swap-and-restore completed wholly between observation points is the
-    // residual attacker model that portable Node pathname APIs cannot observe.
-    const entries = await fs.readdir(directory.pathname, { withFileTypes: true });
-    assertIdentity(
-      identity(await handle.stat()),
-      directory.identity,
-      `${directory.label} identity changed during traversal`,
+    const pathBefore = (await inspectPhysicalDirectory(directory.pathname, directory.label)).metadata;
+    assertMetadata(pathBefore, directory.metadata, `${directory.label} metadata changed before traversal`);
+    const entriesBefore = await snapshotDirectoryEntries(directory.pathname);
+    await hooks.afterDirectorySnapshot?.({ pathname: directory.pathname });
+
+    for (const entry of entriesBefore) {
+      await assertDirectoryGuards(guards);
+      const pathname = path.join(directory.pathname, entry.name);
+      const stats = await lstatOrReject(pathname, "eval contract fixture entry disappeared");
+      const currentType = entryType(stats);
+      if (currentType !== entry.type) {
+        throw new Error(`eval contract fixture entry snapshot changed: ${entry.name}`);
+      }
+      const key = fixtureKey(guards[3].pathname, pathname);
+      if (entry.type === "symbolic-link") {
+        throw new Error(`eval contract fixture entry must not be a symbolic link: ${key}`);
+      }
+      if (entry.type === "directory") {
+        const child = await inspectPhysicalDirectory(
+          pathname,
+          `eval contract fixture directory ${key}`,
+        );
+        await visitFixtureDirectory(child, [...guards, child], output, hooks);
+        continue;
+      }
+      if (entry.type !== "file") {
+        throw new Error(`eval contract fixture entry must be a regular file: ${key}`);
+      }
+      output.push([key, encodeBytes(await readStableRegularFile(
+        pathname,
+        key,
+        guards,
+        hooks,
+        `eval contract fixture entry must be a regular file: ${key}`,
+      ))]);
+    }
+
+    const entriesAfter = await snapshotDirectoryEntries(directory.pathname);
+    assertDirectorySnapshot(entriesAfter, entriesBefore, `${directory.label} entry snapshot changed`);
+    const descriptorAfter = metadata(await handle.stat({ bigint: true }));
+    assertMetadata(
+      descriptorAfter,
+      descriptorBefore,
+      `${directory.label} directory metadata changed during traversal`,
+    );
+    const pathAfter = (await inspectPhysicalDirectory(directory.pathname, directory.label)).metadata;
+    assertMetadata(
+      pathAfter,
+      pathBefore,
+      `${directory.label} directory path metadata changed during traversal`,
+    );
+    assertMetadata(
+      pathAfter,
+      descriptorAfter,
+      `${directory.label} directory descriptor identity mismatch after traversal`,
     );
     await assertDirectoryGuards(guards);
-    return entries.sort((left, right) => compareStableStrings(left.name, right.name));
   } finally {
     await handle.close();
   }
+}
+
+async function snapshotDirectoryEntries(pathname: string): Promise<DirectoryEntrySnapshot[]> {
+  const names = await fs.readdir(pathname);
+  names.sort(compareStableStrings);
+  const snapshot: DirectoryEntrySnapshot[] = [];
+  for (const name of names) {
+    snapshot.push({
+      name,
+      type: entryType(await lstatOrReject(
+        path.join(pathname, name),
+        `eval contract fixture entry disappeared during snapshot: ${name}`,
+      )),
+    });
+  }
+  return snapshot;
 }
 
 async function readStableRegularFile(
@@ -223,62 +275,142 @@ async function readStableRegularFile(
   missingMessage: string,
 ): Promise<Buffer> {
   await assertDirectoryGuards(guards);
-  const before = await inspectPhysicalRegularFile(pathname, missingMessage);
+  const pathBefore = adjustFileMetadata(
+    await inspectPhysicalRegularFile(pathname, missingMessage),
+    key,
+    "path-before",
+    hooks,
+  );
   const handle = await fs.open(pathname, fileOpenFlags());
   try {
-    const opened = await handle.stat();
-    if (!opened.isFile()) {
-      throw new Error(missingMessage);
-    }
-    assertIdentity(identity(opened), before, `${key} identity mismatch after descriptor open`);
-    await hooks.afterFileOpen?.({ key, pathname });
-    await assertOpenedPathIdentity(pathname, key, before);
-    await assertDirectoryGuards(guards);
-
-    const bytes = await handle.readFile();
-
-    assertIdentity(
-      identity(await handle.stat()),
-      before,
-      `${key} identity changed while reading`,
+    const descriptorBefore = adjustFileMetadata(
+      metadata(await handle.stat({ bigint: true })),
+      key,
+      "descriptor-before",
+      hooks,
     );
-    await assertOpenedPathIdentity(pathname, key, before);
+    assertMetadataType(descriptorBefore, "file", missingMessage);
+    assertMetadata(
+      descriptorBefore,
+      pathBefore,
+      `${key} identity or metadata mismatch after descriptor open`,
+    );
+    await hooks.afterFileOpen?.({ key, pathname });
+    const pathAfterOpen = await observedFilePath(
+      pathname,
+      key,
+      pathBefore,
+      "path-after-open",
+      hooks,
+    );
+    assertMetadata(
+      pathAfterOpen,
+      descriptorBefore,
+      `${key} identity or metadata changed after descriptor open`,
+    );
     await assertDirectoryGuards(guards);
-    return bytes;
+
+    const firstBytes = await readExactDescriptorBytes(handle, pathBefore.size, key);
+    await hooks.afterFirstFileRead?.({ key, pathname });
+    const secondBytes = await readExactDescriptorBytes(handle, pathBefore.size, key);
+
+    const descriptorAfter = adjustFileMetadata(
+      metadata(await handle.stat({ bigint: true })),
+      key,
+      "descriptor-after",
+      hooks,
+    );
+    const pathAfter = await observedFilePath(
+      pathname,
+      key,
+      pathBefore,
+      "path-after",
+      hooks,
+    );
+    if (!firstBytes.equals(secondBytes)) {
+      throw new Error(`${key} content changed between descriptor reads`);
+    }
+    assertMetadata(
+      descriptorAfter,
+      descriptorBefore,
+      `${key} descriptor metadata changed while reading`,
+    );
+    assertMetadata(pathAfter, pathBefore, `${key} path metadata changed while reading`);
+    assertMetadata(
+      pathAfter,
+      descriptorAfter,
+      `${key} descriptor and path metadata mismatch after reading`,
+    );
+    await assertDirectoryGuards(guards);
+    return firstBytes;
   } finally {
     await handle.close();
   }
 }
 
-async function assertOpenedPathIdentity(
+async function readExactDescriptorBytes(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  expectedSize: bigint,
+  key: string,
+): Promise<Buffer> {
+  if (expectedSize < 0n || expectedSize > MAX_BUFFER_SIZE) {
+    throw new Error(`${key} size cannot be represented safely for contract fingerprinting`);
+  }
+  const length = Number(expectedSize);
+  const bytes = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const result = await handle.read(bytes, offset, length - offset, offset);
+    if (result.bytesRead === 0) {
+      throw new Error(`${key} content became shorter while reading`);
+    }
+    offset += result.bytesRead;
+  }
+  const extra = Buffer.alloc(1);
+  if ((await handle.read(extra, 0, 1, length)).bytesRead !== 0) {
+    throw new Error(`${key} content became longer while reading`);
+  }
+  return bytes;
+}
+
+async function observedFilePath(
   pathname: string,
   key: string,
-  expected: FileIdentity,
-): Promise<void> {
-  let current: FileIdentity;
+  expected: ObservedMetadata,
+  phase: FileObservationPhase,
+  hooks: EvalContractLoadTestHooks,
+): Promise<ObservedMetadata> {
+  let current: ObservedMetadata;
   try {
-    current = await inspectPhysicalRegularFile(pathname, `${key} changed while reading`);
+    current = adjustFileMetadata(
+      await inspectPhysicalRegularFile(pathname, `${key} changed while reading`),
+      key,
+      phase,
+      hooks,
+    );
   } catch {
     throw new Error(`${key} changed while reading`);
   }
-  assertIdentity(current, expected, `${key} identity changed while reading`);
+  assertMetadata(current, expected, `${key} identity or metadata changed while reading`);
+  return current;
 }
 
 async function inspectPhysicalRegularFile(
   pathname: string,
   errorMessage: string,
-): Promise<FileIdentity> {
+): Promise<ObservedMetadata> {
   const stats = await lstatOrReject(pathname, errorMessage);
   if (stats.isSymbolicLink() || !stats.isFile()) {
     throw new Error(errorMessage);
   }
   await assertCanonicalPath(pathname, errorMessage);
-  const canonicalStats = await fs.stat(pathname);
+  const canonicalStats = await fs.stat(pathname, { bigint: true });
   if (!canonicalStats.isFile()) {
     throw new Error(errorMessage);
   }
-  assertIdentity(identity(canonicalStats), identity(stats), errorMessage);
-  return identity(canonicalStats);
+  const observed = metadata(canonicalStats);
+  assertMetadata(observed, metadata(stats), errorMessage);
+  return observed;
 }
 
 async function inspectPhysicalDirectory(
@@ -300,16 +432,13 @@ async function inspectPhysicalDirectory(
     resolved,
     `${label} must be a physical directory without symbolic-link ancestors`,
   );
-  const canonicalStats = await fs.stat(resolved);
+  const canonicalStats = await fs.stat(resolved, { bigint: true });
   if (!canonicalStats.isDirectory()) {
     throw new Error(`${label} must be an existing physical directory`);
   }
-  assertIdentity(
-    identity(canonicalStats),
-    identity(stats),
-    `${label} path identity mismatch`,
-  );
-  return { identity: identity(canonicalStats), label, pathname: resolved };
+  const observed = metadata(canonicalStats);
+  assertMetadata(observed, metadata(stats), `${label} path metadata mismatch`);
+  return { label, metadata: observed, pathname: resolved };
 }
 
 async function assertCanonicalPath(pathname: string, errorMessage: string): Promise<void> {
@@ -327,17 +456,22 @@ async function assertCanonicalPath(pathname: string, errorMessage: string): Prom
 async function assertDirectoryGuards(guards: DirectoryGuard[]): Promise<void> {
   for (const guard of guards) {
     const current = await inspectPhysicalDirectory(guard.pathname, guard.label);
-    assertIdentity(
-      current.identity,
-      guard.identity,
-      `${guard.label} identity changed during eval contract loading`,
+    assertMetadata(
+      current.metadata,
+      guard.metadata,
+      `${guard.label} directory metadata changed during eval contract loading`,
     );
   }
 }
 
 function fixtureKey(fixtureRoot: string, pathname: string): string {
   const relative = path.relative(fixtureRoot, pathname);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (
+    !relative
+    || relative === ".."
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
     throw new Error("eval contract fixture entry must stay inside the fixture root");
   }
   return `${FIXTURE_KEY_ROOT}/${relative.split(path.sep).join("/")}`;
@@ -361,12 +495,79 @@ function compareStableStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function identity(stats: Stats): FileIdentity {
-  return { dev: stats.dev, ino: stats.ino };
+function metadata(stats: BigIntStats): ObservedMetadata {
+  return {
+    ctimeNs: stats.ctimeNs,
+    dev: stats.dev,
+    ino: stats.ino,
+    mode: stats.mode,
+    mtimeNs: stats.mtimeNs,
+    size: stats.size,
+    type: entryType(stats),
+  };
 }
 
-function assertIdentity(actual: FileIdentity, expected: FileIdentity, message: string): void {
-  if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
+function entryType(stats: BigIntStats): EntryType {
+  if (stats.isSymbolicLink()) {
+    return "symbolic-link";
+  }
+  if (stats.isDirectory()) {
+    return "directory";
+  }
+  if (stats.isFile()) {
+    return "file";
+  }
+  return "other";
+}
+
+function adjustFileMetadata(
+  value: ObservedMetadata,
+  key: string,
+  phase: FileObservationPhase,
+  hooks: EvalContractLoadTestHooks,
+): ObservedMetadata {
+  return hooks.adjustFileMetadata?.({ key, metadata: value, phase }) ?? value;
+}
+
+function assertMetadata(
+  actual: ObservedMetadata,
+  expected: ObservedMetadata,
+  message: string,
+): void {
+  if (
+    actual.ctimeNs !== expected.ctimeNs
+    || actual.dev !== expected.dev
+    || actual.ino !== expected.ino
+    || actual.mode !== expected.mode
+    || actual.mtimeNs !== expected.mtimeNs
+    || actual.size !== expected.size
+    || actual.type !== expected.type
+  ) {
+    throw new Error(message);
+  }
+}
+
+function assertMetadataType(
+  value: ObservedMetadata,
+  expected: EntryType,
+  message: string,
+): void {
+  if (value.type !== expected) {
+    throw new Error(message);
+  }
+}
+
+function assertDirectorySnapshot(
+  actual: DirectoryEntrySnapshot[],
+  expected: DirectoryEntrySnapshot[],
+  message: string,
+): void {
+  if (
+    actual.length !== expected.length
+    || actual.some((entry, index) => (
+      entry.name !== expected[index]?.name || entry.type !== expected[index]?.type
+    ))
+  ) {
     throw new Error(message);
   }
 }
@@ -383,9 +584,9 @@ function supportedFlag(flag: number | undefined): number {
   return typeof flag === "number" ? flag : 0;
 }
 
-async function lstatOrReject(pathname: string, errorMessage: string): Promise<Stats> {
+async function lstatOrReject(pathname: string, errorMessage: string): Promise<BigIntStats> {
   try {
-    return await fs.lstat(pathname);
+    return await fs.lstat(pathname, { bigint: true });
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       throw new Error(errorMessage);
