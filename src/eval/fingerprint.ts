@@ -6,6 +6,7 @@ export interface ExperimentScenarioInput {
 }
 
 export interface BuildExperimentIdentityOptions {
+  contractSources: Record<string, string>;
   diagnostics?: Record<string, unknown>;
   endpoint: string;
   model: string;
@@ -38,12 +39,20 @@ export function fingerprint(value: unknown): string {
 export function buildExperimentIdentity(options: BuildExperimentIdentityOptions): ExperimentIdentity {
   const endpointHash = fingerprint(normalizeEndpoint(options.endpoint));
   const requestFingerprint = fingerprint(options.requestSettings);
-  const suiteFingerprint = fingerprint(options.scenarios
-    .map((scenario) => ({
-      id: scenario.id,
-      manifest: scenario.manifest,
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id)));
+  const contractDigests = Object.fromEntries(
+    Object.entries(options.contractSources)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, source]) => [key, fingerprint(source)]),
+  );
+  const suiteFingerprint = fingerprint({
+    contractDigests,
+    scenarios: options.scenarios
+      .map((scenario) => ({
+        id: scenario.id,
+        manifest: scenario.manifest,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  });
   const comparable = {
     endpointHash,
     model: options.model,

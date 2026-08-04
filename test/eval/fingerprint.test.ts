@@ -36,6 +36,10 @@ describe("eval experiment fingerprints", () => {
       },
     };
     const first = buildExperimentIdentity({
+      contractSources: {
+        "eval/scenarios": "grader-v1",
+        "fixture/issue-workflow/index.mjs": "export const issue = 'FH-16';\n",
+      },
       diagnostics: { commit: "aaa", toolDefinitionsFingerprint: "tools-a" },
       endpoint: "https://api.openai.com/v1/",
       model: "gpt-test",
@@ -48,6 +52,10 @@ describe("eval experiment fingerprints", () => {
       scenarios: [governed, recovery],
     });
     const second = buildExperimentIdentity({
+      contractSources: {
+        "fixture/issue-workflow/index.mjs": "export const issue = 'FH-16';\n",
+        "eval/scenarios": "grader-v1",
+      },
       diagnostics: { commit: "bbb", toolDefinitionsFingerprint: "tools-b" },
       endpoint: "https://api.openai.com/v1",
       model: "gpt-test",
@@ -66,6 +74,7 @@ describe("eval experiment fingerprints", () => {
 
   it("changes identity when a controlled scenario input changes", () => {
     const createIdentity = (task: string) => buildExperimentIdentity({
+      contractSources: { "eval/scenarios": "grader-v1" },
       endpoint: "https://api.openai.com/v1",
       model: "gpt-test",
       providerId: "openai",
@@ -87,5 +96,22 @@ describe("eval experiment fingerprints", () => {
 
     expect(changed.suiteFingerprint).not.toBe(baseline.suiteFingerprint);
     expect(changed.fingerprint).not.toBe(baseline.fingerprint);
+  });
+
+  it("changes identity when executable eval contract bytes change", () => {
+    const createIdentity = (grader: string) => buildExperimentIdentity({
+      contractSources: {
+        "eval/scenarios": grader,
+        "fixture/issue-workflow/index.mjs": "export const issue = 'FH-16';\n",
+      },
+      endpoint: "https://api.openai.com/v1",
+      model: "gpt-test",
+      providerId: "openai",
+      requestSettings: { reasoning: { effort: "low" } },
+      scenarios: [{ id: "governed-read-only", manifest: { graderVersion: 1 } }],
+    });
+
+    expect(createIdentity("grader-v2").suiteFingerprint)
+      .not.toBe(createIdentity("grader-v1").suiteFingerprint);
   });
 });

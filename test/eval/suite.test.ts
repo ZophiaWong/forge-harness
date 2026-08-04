@@ -60,6 +60,56 @@ function fakeAttempt(
 }
 
 describe("eval suite runner", () => {
+  it("fingerprints injected contract bytes without serializing their contents", async () => {
+    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-contract-"));
+    tempRoots.push(repositoryRoot);
+    const attemptRunner = async (input: Parameters<NonNullable<Parameters<typeof runEvalSuite>[0]["attemptRunner"]>>[0]) => (
+      fakeAttempt(input.scenario.id, input.ordinal)
+    );
+    const firstSource = "/* eval-contract-secret-first */";
+    const secondSource = "/* eval-contract-secret-second */";
+    const firstLoader = vi.fn(async () => ({ "eval/scenarios": firstSource }));
+    const secondLoader = vi.fn(async () => ({ "eval/scenarios": secondSource }));
+
+    const first = await runEvalSuite({
+      attemptRunner,
+      contractSourceLoader: firstLoader,
+      model: "gpt-test",
+      now: () => new Date("2026-08-03T01:00:00.000Z"),
+      providerId: "openai",
+      randomSuffix: () => "contract1",
+      repositoryRoot,
+      scenarioId: "governed-read-only",
+    });
+    const second = await runEvalSuite({
+      attemptRunner,
+      contractSourceLoader: secondLoader,
+      model: "gpt-test",
+      now: () => new Date("2026-08-03T02:00:00.000Z"),
+      providerId: "openai",
+      randomSuffix: () => "contract2",
+      repositoryRoot,
+      scenarioId: "governed-read-only",
+    });
+
+    expect(firstLoader).toHaveBeenCalledTimes(1);
+    expect(secondLoader).toHaveBeenCalledTimes(1);
+    expect(second.summary.identity.suiteFingerprint)
+      .not.toBe(first.summary.identity.suiteFingerprint);
+    for (const result of [first, second]) {
+      const serializedArtifacts = [
+        JSON.stringify(result.summary),
+        JSON.stringify(result.report),
+        await fs.readFile(result.artifactPaths.summaryPath, "utf8"),
+        await fs.readFile(result.artifactPaths.reportPath, "utf8"),
+        await fs.readFile(result.artifactPaths.markdownPath, "utf8"),
+      ].join("\n");
+      expect(serializedArtifacts).not.toContain(firstSource);
+      expect(serializedArtifacts).not.toContain(secondSource);
+      expect(serializedArtifacts).not.toContain(repositoryRoot);
+    }
+  });
+
   it("continues repetitions after behavioral failure with unavailable hard evidence", async () => {
     const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-unavailable-hard-"));
     tempRoots.push(repositoryRoot);

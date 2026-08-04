@@ -19,6 +19,7 @@ import {
 } from "./canonicalSuite.js";
 import { compareEvalSummary } from "./compare.js";
 import { EVAL_RUN_MARKER, type EvalRunMarker } from "./cleanup.js";
+import { loadEvalContractSources } from "./contract.js";
 import {
   buildExperimentIdentity,
   fingerprint,
@@ -49,6 +50,7 @@ export interface RunEvalSuiteOptions {
   apiKey?: string;
   attemptRunner?: EvalAttemptRunner;
   baseURL?: string;
+  contractSourceLoader?: () => Promise<Record<string, string>>;
   model: string;
   now?: () => Date;
   providerId?: string;
@@ -74,7 +76,9 @@ export async function runEvalSuite(options: RunEvalSuiteOptions): Promise<RunEva
   const selectedScenarios = options.scenarioId
     ? [getEvalScenario(options.scenarioId)]
     : CANONICAL_SCENARIO_ORDER.map((id) => getEvalScenario(id));
+  const contractSources = await (options.contractSourceLoader ?? loadEvalContractSources)();
   const identity = buildExperimentIdentity({
+    contractSources,
     endpoint: options.baseURL ?? DEFAULT_OPENAI_ENDPOINT,
     model: options.model,
     providerId,
