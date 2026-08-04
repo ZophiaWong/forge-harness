@@ -403,7 +403,8 @@ async function readOptionalFile(pathname: string): Promise<string | undefined> {
   }
 }
 
-async function runWithWorkflowDeadline<T>(
+/** @internal Exported for deterministic deadline ownership tests. */
+export async function runWithWorkflowDeadline<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
@@ -414,16 +415,23 @@ async function runWithWorkflowDeadline<T>(
     controller.abort(new Error("workflow_timeout"));
   }, timeoutMs);
   try {
-    const result = await operation(controller.signal);
+    let result: T;
+    try {
+      result = await operation(controller.signal);
+    } catch (error) {
+      if (timedOut) {
+        throw new EvalInfrastructureError(
+          "workflow_timeout",
+          "workflow_timeout",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     if (timedOut) {
       throw new EvalInfrastructureError("workflow_timeout", "workflow_timeout");
     }
     return result;
-  } catch (error) {
-    if (timedOut) {
-      throw new EvalInfrastructureError("workflow_timeout", "workflow_timeout");
-    }
-    throw error;
   } finally {
     clearTimeout(timer);
   }

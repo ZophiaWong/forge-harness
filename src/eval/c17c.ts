@@ -97,42 +97,52 @@ export async function runC17cRuntime(options: RunC17cRuntimeOptions): Promise<C1
     decisions: trustDecisions,
     lifecycleEmitter,
   });
-  const issueServer = pluginActivation.servers.find((server) => (
-    server.descriptor.server.id === "issue-workflow-demo"
-  ));
-  if (!issueServer || issueServer.status !== "active") {
-    await pluginActivation.close();
-    throw new EvalInfrastructureError(
-      "plugin_startup",
-      `canonical issue-workflow MCP server did not start${issueServer?.status === "failed" ? `: ${issueServer.reason}` : ""}`,
-    );
-  }
-  for (const event of buildPluginActivationEvents({
-    decisions: trustDecisions,
-    hookFailures: hookActivation.failures,
-    servers: pluginActivation.servers,
-  })) {
-    await lifecycleEmitter.emit(event);
-  }
-
-  const approvedPlugins = trustDecisions
-    .filter((decision) => decision.result.approved)
-    .map((decision) => decision.descriptor);
-  const promptAssets = mergePluginPromptAssets(
-    await loadRepoPromptAssets(options.workspace),
-    approvedPlugins,
-  );
-  const mcpPolicies = mergeMcpPermissionPolicies(
-    pluginActivation.sessions.map((session) => session.permissionPolicies),
-  );
   const teamRoot = path.join(options.rootTrace.paths.sessionDir, "team");
   const mailboxStore = createFileMailboxStore({ teamRoot });
   let teammateManager: TeammateManager | undefined;
   let completed = false;
   let capturedTeam: C17cRuntimeResult["team"] | undefined;
   let capturedGraph: TeamTaskGraphFile | undefined;
+  let operationError: unknown;
+  let operationFailed = false;
+  let runtimeResult!: C17cRuntimeResult;
+  const cleanupErrors: unknown[] = [];
+  const captureCleanup = async (operation: () => Promise<void>): Promise<void> => {
+    try {
+      await operation();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  };
 
   try {
+    const issueServer = pluginActivation.servers.find((server) => (
+      server.descriptor.server.id === "issue-workflow-demo"
+    ));
+    if (!issueServer || issueServer.status !== "active") {
+      throw new EvalInfrastructureError(
+        "plugin_startup",
+        `canonical issue-workflow MCP server did not start${issueServer?.status === "failed" ? `: ${issueServer.reason}` : ""}`,
+      );
+    }
+    for (const event of buildPluginActivationEvents({
+      decisions: trustDecisions,
+      hookFailures: hookActivation.failures,
+      servers: pluginActivation.servers,
+    })) {
+      await lifecycleEmitter.emit(event);
+    }
+
+    const approvedPlugins = trustDecisions
+      .filter((decision) => decision.result.approved)
+      .map((decision) => decision.descriptor);
+    const promptAssets = mergePluginPromptAssets(
+      await loadRepoPromptAssets(options.workspace),
+      approvedPlugins,
+    );
+    const mcpPolicies = mergeMcpPermissionPolicies(
+      pluginActivation.sessions.map((session) => session.permissionPolicies),
+    );
     teammateManager = createTeammateManager({
       approver: options.approver,
       baseCwd: options.workspace,
@@ -197,31 +207,50 @@ export async function runC17cRuntime(options: RunC17cRuntimeOptions): Promise<C1
     capturedTeam = await inspectTeam(teammateManager, mailboxStore);
     capturedGraph = await taskStore.read();
     completed = true;
-    return {
+    runtimeResult = {
       finalAnswer: result.finalAnswer,
       taskGraph: capturedGraph,
       team: capturedTeam,
     };
+  } catch (error) {
+    operationError = error;
+    operationFailed = true;
   } finally {
     if (!capturedTeam && teammateManager) {
-      await teammateManager.flushEvents().catch(() => undefined);
-      capturedTeam = await inspectTeam(teammateManager, mailboxStore).catch(() => undefined);
+      await captureCleanup(() => teammateManager!.flushEvents());
+      await captureCleanup(async () => {
+        capturedTeam = await inspectTeam(teammateManager!, mailboxStore);
+      });
     }
     if (!capturedGraph) {
-      capturedGraph = await taskStore.read().catch(() => undefined);
+      await captureCleanup(async () => {
+        capturedGraph = await taskStore.read();
+      });
     }
-    try {
-      if (teammateManager) {
-        if (completed) {
-          await teammateManager.close();
-        } else {
-          await teammateManager.terminateAll();
-        }
+    if (teammateManager) {
+      if (completed) {
+        await captureCleanup(() => teammateManager!.close());
+      } else {
+        await captureCleanup(() => teammateManager!.terminateAll());
       }
-    } finally {
-      await pluginActivation.close();
     }
+    await captureCleanup(() => pluginActivation.close());
   }
+
+  const failures = [
+    ...(operationFailed ? [operationError] : []),
+    ...cleanupErrors,
+  ];
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      `c17c runtime failed: ${failures.map(formatError).join("; ")}`,
+    );
+  }
+  return runtimeResult;
 }
 
 async function inspectTeam(
@@ -240,4 +269,8 @@ async function inspectTeam(
       unreadCount: member.unreadCount,
     })),
   };
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

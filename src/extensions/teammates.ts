@@ -911,19 +911,33 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       return toSummary(member);
     },
     async terminateAll() {
+      const cleanupErrors: unknown[] = [];
       const stopped: string[] = [];
+      const captureCleanup = async (operation: () => Promise<void>): Promise<void> => {
+        try {
+          await operation();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      };
       for (const member of members.values()) {
         if (member.runtime.state !== "failed" && member.runtime.state !== "stopped") {
-          await updateRuntime(member, "stopped");
           stopped.push(member.definition.name);
+          await captureCleanup(() => updateRuntime(member, "stopped"));
         }
-        await stopProcess(member, false);
+        await captureCleanup(() => stopProcess(member, false));
       }
-      await options.lifecycleEmitter.emit({
+      await captureCleanup(() => options.lifecycleEmitter.emit({
         mode: "terminate",
         stopped,
         type: "team_cleanup",
-      });
+      }));
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          cleanupErrors,
+          `Teammate termination cleanup failed: ${cleanupErrors.map(errorMessage).join("; ")}`,
+        );
+      }
     },
   };
 }

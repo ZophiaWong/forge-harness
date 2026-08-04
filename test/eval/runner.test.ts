@@ -10,6 +10,8 @@ import type {
   ResponseCreateRequest,
 } from "../../src/core/minimalLoop.js";
 import type { RunC17cRuntimeOptions } from "../../src/eval/c17c.js";
+import { EvalInfrastructureError } from "../../src/eval/errors.js";
+import * as evalRunnerModule from "../../src/eval/runner.js";
 import {
   classifyEvalExecutionError,
   runEvalAttempt,
@@ -46,6 +48,99 @@ function scriptedResponseCreate(responses: MinimalResponse[]): ResponseCreate & 
 }
 
 describe("eval attempt runner", () => {
+  it("preserves the exact late provider rejection as the timeout cause", async () => {
+    const runWithWorkflowDeadline = Reflect.get(
+      evalRunnerModule,
+      "runWithWorkflowDeadline",
+    ) as undefined | (<T>(
+      operation: (signal: AbortSignal) => Promise<T>,
+      timeoutMs: number,
+    ) => Promise<T>);
+    expect(runWithWorkflowDeadline).toBeTypeOf("function");
+    if (!runWithWorkflowDeadline) {
+      return;
+    }
+    const providerError = new Error("late provider failure");
+    const error = await runWithWorkflowDeadline(
+      (signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          setTimeout(() => reject(providerError), 5);
+        }, { once: true });
+      }),
+      10,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(EvalInfrastructureError);
+    expect(error).toMatchObject({
+      cause: providerError,
+      reasonCode: "workflow_timeout",
+    });
+  });
+
+  it("does not invent a timeout cause when the operation resolves after abort", async () => {
+    const runWithWorkflowDeadline = Reflect.get(
+      evalRunnerModule,
+      "runWithWorkflowDeadline",
+    ) as undefined | (<T>(
+      operation: (signal: AbortSignal) => Promise<T>,
+      timeoutMs: number,
+    ) => Promise<T>);
+    expect(runWithWorkflowDeadline).toBeTypeOf("function");
+    if (!runWithWorkflowDeadline) {
+      return;
+    }
+    const error = await runWithWorkflowDeadline(
+      (signal) => new Promise((resolve) => {
+        signal.addEventListener("abort", () => {
+          setTimeout(() => resolve("late success"), 5);
+        }, { once: true });
+      }),
+      10,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(EvalInfrastructureError);
+    expect(error).toMatchObject({ reasonCode: "workflow_timeout" });
+    expect(error).not.toHaveProperty("cause");
+  });
+
+  it("preserves a combined teammate and plugin cleanup aggregate as the timeout cause", async () => {
+    const runWithWorkflowDeadline = Reflect.get(
+      evalRunnerModule,
+      "runWithWorkflowDeadline",
+    ) as undefined | (<T>(
+      operation: (signal: AbortSignal) => Promise<T>,
+      timeoutMs: number,
+    ) => Promise<T>);
+    expect(runWithWorkflowDeadline).toBeTypeOf("function");
+    if (!runWithWorkflowDeadline) {
+      return;
+    }
+    const teammateError = new Error("teammate termination failed");
+    const pluginError = new Error("plugin close failed");
+    const cleanupError = new AggregateError(
+      [teammateError, pluginError],
+      "c17c cleanup failed",
+    );
+    const error = await runWithWorkflowDeadline(
+      (signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          setTimeout(() => reject(cleanupError), 5);
+        }, { once: true });
+      }),
+      10,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(EvalInfrastructureError);
+    expect(error).toMatchObject({
+      cause: cleanupError,
+      reasonCode: "workflow_timeout",
+    });
+    expect((error as Error & { cause: AggregateError }).cause.errors).toEqual([
+      teammateError,
+      pluginError,
+    ]);
+  });
+
   it("distinguishes a blocked verifier from a provider failure", () => {
     expect(classifyEvalExecutionError(new Error("Verification blocked."))).toEqual({
       reasonCode: "verifier_blocked",

@@ -466,6 +466,81 @@ describe("TeammateManager", () => {
     ]);
   });
 
+  it("awaits every forced member and final cleanup before aggregating failures", async () => {
+    const firstCleanupError = new Error("alpha stopped trace failed");
+    const cleanupEvents: TraceEventPayload[] = [];
+    let failAlphaTrace = true;
+    const fixture = await createFixture(["session-alpha", "session-beta"], {
+      lifecycleEmitter: {
+        async emit(event) {
+          cleanupEvents.push(event);
+          if (
+            failAlphaTrace
+            && event.type === "teammate_state_changed"
+            && event.name === "alpha"
+            && event.state === "stopped"
+          ) {
+            failAlphaTrace = false;
+            throw firstCleanupError;
+          }
+        },
+      },
+      terminateTimeoutMs: 1_000,
+    });
+    const alphaStart = fixture.manager.start({
+      instructions: "alpha research",
+      message: "initial",
+      name: "alpha",
+      profile: "research",
+    });
+    const alpha = await fixture.adapter.nextProcess();
+    alpha.emit({ sessionId: "session-alpha", type: "ready" });
+    await alphaStart;
+    const betaStart = fixture.manager.start({
+      instructions: "beta research",
+      message: "initial",
+      name: "beta",
+      profile: "research",
+    });
+    const beta = await fixture.adapter.nextProcess();
+    beta.emit({ sessionId: "session-beta", type: "ready" });
+    await betaStart;
+    let settled = false;
+
+    const termination = fixture.manager.terminateAll();
+    void termination.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await waitUntil(() => alpha.kill.mock.calls.length === 1);
+    expect(beta.kill).not.toHaveBeenCalled();
+    alpha.exit(0, "SIGTERM");
+    await waitUntil(() => beta.kill.mock.calls.length === 1);
+    expect(settled).toBe(false);
+    expect(cleanupEvents).not.toContainEqual(expect.objectContaining({ type: "team_cleanup" }));
+
+    beta.exit(0, "SIGTERM");
+    await expect(termination).rejects.toSatisfy((error: unknown) => (
+      error instanceof AggregateError
+      && error.errors.length === 1
+      && error.errors[0] === firstCleanupError
+    ));
+    expect(cleanupEvents).toContainEqual(expect.objectContaining({
+      mode: "terminate",
+      stopped: ["alpha", "beta"],
+      type: "team_cleanup",
+    }));
+    await fixture.manager.flushEvents();
+    expect(await fixture.manager.list()).toEqual([
+      expect.objectContaining({ name: "alpha", state: "stopped" }),
+      expect.objectContaining({ name: "beta", state: "stopped" }),
+    ]);
+
+    await expect(fixture.manager.terminateAll()).resolves.toBeUndefined();
+    expect(alpha.kill).toHaveBeenCalledTimes(1);
+    expect(beta.kill).toHaveBeenCalledTimes(1);
+  });
+
   it("creates an edit workspace once and reuses the same binding after rejoin", async () => {
     const workspaceFactory = {
       create: vi.fn(async () => ({

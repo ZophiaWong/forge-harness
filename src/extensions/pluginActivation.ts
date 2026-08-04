@@ -303,12 +303,19 @@ function finalToolName(server: ResolvedPluginMcpServerDescriptor, rawName: strin
 }
 
 async function closeSessions(sessions: PluginMcpSessionLike[]): Promise<void> {
+  const cleanupErrors: unknown[] = [];
   for (const session of [...sessions].reverse()) {
     try {
       await session.close?.();
-    } catch {
-      // Each session gets a cleanup attempt; another session's close failure must not stop the sequence.
+    } catch (error) {
+      cleanupErrors.push(error);
     }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      cleanupErrors,
+      `Plugin MCP cleanup failed: ${cleanupErrors.map(formatError).join("; ")}`,
+    );
   }
 }
 
