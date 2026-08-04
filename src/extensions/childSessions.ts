@@ -162,6 +162,7 @@ async function startChildSession(
   options: CreateChildSessionRunnerOptions,
   request: ChildSessionRunRequest,
 ): Promise<ChildSessionRunHandle> {
+  options.signal?.throwIfAborted();
   const childTask = formatChildProfileTask({
     profile: request.profile,
     task: request.task,
@@ -396,10 +397,28 @@ export function createAsyncChildSessionManager(options: {
   return {
     async cancelRunning() {
       const running = sessions.filter((session) => !session.result);
+      const cancellationErrors: unknown[] = [];
       for (const session of running) {
-        session.handle.cancel();
+        try {
+          session.handle.cancel();
+        } catch (error) {
+          cancellationErrors.push(error);
+        }
       }
-      await Promise.all(running.map((session) => session.settlement));
+      const settlements = await Promise.allSettled(running.map((session) => session.settlement));
+      for (const settlement of settlements) {
+        if (settlement.status === "rejected") {
+          cancellationErrors.push(settlement.reason);
+        }
+      }
+      if (cancellationErrors.length > 0) {
+        throw new AggregateError(
+          cancellationErrors,
+          `Child session cancellation failed: ${cancellationErrors
+            .map((error) => error instanceof Error ? error.message : String(error))
+            .join("; ")}`,
+        );
+      }
     },
     drainNotifications() {
       return sessions

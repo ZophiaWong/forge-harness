@@ -204,6 +204,69 @@ describe("runMinimalLoop", () => {
     });
   });
 
+  it("preserves the aborted model error and records session_ended when tool cleanup fails", async () => {
+    const controller = new AbortController();
+    const primaryError = new Error("primary model abort");
+    const trace = createTraceRecorder();
+    const close = vi.fn(async () => {
+      throw new Error("tool cleanup failed");
+    });
+    const responseCreate: ResponseCreate = async () => {
+      controller.abort(primaryError);
+      throw primaryError;
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      responseCreate,
+      signal: controller.signal,
+      task: "preserve the primary error",
+      toolRuntime: {
+        close,
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(trace.events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+    expect(trace.events).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining("tool cleanup failed"),
+      type: "session_failed",
+    }));
+  });
+
+  it("records a failed terminal status when cleanup fails after a final answer", async () => {
+    const trace = createTraceRecorder();
+    const close = vi.fn(async () => {
+      throw new Error("completed-path cleanup failed");
+    });
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      responseCreate: async () => ({ output: [], output_text: "candidate" }),
+      task: "finish then clean up",
+      toolRuntime: {
+        close,
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toThrow("completed-path cleanup failed");
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(trace.events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+    expect(trace.events).not.toContainEqual(expect.objectContaining({
+      status: "completed",
+      type: "session_ended",
+    }));
+  });
+
   it("does not start a model round when the Runtime signal is already aborted", async () => {
     const controller = new AbortController();
     const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
@@ -321,6 +384,84 @@ describe("runMinimalLoop", () => {
 
     await expect(running).rejects.toThrow("stop before consuming response");
     expect(toolRuntime.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a final answer when model_response recording aborts the Runtime", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("abort from model_response recorder");
+    const trace = createTraceRecorder();
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "model_response") {
+          controller.abort(abortError);
+        }
+      },
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      responseCreate: async () => ({ output: [], output_text: "must not finish" }),
+      signal: controller.signal,
+      task: "abort while recording the response",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(abortError);
+
+    expect(trace.events).not.toContainEqual(expect.objectContaining({ type: "final_answer" }));
+    expect(trace.events.at(-1)).toMatchObject({ status: "failed", type: "session_ended" });
+  });
+
+  it("does not execute a tool when model_response recording aborts the Runtime", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("abort tool response recording");
+    const trace = createTraceRecorder();
+    const execute = vi.fn(async () => ({
+      content: "must not execute",
+      status: "completed" as const,
+      toolName: "mutate_fixture",
+    }));
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "model_response") {
+          controller.abort(abortError);
+        }
+      },
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate: async () => ({
+        output: [{
+          arguments: "{}",
+          call_id: "call_abort_recording",
+          name: "mutate_fixture",
+          type: "function_call",
+        }],
+        output_text: "",
+      }),
+      signal: controller.signal,
+      task: "do not execute after recorder abort",
+      toolRuntime: {
+        execute,
+        toolDefinitions: () => [{
+          description: "Mutate a fixture.",
+          name: "mutate_fixture",
+          parameters: { type: "object" },
+          strict: false,
+          type: "function",
+        }],
+      },
+    })).rejects.toBe(abortError);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(trace.events.at(-1)).toMatchObject({ status: "failed", type: "session_ended" });
   });
 
   it("routes additional dynamic tools and closes them before session_ended", async () => {

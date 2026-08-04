@@ -224,7 +224,7 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     reportFinalState(options);
     return result;
   } catch (error) {
-    await session.close("failed");
+    await session.close("failed").catch(() => undefined);
     throw error;
   }
 }
@@ -318,8 +318,24 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
     recentRoundsToKeep: contextCompaction?.recentRoundsToKeep ?? DEFAULT_COMPACTION_OPTIONS.recentRoundsToKeep,
   });
   let closed = false;
+  let closePromise: Promise<void> | undefined;
   let running = false;
   let responseCreate: ResponseCreate;
+  const closeSession = (status: SessionEndStatus): Promise<void> => {
+    if (closePromise) {
+      return closePromise;
+    }
+    closed = true;
+    closePromise = finishSession(
+      lifecycleEmitter,
+      backgroundTasks,
+      childSessions,
+      toolRuntime,
+      lastRound,
+      status,
+    );
+    return closePromise;
+  };
 
   try {
     await lifecycleEmitter.emit({
@@ -344,21 +360,14 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
     responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await lifecycleEmitter.emit({
-      message,
-      type: "session_failed",
-    });
-    await finishSession(lifecycleEmitter, backgroundTasks, childSessions, toolRuntime, lastRound, "failed");
+    await lifecycleEmitter.emit({ message, type: "session_failed" }).catch(() => undefined);
+    await closeSession("failed").catch(() => undefined);
     throw error;
   }
 
   return {
-    async close(status) {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      await finishSession(lifecycleEmitter, backgroundTasks, childSessions, toolRuntime, lastRound, status);
+    close(status) {
+      return closeSession(status);
     },
     async runTurn(input, turnOptions) {
       if (closed) {
@@ -476,8 +485,10 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
             ...(response.telemetry ? { telemetry: response.telemetry } : {}),
             type: "model_response",
           });
+          options.signal?.throwIfAborted();
 
           if (toolCalls.length === 0) {
+            options.signal?.throwIfAborted();
             const candidateAnswer = response.output_text.trim();
             const backgroundGateInjected = await appendBackgroundTaskNotifications({
               backgroundTasks,
@@ -545,6 +556,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
             }
 
             if (!options.verifier) {
+              options.signal?.throwIfAborted();
               options.transcript?.finalAnswer(candidateAnswer);
               await lifecycleEmitter.emit({
                 answer: candidateAnswer,
@@ -570,6 +582,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
             await recordVerificationResult(lifecycleEmitter, round, verification);
 
             if (verification.status === "passed") {
+              options.signal?.throwIfAborted();
               options.transcript?.finalAnswer(candidateAnswer);
               await lifecycleEmitter.emit({
                 answer: candidateAnswer,
@@ -614,6 +627,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
           }
 
           for (const toolCall of toolCalls) {
+            options.signal?.throwIfAborted();
             const resultText = await executeToolCall(
               toolCall,
               toolRuntime,
@@ -648,13 +662,9 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
         throw new Error(`Minimal loop stopped after ${turnMaxToolRounds} tool rounds without a final answer.`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await lifecycleEmitter.emit({
-          message,
-          type: "session_failed",
-        });
+        await lifecycleEmitter.emit({ message, type: "session_failed" }).catch(() => undefined);
         if (!closed) {
-          closed = true;
-          await finishSession(lifecycleEmitter, backgroundTasks, childSessions, toolRuntime, lastRound, "failed");
+          await closeSession("failed").catch(() => undefined);
         }
         throw error;
       } finally {
@@ -1080,14 +1090,26 @@ async function finishSession(
   rounds: number,
   status: SessionEndStatus,
 ): Promise<void> {
-  await cleanupBackgroundTasks(backgroundTasks);
-  await childSessions?.cancelRunning();
-  await toolRuntime.close?.();
-  await lifecycleEmitter.emit({
-    rounds,
-    status,
-    type: "session_ended",
-  });
+  const cleanupErrors: unknown[] = [];
+  await captureCleanupError(cleanupErrors, () => cleanupBackgroundTasks(backgroundTasks));
+  await captureCleanupError(cleanupErrors, async () => childSessions?.cancelRunning());
+  await captureCleanupError(cleanupErrors, async () => toolRuntime.close?.());
+
+  if (cleanupErrors.length > 0) {
+    const message = formatCleanupErrorMessage(cleanupErrors);
+    await captureCleanupError(cleanupErrors, () => lifecycleEmitter.emit({
+      message,
+      type: "session_failed",
+    }));
+    await captureCleanupError(cleanupErrors, () => lifecycleEmitter.emit({
+      rounds,
+      status: "failed",
+      type: "session_ended",
+    }));
+    throw new AggregateError(cleanupErrors, message);
+  }
+
+  await lifecycleEmitter.emit({ rounds, status, type: "session_ended" });
 }
 
 async function cleanupBackgroundTasks(backgroundTasks: BackgroundTaskManager | undefined): Promise<void> {
@@ -1095,9 +1117,30 @@ async function cleanupBackgroundTasks(backgroundTasks: BackgroundTaskManager | u
     return;
   }
 
-  await backgroundTasks.flushEvents();
-  await backgroundTasks.cancelRunning();
-  await backgroundTasks.flushEvents();
+  const cleanupErrors: unknown[] = [];
+  await captureCleanupError(cleanupErrors, () => backgroundTasks.flushEvents());
+  await captureCleanupError(cleanupErrors, () => backgroundTasks.cancelRunning());
+  await captureCleanupError(cleanupErrors, () => backgroundTasks.flushEvents());
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, formatCleanupErrorMessage(cleanupErrors));
+  }
+}
+
+async function captureCleanupError(
+  errors: unknown[],
+  operation: () => Promise<unknown> | unknown,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    errors.push(error);
+  }
+}
+
+function formatCleanupErrorMessage(errors: unknown[]): string {
+  return `Session cleanup failed: ${errors
+    .map((error) => error instanceof Error ? error.message : String(error))
+    .join("; ")}`;
 }
 
 export function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: string | undefined): ResponseCreate {
