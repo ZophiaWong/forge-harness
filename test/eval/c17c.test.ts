@@ -165,11 +165,7 @@ it("keeps a completed root terminal while preserving later orchestration and cle
       if (!workflowSignal) {
         throw new Error("missing workflow signal");
       }
-      await new Promise<void>((_resolve, reject) => {
-        workflowSignal?.addEventListener("abort", () => {
-          setTimeout(() => reject(orchestrationError), 5);
-        }, { once: true });
-      });
+      await rejectAfterAbort(workflowSignal, orchestrationError);
     },
     async terminateAll() {
       cleanupEvents.push("teammates_terminated");
@@ -259,11 +255,7 @@ it("reports a later c17c timeout without fabricating a second root terminal", as
       if (!workflowSignal) {
         throw new Error("missing workflow signal");
       }
-      await new Promise<void>((_resolve, reject) => {
-        workflowSignal?.addEventListener("abort", () => {
-          setTimeout(() => reject(orchestrationError), 5);
-        }, { once: true });
-      });
+      await rejectAfterAbort(workflowSignal, orchestrationError);
     },
   }));
   startApprovedPluginMcpServersMock.mockImplementation(async ({
@@ -334,6 +326,18 @@ function fakeSession(): PluginMcpSessionLike {
     permissionPolicies: new Map(),
     toolDefinitions: () => [],
   };
+}
+
+async function rejectAfterAbort(signal: AbortSignal, error: Error): Promise<never> {
+  if (!signal.aborted) {
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+  }
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 5);
+  });
+  throw error;
 }
 
 function fakeTeammateManager(
