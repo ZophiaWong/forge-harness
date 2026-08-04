@@ -16,7 +16,8 @@ import {
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import { createCliSessionTrace, type SessionMetadata } from "../../src/runtime/session.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
-import type { TraceEventPayload } from "../../src/runtime/trace.js";
+import type { RecordedTraceEvent, TraceEventPayload } from "../../src/runtime/trace.js";
+import { parseRecordedTraceEvent } from "../../src/runtime/traceSchema.js";
 import type { ChildSessionRunHandle, ChildSessionRunResult } from "../../src/tools/delegateTool.js";
 
 describe("child session profiles", () => {
@@ -487,10 +488,12 @@ describe("child session profiles", () => {
     await expect(gitLines(root.repo, ["branch", "--format=%(refname:short)"])).resolves.toEqual(branchesBefore);
   });
 
-  it("stops an edit child when child_session_started recording aborts its parent", async () => {
+  it("terminalizes an edit child when child_session_started recording aborts its parent", async () => {
     const root = await createRootTaskFixture({ git: true });
     const controller = new AbortController();
     const abortError = new Error("parent stopped while recording child start");
+    const addListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
     const parentEvents: TraceEventPayload[] = [];
     const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
     const worktreesRoot = path.join(root.repo, ".forge", "worktrees");
@@ -503,6 +506,7 @@ describe("child session profiles", () => {
           async record(event) {
             parentEvents.push(event);
             if (event.type === "child_session_started") {
+              expect(addListener).toHaveBeenCalledOnce();
               controller.abort(abortError);
             }
           },
@@ -514,21 +518,124 @@ describe("child session profiles", () => {
       taskGraph: root.binding,
     });
 
-    await expect(runner.run({
+    const result = await runner.run({
       maxToolRounds: 2,
       parentCallId: "call_abort_during_child_start",
       parentRound: 1,
       profile: "edit",
       runInBackground: false,
       task: "Must stop before preparing a worktree.",
-    })).rejects.toBe(abortError);
+    });
 
-    expect(parentEvents).toEqual([
-      expect.objectContaining({ type: "child_session_started" }),
+    expect(result).toMatchObject({ status: "failed" });
+    expect(parentEvents.filter((event) => event.type === "child_session_started")).toHaveLength(1);
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([
+      expect.objectContaining({
+        reason: abortError.message,
+        status: "failed",
+        type: "child_session_finished",
+      }),
+    ]);
+    expect(parentEvents.filter((event) => event.type === "child_session_handoff")).toEqual([]);
+    expect(await readTraceEvents(result.tracePath)).toEqual([
+      expect.objectContaining({ message: abortError.message, type: "session_failed" }),
+      expect.objectContaining({ rounds: 0, status: "failed", type: "session_ended" }),
     ]);
     expect(responseCreate).not.toHaveBeenCalled();
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(removeListener.mock.calls[0]?.[1]).toBe(addListener.mock.calls[0]?.[1]);
     await expect(fs.readdir(worktreesRoot).catch(() => [] as string[])).resolves.toEqual(worktreesBefore);
     await expect(gitLines(root.repo, ["branch", "--format=%(refname:short)"])).resolves.toEqual(branchesBefore);
+  });
+
+  it("cleans up cancellation ownership when child registration emission fails", async () => {
+    const root = await createRootTaskFixture();
+    const controller = new AbortController();
+    const registrationError = new Error("child registration write failed");
+    const addListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+            if (event.type === "child_session_started") {
+              throw registrationError;
+            }
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate,
+      signal: controller.signal,
+      taskGraph: root.binding,
+    });
+
+    await expect(runner.start({
+      maxToolRounds: 2,
+      parentCallId: "call_registration_failure",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: true,
+      task: "Do not run after registration failure.",
+    })).rejects.toBe(registrationError);
+
+    expect(addListener).toHaveBeenCalledOnce();
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(removeListener.mock.calls[0]?.[1]).toBe(addListener.mock.calls[0]?.[1]);
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([]);
+    expect(responseCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failure: "prompt setup", profile: "research" as const },
+    { failure: "worktree setup", profile: "edit" as const },
+  ])("terminalizes a published child after $failure fails", async ({ profile }) => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "forge-child-preloop-"));
+    if (profile === "research") {
+      await fs.mkdir(path.join(repo, ".forge", "skills", "Invalid-Name"), { recursive: true });
+    }
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const runner = createChildSessionRunner({
+      baseCwd: repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+          },
+        },
+      }),
+      parentSessionId: "root-session",
+      responseCreate,
+    });
+
+    const result = await runner.run({
+      maxToolRounds: 2,
+      parentCallId: `call_${profile}_preloop_failure`,
+      parentRound: 1,
+      profile,
+      runInBackground: false,
+      task: "Fail before the model starts.",
+    });
+    const childEvents = await readTraceEvents(result.tracePath);
+
+    expect(result.status).toBe("failed");
+    expect(parentEvents.filter((event) => event.type === "child_session_started")).toHaveLength(1);
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([
+      expect.objectContaining({ status: "failed", type: "child_session_finished" }),
+    ]);
+    expect(parentEvents.filter((event) => event.type === "child_session_handoff")).toEqual([]);
+    expect(childEvents.filter((event) => event.type === "session_failed")).toHaveLength(1);
+    expect(childEvents.at(-1)).toMatchObject({
+      rounds: 0,
+      status: "failed",
+      type: "session_ended",
+    });
+    expect(responseCreate).not.toHaveBeenCalled();
   });
 
   it("prepends profile-specific prompt prose while preserving child skill invocations", () => {
@@ -987,4 +1094,13 @@ function createDeferred<T>(): Deferred<T> {
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function readTraceEvents(tracePath: string): Promise<RecordedTraceEvent[]> {
+  const contents = await fs.readFile(tracePath, "utf8");
+  return contents
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => parseRecordedTraceEvent(JSON.parse(line)));
 }

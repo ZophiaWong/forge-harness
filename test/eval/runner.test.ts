@@ -23,14 +23,49 @@ import { getEvalScenario } from "../../src/eval/scenarios.js";
 import type { EvalAttemptResult, EvalSuiteSummary } from "../../src/eval/types.js";
 
 const runC17cRuntimeMock = vi.hoisted(() => vi.fn());
+const evalBootstrapTestState = vi.hoisted(() => ({
+  afterChildStarted: undefined as ((signal: AbortSignal | undefined) => Promise<void>) | undefined,
+}));
 
 vi.mock("../../src/eval/c17c.js", () => ({
   runC17cRuntime: runC17cRuntimeMock,
 }));
 
+vi.mock("../../src/eval/bootstrap.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/eval/bootstrap.js")>();
+  type ChildRunnerOptions = Parameters<
+    typeof actual.evalRuntimeBootstrap.createChildSessionRunner
+  >[0];
+
+  return {
+    ...actual,
+    evalRuntimeBootstrap: Object.freeze({
+      ...actual.evalRuntimeBootstrap,
+      createChildSessionRunner(options: ChildRunnerOptions) {
+        const afterChildStarted = evalBootstrapTestState.afterChildStarted;
+        if (!afterChildStarted) {
+          return actual.evalRuntimeBootstrap.createChildSessionRunner(options);
+        }
+        return actual.evalRuntimeBootstrap.createChildSessionRunner({
+          ...options,
+          parentLifecycleEmitter: {
+            async emit(event) {
+              await options.parentLifecycleEmitter.emit(event);
+              if (event.type === "child_session_started") {
+                await afterChildStarted(options.signal);
+              }
+            },
+          },
+        });
+      },
+    }),
+  };
+});
+
 const tempRoots: string[] = [];
 
 afterEach(async () => {
+  evalBootstrapTestState.afterChildStarted = undefined;
   runC17cRuntimeMock.mockReset();
   await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
 });
@@ -801,5 +836,83 @@ describe("eval attempt runner", () => {
     expect(result.attempt.outcome).toBe("passed");
     expect(result.sessions.map((session) => session.role)).toEqual(["root", "child"]);
     expect(result.attempt.evidenceRefs).toContain("attempts/async-child-handoff/1/child-1-trace.jsonl");
+  });
+
+  it("keeps async-child timeout classification when cancellation lands during start registration", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-child-start-timeout-"));
+    tempRoots.push(attemptRoot);
+    const base = getEvalScenario("async-child-handoff");
+    const scenario = {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        runtime: { ...base.manifest.runtime, workflowTimeoutMs: 50 },
+      },
+    };
+    evalBootstrapTestState.afterChildStarted = async (signal) => {
+      if (!signal) {
+        throw new Error("missing async-child workflow signal");
+      }
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    };
+    let modelCalls = 0;
+    const responseCreate: ResponseCreate = async (request) => {
+      modelCalls += 1;
+      const pinned = request.input[0];
+      const isChild = pinned !== undefined
+        && "content" in pinned
+        && typeof pinned.content === "string"
+        && pinned.content.includes("fresh research child session");
+      if (isChild) {
+        throw new Error("child model must not start after workflow cancellation");
+      }
+      return {
+        output: [{
+          arguments: JSON.stringify({
+            maxToolRounds: 4,
+            profile: "research",
+            runInBackground: true,
+            task: "Read child.txt after registration if the workflow is still active.",
+            taskId: null,
+          }),
+          call_id: "delegate_child_at_deadline",
+          name: "delegate",
+          type: "function_call",
+        }],
+        output_text: "",
+      };
+    };
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/async-child-handoff/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario,
+    });
+
+    expect(result.attempt.execution).toEqual({
+      reasonCode: "workflow_timeout",
+      status: "invalid",
+    });
+    expect(result.sessions.map((session) => session.role)).toEqual(["root", "child"]);
+    expect(result.sessions[1]?.events).toEqual([
+      expect.objectContaining({ type: "session_failed" }),
+      expect.objectContaining({ rounds: 0, status: "failed", type: "session_ended" }),
+    ]);
+    expect(result.sessions[0]?.events.filter((event) => event.type === "child_session_finished"))
+      .toEqual([expect.objectContaining({ status: "failed" })]);
+    expect(result.attempt.evidenceRefs).toContain(
+      "attempts/async-child-handoff/1/child-1-trace.jsonl",
+    );
+    expect(modelCalls).toBe(1);
   });
 });

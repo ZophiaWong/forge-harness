@@ -194,19 +194,6 @@ async function startChildSession(
   const childLifecycleEmitter = createLifecycleEmitter({ recorder: childTrace.recorder });
   let executionCwd = options.baseCwd;
   let workspace: SessionWorkspaceMetadata | undefined;
-
-  await options.parentLifecycleEmitter.emit({
-    childSessionId: childTrace.metadata.id,
-    parentCallId: request.parentCallId,
-    profile: request.profile,
-    round: request.parentRound,
-    runInBackground: request.runInBackground,
-    task: request.task,
-    tracePath: childTrace.paths.tracePath,
-    type: "child_session_started",
-  });
-  options.signal?.throwIfAborted();
-
   const childController = new AbortController();
   const parentSignal = options.signal;
   let parentAbortListener: (() => void) | undefined;
@@ -216,9 +203,33 @@ async function startChildSession(
     parentAbortListener = () => childController.abort(parentSignal.reason);
     parentSignal.addEventListener("abort", parentAbortListener, { once: true });
   }
+  const detachParentAbortListener = (): void => {
+    if (parentSignal && parentAbortListener) {
+      parentSignal.removeEventListener("abort", parentAbortListener);
+      parentAbortListener = undefined;
+    }
+  };
+
+  try {
+    await options.parentLifecycleEmitter.emit({
+      childSessionId: childTrace.metadata.id,
+      parentCallId: request.parentCallId,
+      profile: request.profile,
+      round: request.parentRound,
+      runInBackground: request.runInBackground,
+      task: request.task,
+      tracePath: childTrace.paths.tracePath,
+      type: "child_session_started",
+    });
+  } catch (error) {
+    detachParentAbortListener();
+    throw error;
+  }
 
   const promise = (async (): Promise<ChildSessionRunResult> => {
+    let minimalLoopStarted = false;
     try {
+      childController.signal.throwIfAborted();
       if (request.profile === "edit") {
         workspace = await prepareWorktreeSession({
           baseCwd: options.baseCwd,
@@ -227,7 +238,11 @@ async function startChildSession(
         });
         executionCwd = workspace.path;
       }
+      childController.signal.throwIfAborted();
+      const promptAssets = await loadRepoPromptAssets(options.baseCwd);
+      childController.signal.throwIfAborted();
 
+      minimalLoopStarted = true;
       const final = await runMinimalLoop({
         ...(options.apiKey ? { apiKey: options.apiKey } : {}),
         ...(options.approver ? { approver: options.approver } : {}),
@@ -238,7 +253,7 @@ async function startChildSession(
         maxToolRounds: request.maxToolRounds,
         model: options.model,
         ...(options.permissionPolicy ? { permissionPolicy: options.permissionPolicy } : {}),
-        promptAssets: await loadRepoPromptAssets(options.baseCwd),
+        promptAssets,
         ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
         signal: childController.signal,
         task: childTask,
@@ -287,6 +302,10 @@ async function startChildSession(
       return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      if (!minimalLoopStarted) {
+        await childLifecycleEmitter.emit({ message: reason, type: "session_failed" });
+        await childLifecycleEmitter.emit({ rounds: 0, status: "failed", type: "session_ended" });
+      }
       await options.parentLifecycleEmitter.emit({
         childSessionId: childTrace.metadata.id,
         parentCallId: request.parentCallId,
@@ -309,11 +328,7 @@ async function startChildSession(
         ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
       };
     }
-  })().finally(() => {
-    if (parentSignal && parentAbortListener) {
-      parentSignal.removeEventListener("abort", parentAbortListener);
-    }
-  });
+  })().finally(detachParentAbortListener);
 
   return {
     cancel() {
