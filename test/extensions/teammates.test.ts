@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import {
@@ -23,6 +23,10 @@ import {
   type MailboxStore,
 } from "../../src/runtime/teamMailbox.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("TeammateManager", () => {
   it("serializes caller-provided permission rules into the worker config", async () => {
@@ -601,6 +605,12 @@ describe("TeammateManager", () => {
     const process = await fixture.adapter.nextProcess();
     process.emit({ sessionId: "session-a", type: "ready" });
     await started;
+    process.kill.mockImplementation((signal) => {
+      if (signal === "SIGTERM") {
+        process.exit(0, "SIGTERM");
+      }
+      return true;
+    });
     const persistenceError = new Error("stopped runtime persistence failed");
     const writeSpy = vi.spyOn(fs, "writeFile").mockRejectedValueOnce(persistenceError);
 
@@ -633,6 +643,278 @@ describe("TeammateManager", () => {
     await expect(later).resolves.toBeUndefined();
     expect(writeSpy).toHaveBeenCalledTimes(2);
     writeSpy.mockRestore();
+  });
+
+  it("does not fence a genuine crash when forced signal delivery fails", async () => {
+    const signalError = new Error("SIGTERM delivery threw");
+    const events: TraceEventPayload[] = [];
+    const fixture = await createFixture(["session-a"], {
+      lifecycleEmitter: {
+        async emit(event) {
+          events.push(event);
+        },
+      },
+      terminateTimeoutMs: 0,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    process.kill
+      .mockImplementationOnce(() => { throw signalError; })
+      .mockReturnValueOnce(false);
+
+    const termination = fixture.manager.terminateAll();
+    const overlapping = fixture.manager.terminateAll();
+
+    expect(overlapping).toBe(termination);
+    const terminationError = await termination.catch((error: unknown) => error);
+    expect(containsError(terminationError, signalError)).toBe(true);
+    expect(process.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+
+    process.exit(1, null);
+    const retry = fixture.manager.terminateAll();
+    expect(retry).not.toBe(termination);
+    await expect(retry).resolves.toBeUndefined();
+    await fixture.manager.flushEvents();
+    expect(await fixture.manager.list()).toEqual([
+      expect.objectContaining({
+        failure: expect.stringContaining("worker exited unexpectedly"),
+        name: "researcher",
+        state: "failed",
+      }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      failure: expect.stringContaining("worker exited unexpectedly"),
+      name: "researcher",
+      state: "failed",
+      type: "teammate_state_changed",
+    }));
+  });
+
+  it("rejects false signal delivery, resets active state, and terminates a later retry", async () => {
+    const fixture = await createFixture(["session-a", "session-b"], {
+      terminateTimeoutMs: 1_000,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const firstProcess = await fixture.adapter.nextProcess();
+    firstProcess.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    firstProcess.kill.mockReturnValue(false);
+
+    const firstTermination = fixture.manager.terminateAll();
+    const overlapping = fixture.manager.terminateAll();
+    expect(overlapping).toBe(firstTermination);
+    await expect(firstTermination).rejects.toBeInstanceOf(AggregateError);
+    expect(firstProcess.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+
+    firstProcess.exit(1, null);
+    await fixture.manager.flushEvents();
+    expect(await fixture.manager.list()).toEqual([
+      expect.objectContaining({ name: "researcher", state: "failed" }),
+    ]);
+
+    const secondStarted = fixture.manager.start({
+      instructions: "repair cleanup",
+      message: "initial",
+      name: "repair-worker",
+      profile: "research",
+    });
+    const secondProcess = await fixture.adapter.nextProcess();
+    secondProcess.emit({ sessionId: "session-b", type: "ready" });
+    await secondStarted;
+
+    const retry = fixture.manager.terminateAll();
+    expect(retry).not.toBe(firstTermination);
+    await waitUntil(() => secondProcess.kill.mock.calls.length === 1);
+    secondProcess.exit(0, "SIGTERM");
+    await expect(retry).resolves.toBeUndefined();
+    expect(await fixture.manager.list()).toEqual([
+      expect.objectContaining({ name: "repair-worker", state: "stopped" }),
+      expect.objectContaining({ name: "researcher", state: "failed" }),
+    ]);
+  });
+
+  it("waits for confirmed exit after SIGKILL and shares the escalation", async () => {
+    const fixture = await createFixture(["session-a"], {
+      terminateTimeoutMs: 20,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    let settled = false;
+
+    const termination = fixture.manager.terminateAll();
+    const overlapping = fixture.manager.terminateAll();
+    void termination.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    expect(overlapping).toBe(termination);
+    await waitUntil(() => process.kill.mock.calls.length === 2);
+    expect(process.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(settled).toBe(false);
+
+    process.exit(0, "SIGKILL");
+    await expect(Promise.all([termination, overlapping])).resolves.toEqual([undefined, undefined]);
+    expect(process.kill).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects termination when SIGKILL cannot confirm process exit", async () => {
+    const fixture = await createFixture(["session-a"], {
+      terminateTimeoutMs: 0,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await fixture.adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+
+    const terminationError = await fixture.manager.terminateAll().catch((error: unknown) => error);
+
+    expect(terminationError).toBeInstanceOf(AggregateError);
+    expect(errorMessages(terminationError)).toContainEqual(
+      expect.stringContaining("did not exit after SIGKILL"),
+    );
+    expect(process.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    process.exit(0, "SIGKILL");
+    await fixture.manager.flushEvents();
+  });
+
+  it("rejects a new worker while termination is in flight", async () => {
+    const fixture = await createFixture(["session-a", "session-b"], {
+      terminateTimeoutMs: 1_000,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const firstProcess = await fixture.adapter.nextProcess();
+    firstProcess.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    const termination = fixture.manager.terminateAll();
+    await waitUntil(() => firstProcess.kill.mock.calls.length === 1);
+
+    const attemptedStart = fixture.manager.start({
+      instructions: "late worker",
+      message: "initial",
+      name: "late-worker",
+      profile: "research",
+    });
+    const lateProcess = await Promise.race([
+      fixture.adapter.nextProcess(),
+      attemptedStart.then(() => undefined, () => undefined),
+    ]);
+    lateProcess?.emit({ sessionId: "session-b", type: "ready" });
+    const startResult = await attemptedStart.catch((error: unknown) => error);
+    lateProcess?.exit(1, null);
+    firstProcess.exit(0, "SIGTERM");
+    await termination;
+    await fixture.manager.flushEvents();
+
+    expect(startResult).toBeInstanceOf(Error);
+    expect((startResult as Error).message).toContain("manager is terminating");
+  });
+
+  it("rejects start after successful termination and keeps terminateAll a no-op", async () => {
+    const fixture = await createFixture(["session-a", "session-b"], {
+      terminateTimeoutMs: 1_000,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const firstProcess = await fixture.adapter.nextProcess();
+    firstProcess.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    const termination = fixture.manager.terminateAll();
+    await waitUntil(() => firstProcess.kill.mock.calls.length === 1);
+    firstProcess.exit(0, "SIGTERM");
+    await termination;
+
+    const attemptedStart = fixture.manager.start({
+      instructions: "late worker",
+      message: "initial",
+      name: "late-worker",
+      profile: "research",
+    });
+    const lateProcess = await Promise.race([
+      fixture.adapter.nextProcess(),
+      attemptedStart.then(() => undefined, () => undefined),
+    ]);
+    lateProcess?.emit({ sessionId: "session-b", type: "ready" });
+    const startResult = await attemptedStart.catch((error: unknown) => error);
+    lateProcess?.exit(1, null);
+
+    expect(startResult).toBeInstanceOf(Error);
+    expect((startResult as Error).message).toContain("manager is terminated");
+    expect(fixture.manager.terminateAll()).toBe(termination);
+    await expect(fixture.manager.terminateAll()).resolves.toBeUndefined();
+    expect(firstProcess.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects rejoin after successful termination", async () => {
+    const fixture = await createFixture(["session-a", "session-b"], {
+      terminateTimeoutMs: 1_000,
+    });
+    const started = fixture.manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const firstProcess = await fixture.adapter.nextProcess();
+    firstProcess.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    firstProcess.emit({
+      reason: "provider unavailable",
+      sessionId: "session-a",
+      type: "failure",
+    });
+    await fixture.manager.flushEvents();
+    const termination = fixture.manager.terminateAll();
+    await waitUntil(() => firstProcess.kill.mock.calls.length === 1);
+    firstProcess.exit(0, "SIGTERM");
+    await termination;
+
+    const attemptedRejoin = fixture.manager.rejoin({
+      name: "researcher",
+      recovery: "late recovery",
+    });
+    const lateProcess = await Promise.race([
+      fixture.adapter.nextProcess(),
+      attemptedRejoin.then(() => undefined, () => undefined),
+    ]);
+    lateProcess?.emit({ sessionId: "session-b", type: "ready" });
+    const rejoinResult = await attemptedRejoin.catch((error: unknown) => error);
+    lateProcess?.exit(1, null);
+
+    expect(rejoinResult).toBeInstanceOf(Error);
+    expect((rejoinResult as Error).message).toContain("manager is terminated");
   });
 
   it("creates an edit workspace once and reuses the same binding after rejoin", async () => {
@@ -871,6 +1153,12 @@ describe("TeammateManager", () => {
       type: "turn_result",
     });
     await fixture.manager.flushEvents();
+    process.kill.mockImplementation((signal) => {
+      if (signal === "SIGTERM") {
+        process.exit(0, "SIGTERM");
+      }
+      return true;
+    });
 
     await expect(
       fixture.manager.shutdown({ mode: "retire", name: "researcher" }),
@@ -1160,6 +1448,24 @@ function deferred<T>() {
     resolve = promiseResolve;
   });
   return { promise, resolve };
+}
+
+function containsError(error: unknown, target: unknown): boolean {
+  if (error === target) {
+    return true;
+  }
+  return error instanceof AggregateError
+    ? error.errors.some((nested) => containsError(nested, target))
+    : error instanceof Error && "cause" in error
+      ? containsError(error.cause, target)
+      : false;
+}
+
+function errorMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return error.errors.flatMap(errorMessages);
+  }
+  return [error instanceof Error ? error.message : String(error)];
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {

@@ -96,11 +96,14 @@ interface ManagedTeammate {
   definition: TeammateDefinition;
   process?: TeammateProcess;
   processExit?: Deferred<void>;
+  processExitObserved?: boolean;
   ready?: Deferred<void>;
   recoveryMessageId?: string;
   runtime: TeammateRuntime;
   stopRequested?: boolean;
 }
+
+type TeammateManagerLifecycle = "active" | "terminated" | "terminating";
 
 export function createTeammateManager(options: CreateTeammateManagerOptions): TeammateManager {
   const now = options.now ?? (() => new Date());
@@ -122,6 +125,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   const members = new Map<string, ManagedTeammate>();
   let eventTail = Promise.resolve();
   let approvalTail = Promise.resolve();
+  let managerLifecycle: TeammateManagerLifecycle = "active";
   let terminationPromise: Promise<void> | undefined;
   let activityVersion = 0;
   const activityWaiters = new Set<() => void>();
@@ -136,6 +140,12 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
 
   const queueEvent = (action: () => Promise<void>): void => {
     eventTail = eventTail.then(action, action);
+  };
+
+  const assertWorkerCreationAllowed = (operation: "rejoin" | "start"): void => {
+    if (managerLifecycle !== "active") {
+      throw new Error(`teammate manager is ${managerLifecycle}; cannot ${operation} a worker`);
+    }
   };
 
   const persistDefinition = async (definition: TeammateDefinition): Promise<void> => {
@@ -435,11 +445,13 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   const attachProcess = (member: ManagedTeammate, process: TeammateProcess): void => {
     member.process = process;
     member.processExit = createDeferred<void>();
+    member.processExitObserved = false;
     member.stopRequested = false;
     process.onMessage((message) => {
       queueEvent(() => handleWorkerMessage(member, message));
     });
     process.onExit((code, signal) => {
+      member.processExitObserved = true;
       member.processExit?.resolve();
       queueEvent(async () => {
         if (member.process !== process) {
@@ -464,6 +476,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   };
 
   const startProcess = async (member: ManagedTeammate): Promise<void> => {
+    assertWorkerCreationAllowed(member.runtime.state === "failed" ? "rejoin" : "start");
     const permissionRules = options.workerPermissionRules?.(member.definition);
     const config: TeammateWorkerConfig = {
       baseCwd: options.baseCwd,
@@ -617,25 +630,76 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   ): Promise<void> => {
     const process = member.process;
     const exited = member.processExit;
+    if (member.processExitObserved) {
+      if (!member.stopRequested) {
+        await eventTail;
+      }
+      return;
+    }
     if (!process) {
       return;
     }
-    member.stopRequested = true;
+    const stopErrors: unknown[] = [];
+    const deliverSignal = (signal: "SIGKILL" | "SIGTERM"): boolean => {
+      try {
+        const delivered = process.kill(signal);
+        if (delivered) {
+          member.stopRequested = true;
+          return true;
+        }
+        if (!member.processExitObserved) {
+          stopErrors.push(new Error(
+            `teammate "${member.definition.name}" process did not accept ${signal}`,
+          ));
+        }
+      } catch (error) {
+        if (!member.processExitObserved) {
+          stopErrors.push(error);
+        }
+      }
+      return false;
+    };
     if (graceful) {
-      process.send({
-        sessionId: member.runtime.sessionId,
-        type: "shutdown",
-      });
-      if (exited && await resolvesWithin(exited.promise, shutdownTimeoutMs)) {
-        return;
+      try {
+        process.send({
+          sessionId: member.runtime.sessionId,
+          type: "shutdown",
+        });
+        member.stopRequested = true;
+        if (exited && await resolvesWithin(exited.promise, shutdownTimeoutMs)) {
+          throwStopErrors(stopErrors, member.definition.name);
+          return;
+        }
+      } catch (error) {
+        stopErrors.push(error);
       }
     }
-    process.kill("SIGTERM");
-    if (exited && await resolvesWithin(exited.promise, terminateTimeoutMs)) {
+
+    const termDelivered = deliverSignal("SIGTERM");
+    if (
+      member.processExitObserved
+      || (termDelivered && exited && await resolvesWithin(exited.promise, terminateTimeoutMs))
+    ) {
+      throwStopErrors(stopErrors, member.definition.name);
       return;
     }
-    process.kill("SIGKILL");
-    process.disconnect();
+
+    const killDelivered = deliverSignal("SIGKILL");
+    if (killDelivered) {
+      try {
+        process.disconnect();
+      } catch (error) {
+        stopErrors.push(error);
+      }
+      const exitConfirmed = member.processExitObserved
+        || (exited ? await resolvesWithin(exited.promise, terminateTimeoutMs) : false);
+      if (!exitConfirmed) {
+        stopErrors.push(new Error(
+          `teammate "${member.definition.name}" did not exit after SIGKILL within ${terminateTimeoutMs}ms`,
+        ));
+      }
+    }
+    throwStopErrors(stopErrors, member.definition.name);
   };
 
   const terminateMembers = async (): Promise<void> => {
@@ -649,11 +713,21 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       }
     };
     for (const member of members.values()) {
-      if (member.runtime.state !== "failed" && member.runtime.state !== "stopped") {
+      let exitConfirmed = false;
+      try {
+        await stopProcess(member, false);
+        exitConfirmed = true;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (
+        exitConfirmed
+        && member.runtime.state !== "failed"
+        && member.runtime.state !== "stopped"
+      ) {
         stopped.push(member.definition.name);
         await captureCleanup(() => updateRuntime(member, "stopped"));
       }
-      await captureCleanup(() => stopProcess(member, false));
     }
     await captureCleanup(() => options.lifecycleEmitter.emit({
       mode: "terminate",
@@ -729,8 +803,8 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         (member) => member.runtime.state === "idle" && member.process,
       );
       for (const member of idle) {
-        await updateRuntime(member, "stopped");
         await stopProcess(member, true);
+        await updateRuntime(member, "stopped");
       }
       await options.lifecycleEmitter.emit({
         mode: "graceful",
@@ -752,6 +826,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
     },
     list,
     async rejoin(input) {
+      assertWorkerCreationAllowed("rejoin");
       const member = members.get(input.name);
       if (!member) {
         throw new Error(`unknown teammate "${input.name}"`);
@@ -767,18 +842,22 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         kind: "direct",
         to: input.name,
       });
+      assertWorkerCreationAllowed("rejoin");
       member.recoveryMessageId = recovery.id;
       const sessionId = allocateSessionId();
-      member.runtime = createRuntime(member.definition.name, sessionId, options.teamRoot, now);
-      await persistRuntime(member.runtime);
+      const nextRuntime = createRuntime(member.definition.name, sessionId, options.teamRoot, now);
+      await persistRuntime(nextRuntime);
+      assertWorkerCreationAllowed("rejoin");
       await options.lifecycleEmitter.emit({
         name: member.definition.name,
         previousSessionId,
         recoveryMessageId: recovery.id,
         sessionId,
-        tracePath: member.runtime.tracePath,
+        tracePath: nextRuntime.tracePath,
         type: "teammate_rejoined",
       });
+      assertWorkerCreationAllowed("rejoin");
+      member.runtime = nextRuntime;
       await startProcess(member);
       await dispatchUnread(member);
       return toSummary(member);
@@ -877,8 +956,8 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       }
       if (member.runtime.state !== "stopped") {
         const graceful = input.mode === "shutdown" && member.runtime.state === "idle";
-        await updateRuntime(member, "stopped");
         await stopProcess(member, graceful);
+        await updateRuntime(member, "stopped");
       }
       await options.lifecycleEmitter.emit({
         mode: input.mode === "shutdown" ? "graceful" : "terminate",
@@ -888,6 +967,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
       return toSummary(member);
     },
     async start(input) {
+      assertWorkerCreationAllowed("start");
       validateTeammateName(input.name);
       validateMessageText(input.instructions, "teammate instructions");
       validateMessageText(input.message, "initial teammate message");
@@ -911,6 +991,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
             rootSessionId: options.rootSessionId,
           })
         : undefined;
+      assertWorkerCreationAllowed("start");
       const definition: TeammateDefinition = {
         createdAt: now().toISOString(),
         instructions: input.instructions.trim(),
@@ -926,7 +1007,9 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         runtime: createRuntime(input.name, sessionId, options.teamRoot, now),
       };
       await persistDefinition(definition);
+      assertWorkerCreationAllowed("start");
       await persistRuntime(member.runtime);
+      assertWorkerCreationAllowed("start");
       members.set(input.name, member);
       await mailboxStore.initialize(input.name);
       await appendMailbox({
@@ -945,23 +1028,31 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         unreadCount: 1,
         ...(definition.workspace ? { workspace: { ...definition.workspace } } : {}),
       });
+      assertWorkerCreationAllowed("start");
       await startProcess(member);
       await dispatchUnread(member);
       return toSummary(member);
     },
     terminateAll() {
-      if (!terminationPromise) {
+      if (managerLifecycle === "active") {
+        managerLifecycle = "terminating";
         const operation = Promise.resolve().then(terminateMembers);
         let shared!: Promise<void>;
-        shared = operation.catch((error: unknown) => {
-          if (terminationPromise === shared) {
-            terminationPromise = undefined;
-          }
-          throw error;
-        });
+        shared = operation.then(
+          () => {
+            managerLifecycle = "terminated";
+          },
+          (error: unknown) => {
+            if (terminationPromise === shared) {
+              managerLifecycle = "active";
+              terminationPromise = undefined;
+            }
+            throw error;
+          },
+        );
         terminationPromise = shared;
       }
-      return terminationPromise;
+      return terminationPromise!;
     },
   };
 }
@@ -1052,6 +1143,19 @@ interface Deferred<T> {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function throwStopErrors(errors: unknown[], name: string): void {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(
+      errors,
+      `teammate "${name}" process stop failed: ${errors.map(errorMessage).join("; ")}`,
+      { cause: errors[0] },
+    );
+  }
 }
 
 function errorMessage(error: unknown): string {
