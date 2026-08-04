@@ -175,6 +175,6 @@ Remove completed or invalid marked runs with:
 npm run eval -- clean
 ```
 
-Automation can pass `--yes`. Cleanup refuses active runs, unmarked directories, symlinks, and paths outside `.forge/evals/<run-id>`, and removes registered Worktrees through Git before deleting a run.
+Automation can pass `--yes`. Cleanup refuses active runs, unmarked directories, symlinks, and paths outside `.forge/evals/<run-id>`. It removes registered Worktrees through Git before deleting a run and rechecks the path chain immediately before each mutation. These checks assume trusted, quiescent repository ancestry. A Git Worktree is not an operating-system sandbox, so cleanup cannot stop a privileged concurrent local process from swapping an ancestor between validation and mutation.
 
 No baseline or portfolio report is fabricated by the deterministic test suite. Until a real canonical batch is promoted, `NO_BASELINE` is the expected verdict for a valid batch with no hard violation. After promotion, the first independent comparable batch—not a resampled green run—should become `docs/assets/evidence/offline-eval-regression-report.md`.

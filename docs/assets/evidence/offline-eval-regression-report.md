@@ -1,6 +1,6 @@
 # Forge Offline Eval Regression Report
 
-This sanitized evidence snapshot preserves the first independent valid and comparable batch after promoting the current experiment baseline. Private attempt directories, raw Trace payloads, prompts, and model text remain local under `.forge/evals/`.
+This sanitized evidence snapshot preserves the first independent valid and comparable batch that followed promotion of the earlier experiment baseline for that identity. Private attempt directories, raw Trace payloads, prompts, and model text remain local under `.forge/evals/`.
 
 > Status: historical pre-hardening evidence. The review fixes change the experiment fingerprint; regenerate this artifact from the first independent comparable run after promoting the new canonical baseline. Do not treat the values below as evidence for the hardened contract.
 
