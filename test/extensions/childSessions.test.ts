@@ -17,7 +17,7 @@ import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import { createCliSessionTrace, type SessionMetadata } from "../../src/runtime/session.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import type { TraceEventPayload } from "../../src/runtime/trace.js";
-import type { ChildSessionRunResult } from "../../src/tools/delegateTool.js";
+import type { ChildSessionRunHandle, ChildSessionRunResult } from "../../src/tools/delegateTool.js";
 
 describe("child session profiles", () => {
   it("uses fresh profile tool surfaces without bash, delegate, or cron tools", () => {
@@ -387,6 +387,64 @@ describe("child session profiles", () => {
     });
   });
 
+  it.each(["parent", "handle"] as const)(
+    "aborts child model work from the $trigger signal and removes the parent listener after settlement",
+    async (trigger) => {
+      const root = await createRootTaskFixture();
+      const parentController = new AbortController();
+      const addListener = vi.spyOn(parentController.signal, "addEventListener");
+      const removeListener = vi.spyOn(parentController.signal, "removeEventListener");
+      const modelStarted = createDeferred<void>();
+      let childSignal: AbortSignal | undefined;
+      const runner = createChildSessionRunner({
+        baseCwd: root.repo,
+        parentLifecycleEmitter: createLifecycleEmitter({
+          recorder: {
+            async record() {
+              return undefined;
+            },
+          },
+        }),
+        parentSessionId: root.session.metadata.id,
+        responseCreate: async (_request, createOptions) => {
+          childSignal = createOptions?.signal;
+          modelStarted.resolve();
+          if (!childSignal) {
+            throw new Error("missing child signal");
+          }
+          return new Promise((_resolve, reject) => {
+            childSignal!.addEventListener("abort", () => reject(childSignal!.reason), { once: true });
+          });
+        },
+        signal: parentController.signal,
+        taskGraph: root.binding,
+      });
+      const handle = await runner.start({
+        maxToolRounds: 2,
+        parentCallId: `call_abort_${trigger}`,
+        parentRound: 1,
+        profile: "research",
+        runInBackground: true,
+        task: "Wait for cancellation.",
+      });
+      await modelStarted.promise;
+
+      if (trigger === "parent") {
+        parentController.abort(new Error("parent stopped"));
+      } else {
+        handle.cancel();
+      }
+      await expect(handle.promise).resolves.toMatchObject({ status: "failed" });
+
+      expect(childSignal).toBeDefined();
+      expect(childSignal).not.toBe(parentController.signal);
+      expect(childSignal?.aborted).toBe(true);
+      expect(addListener).toHaveBeenCalledOnce();
+      expect(removeListener).toHaveBeenCalledOnce();
+      expect(removeListener.mock.calls[0]?.[1]).toBe(addListener.mock.calls[0]?.[1]);
+    },
+  );
+
   it("prepends profile-specific prompt prose while preserving child skill invocations", () => {
     const task = formatChildProfileTask({
       profile: "research",
@@ -433,6 +491,45 @@ describe("child session profiles", () => {
 });
 
 describe("AsyncChildSessionManager", () => {
+  it("cancels every unresolved handle and waits until pending count reaches zero", async () => {
+    const deferred = createDeferred<ChildSessionRunResult>();
+    const handle: ChildSessionRunHandle = {
+      cancel: vi.fn(() => {
+        deferred.resolve({
+          childSessionId: "child-cancelled",
+          finalAnswer: "Child session failed: cancelled",
+          profile: "research",
+          status: "failed",
+          tracePath: "/repo/.forge/sessions/child-cancelled/trace.jsonl",
+        });
+      }),
+      childSessionId: "child-cancelled",
+      profile: "research",
+      promise: deferred.promise,
+      status: "running",
+      tracePath: "/repo/.forge/sessions/child-cancelled/trace.jsonl",
+    };
+    const manager = createAsyncChildSessionManager({
+      runner: {
+        run: vi.fn(),
+        start: vi.fn().mockResolvedValue(handle),
+      },
+    });
+    await manager.start({
+      maxToolRounds: 4,
+      parentCallId: "call_cancel",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: true,
+      task: "Cancel this child.",
+    });
+
+    await manager.cancelRunning();
+
+    expect(handle.cancel).toHaveBeenCalledTimes(1);
+    expect(manager.pendingCount()).toBe(0);
+  });
+
   it("starts multiple child sessions and drains terminal notifications once in start order", async () => {
     const first = createDeferred<ChildSessionRunResult>();
     const second = createDeferred<ChildSessionRunResult>();

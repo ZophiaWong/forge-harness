@@ -123,7 +123,14 @@ export interface MinimalResponse {
   telemetry?: ModelCallTelemetry;
 }
 
-export type ResponseCreate = (request: ResponseCreateRequest) => Promise<MinimalResponse>;
+export interface ResponseCreateOptions {
+  signal?: AbortSignal;
+}
+
+export type ResponseCreate = (
+  request: ResponseCreateRequest,
+  options?: ResponseCreateOptions,
+) => Promise<MinimalResponse>;
 
 export interface MinimalLoopTranscript {
   contextCompaction?(compaction: {
@@ -168,6 +175,7 @@ export interface MinimalLoopOptions {
   promptAssets?: PromptAssets;
   responseCreate?: ResponseCreate;
   runtimeState?: () => RuntimeState;
+  signal?: AbortSignal;
   cronSchedules?: CronScheduleStore;
   childSessionRunner?: ChildSessionRunner;
   task: string;
@@ -340,7 +348,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
       message,
       type: "session_failed",
     });
-    await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, "failed");
+    await finishSession(lifecycleEmitter, backgroundTasks, childSessions, toolRuntime, lastRound, "failed");
     throw error;
   }
 
@@ -350,7 +358,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
         return;
       }
       closed = true;
-      await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, status);
+      await finishSession(lifecycleEmitter, backgroundTasks, childSessions, toolRuntime, lastRound, status);
     },
     async runTurn(input, turnOptions) {
       if (closed) {
@@ -381,6 +389,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
 
       try {
         for (let turnRound = 1; turnRound <= turnMaxToolRounds; turnRound += 1) {
+          options.signal?.throwIfAborted();
           const round = lastRound + 1;
           lastRound = round;
           options.transcript?.roundStart(round, model);
@@ -435,21 +444,26 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
             type: "model_request",
           });
 
-          const response = await responseCreate({
-            include: ["reasoning.encrypted_content"],
-            input,
-            instructions: promptAssembly.instructions,
-            model,
-            parallel_tool_calls: false,
-            reasoning: {
-              effort: "low",
+          options.signal?.throwIfAborted();
+          const response = await responseCreate(
+            {
+              include: ["reasoning.encrypted_content"],
+              input,
+              instructions: promptAssembly.instructions,
+              model,
+              parallel_tool_calls: false,
+              reasoning: {
+                effort: "low",
+              },
+              store: false,
+              text: {
+                verbosity: "low",
+              },
+              tools: toolDefinitions,
             },
-            store: false,
-            text: {
-              verbosity: "low",
-            },
-            tools: toolDefinitions,
-          });
+            { signal: options.signal },
+          );
+          options.signal?.throwIfAborted();
 
           inputHistory.appendRoundItems(round, response.output as CompactableInputItem[]);
 
@@ -480,7 +494,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
               running: true,
             });
             const teammateGateMessages = options.teammates
-              ? await options.teammates.settleBeforeFinal()
+              ? await waitForTeammateActivity(options.teammates, options.signal)
               : [];
             const teammateGateInjected = await appendTeammateMessages({
               inputHistory,
@@ -610,6 +624,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
               options.transcript,
               lifecycleEmitter,
             );
+            options.signal?.throwIfAborted();
             inputHistory.appendRoundItems(round, [{
               type: "function_call_output",
               call_id: toolCall.call_id,
@@ -639,7 +654,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
         });
         if (!closed) {
           closed = true;
-          await finishSession(lifecycleEmitter, backgroundTasks, toolRuntime, lastRound, "failed");
+          await finishSession(lifecycleEmitter, backgroundTasks, childSessions, toolRuntime, lastRound, "failed");
         }
         throw error;
       } finally {
@@ -684,6 +699,31 @@ async function appendTeammateMessages(options: {
     }]);
   }
   return options.messages.length;
+}
+
+async function waitForTeammateActivity(
+  teammates: TeammateManager,
+  signal: AbortSignal | undefined,
+): Promise<TeamMessage[]> {
+  if (!signal) {
+    return teammates.settleBeforeFinal();
+  }
+  signal.throwIfAborted();
+
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(signal.reason);
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+
+  try {
+    const activity = teammates.settleBeforeFinal();
+    return await Promise.race([activity, aborted]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
 }
 
 interface MaybeCompactOptions {
@@ -787,26 +827,31 @@ async function compactInputHistory(
     state: options.options.runtimeState?.(),
     task: options.task,
   });
-  const response = await options.responseCreate({
-    include: ["reasoning.encrypted_content"],
-    input: [
-      {
-        role: "user",
-        content: source.text,
+  options.options.signal?.throwIfAborted();
+  const response = await options.responseCreate(
+    {
+      include: ["reasoning.encrypted_content"],
+      input: [
+        {
+          role: "user",
+          content: source.text,
+        },
+      ],
+      instructions: COMPACTION_INSTRUCTIONS,
+      model: options.model,
+      parallel_tool_calls: false,
+      reasoning: {
+        effort: "low",
       },
-    ],
-    instructions: COMPACTION_INSTRUCTIONS,
-    model: options.model,
-    parallel_tool_calls: false,
-    reasoning: {
-      effort: "low",
+      store: false,
+      text: {
+        verbosity: "low",
+      },
+      tools: [],
     },
-    store: false,
-    text: {
-      verbosity: "low",
-    },
-    tools: [],
-  });
+    { signal: options.options.signal },
+  );
+  options.options.signal?.throwIfAborted();
   const inspection = inspectCompactionSummary(response.output_text);
 
   if (inspection.status === "invalid") {
@@ -1030,11 +1075,13 @@ async function recordChildSessionNotification(
 async function finishSession(
   lifecycleEmitter: LifecycleEmitter,
   backgroundTasks: BackgroundTaskManager | undefined,
+  childSessions: AsyncChildSessionManager | undefined,
   toolRuntime: ToolRuntime,
   rounds: number,
   status: SessionEndStatus,
 ): Promise<void> {
   await cleanupBackgroundTasks(backgroundTasks);
+  await childSessions?.cancelRunning();
   await toolRuntime.close?.();
   await lifecycleEmitter.emit({
     rounds,
@@ -1065,10 +1112,11 @@ export function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: 
     timeout: DEFAULT_MODEL_REQUEST_TIMEOUT_MS,
   });
 
-  return async (request) => {
+  return async (request, createOptions) => {
     const startedAt = performance.now();
     const response: OpenAIResponse = await client.responses.create(
       request as unknown as ResponseCreateParamsNonStreaming,
+      createOptions?.signal ? { signal: createOptions.signal } : undefined,
     );
     const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
     const usage: ModelUsage | undefined = response.usage

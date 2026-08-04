@@ -47,6 +47,9 @@ describe("child terminal handoff registry", () => {
       },
       async start() {
         return {
+          cancel() {
+            return undefined;
+          },
           childSessionId: "child-async",
           profile: "edit",
           promise: deferred.promise,

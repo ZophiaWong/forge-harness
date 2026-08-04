@@ -89,6 +89,9 @@ describe("createDefaultToolRuntime", () => {
           tracePath: "trace.jsonl",
         }),
         start: async () => ({
+          cancel() {
+            return undefined;
+          },
           childSessionId: "child",
           profile: "research",
           promise: Promise.resolve({
@@ -141,6 +144,9 @@ describe("createDefaultToolRuntime", () => {
         async start(request) {
           childRequests.push(request);
           return {
+            cancel() {
+              return undefined;
+            },
             childSessionId: "child",
             profile: request.profile,
             promise: Promise.resolve({

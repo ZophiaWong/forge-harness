@@ -49,6 +49,7 @@ export interface CreateChildSessionRunnerOptions {
   parentSessionId: string;
   permissionPolicy?: PermissionPolicy;
   responseCreate?: ResponseCreate;
+  signal?: AbortSignal;
   taskGraph?: SessionTaskGraphBinding;
 }
 
@@ -204,6 +205,16 @@ async function startChildSession(
     type: "child_session_started",
   });
 
+  const childController = new AbortController();
+  const parentSignal = options.signal;
+  let parentAbortListener: (() => void) | undefined;
+  if (parentSignal?.aborted) {
+    childController.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentAbortListener = () => childController.abort(parentSignal.reason);
+    parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+  }
+
   const promise = (async (): Promise<ChildSessionRunResult> => {
     try {
       if (request.profile === "edit") {
@@ -227,6 +238,7 @@ async function startChildSession(
         ...(options.permissionPolicy ? { permissionPolicy: options.permissionPolicy } : {}),
         promptAssets: await loadRepoPromptAssets(options.baseCwd),
         ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
+        signal: childController.signal,
         task: childTask,
         toolRuntime: createChildProfileToolRuntime({
           cwd: executionCwd,
@@ -295,9 +307,16 @@ async function startChildSession(
         ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
       };
     }
-  })();
+  })().finally(() => {
+    if (parentSignal && parentAbortListener) {
+      parentSignal.removeEventListener("abort", parentAbortListener);
+    }
+  });
 
   return {
+    cancel() {
+      childController.abort();
+    },
     childSessionId: childTrace.metadata.id,
     profile: request.profile,
     promise,
@@ -333,6 +352,7 @@ export interface AsyncChildSessionNotification {
 }
 
 export interface AsyncChildSessionManager extends ChildSessionRunner {
+  cancelRunning(): Promise<void>;
   drainNotifications(): AsyncChildSessionNotification[];
   getTerminal(childSessionId: string): ChildSessionTerminalRecord | undefined;
   pendingCount(): number;
@@ -355,6 +375,7 @@ export function createAsyncChildSessionManager(options: {
     order: number;
     request: ChildSessionRunRequest;
     result?: ChildSessionRunResult;
+    settlement: Promise<void>;
     terminalNotified: boolean;
   }
 
@@ -373,6 +394,13 @@ export function createAsyncChildSessionManager(options: {
   };
 
   return {
+    async cancelRunning() {
+      const running = sessions.filter((session) => !session.result);
+      for (const session of running) {
+        session.handle.cancel();
+      }
+      await Promise.all(running.map((session) => session.settlement));
+    },
     drainNotifications() {
       return sessions
         .filter((session) => session.result && !session.terminalNotified)
@@ -437,12 +465,7 @@ export function createAsyncChildSessionManager(options: {
     async settleBeforeFinal() {
       const running = sessions.filter((session) => !session.result);
       if (running.length > 0) {
-        await Promise.race(running.map((session) =>
-          session.handle.promise.then(
-            () => undefined,
-            () => undefined,
-          )
-        ));
+        await Promise.race(running.map((session) => session.settlement));
       }
       return this.drainNotifications();
     },
@@ -452,16 +475,15 @@ export function createAsyncChildSessionManager(options: {
         handle,
         order: nextOrder,
         request: structuredClone(request),
+        settlement: Promise.resolve(),
         terminalNotified: false,
       };
-      nextOrder += 1;
-      sessions.push(session);
-      void handle.promise
-        .then((result) => {
+      session.settlement = handle.promise.then(
+        (result) => {
           session.result = result;
           rememberTerminal(session.request, result);
-        })
-        .catch((error) => {
+        },
+        (error) => {
           session.result = {
             childSessionId: handle.childSessionId,
             finalAnswer: `Child session failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -470,7 +492,10 @@ export function createAsyncChildSessionManager(options: {
             tracePath: handle.tracePath,
           };
           rememberTerminal(session.request, session.result);
-        });
+        },
+      );
+      nextOrder += 1;
+      sessions.push(session);
       return handle;
     },
   };

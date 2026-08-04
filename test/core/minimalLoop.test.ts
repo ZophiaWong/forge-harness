@@ -40,9 +40,11 @@ import type { ToolRuntime } from "../../src/tools/types.js";
 
 function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[]): ResponseCreate {
   const calls: Parameters<ResponseCreate>[0][] = [];
+  const options: Parameters<ResponseCreate>[1][] = [];
 
-  const responseCreate: ResponseCreate = async (request) => {
+  const responseCreate: ResponseCreate = async (request, createOptions) => {
     calls.push(request);
+    options.push(createOptions);
     const response = responses.shift();
 
     if (!response) {
@@ -55,12 +57,19 @@ function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[
   Object.defineProperty(responseCreate, "calls", {
     value: calls,
   });
+  Object.defineProperty(responseCreate, "options", {
+    value: options,
+  });
 
   return responseCreate;
 }
 
 function callsFor(responseCreate: ResponseCreate): Parameters<ResponseCreate>[0][] {
   return (responseCreate as ResponseCreate & { calls: Parameters<ResponseCreate>[0][] }).calls;
+}
+
+function optionsFor(responseCreate: ResponseCreate): Parameters<ResponseCreate>[1][] {
+  return (responseCreate as ResponseCreate & { options: Parameters<ResponseCreate>[1][] }).options;
 }
 
 function allowPolicy(reason = "test allows action"): PermissionPolicy {
@@ -149,6 +158,169 @@ describe("runMinimalLoop", () => {
   beforeEach(() => {
     createOpenAIResponseMock.mockReset();
     OpenAIMock.mockClear();
+  });
+
+  it("passes the Runtime abort signal to model requests", async () => {
+    const controller = new AbortController();
+    let observed: AbortSignal | undefined;
+    const responseCreate: ResponseCreate = async (_request, createOptions) => {
+      observed = createOptions?.signal;
+      return { output: [], output_text: "done" };
+    };
+
+    await runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate,
+      signal: controller.signal,
+      task: "finish",
+    });
+
+    expect(observed).toBe(controller.signal);
+  });
+
+  it("records a failed session end before rejecting an aborted model request", async () => {
+    const controller = new AbortController();
+    const trace = createTraceRecorder();
+    const responseCreate: ResponseCreate = async (_request, createOptions) => {
+      if (!createOptions?.signal) {
+        throw new Error("missing Runtime signal");
+      }
+      controller.abort(new Error("stop blocked model"));
+      createOptions.signal.throwIfAborted();
+      return { output: [], output_text: "unreachable" };
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      responseCreate,
+      signal: controller.signal,
+      task: "stop the model",
+    })).rejects.toThrow("stop blocked model");
+
+    expect(trace.events.at(-1)).toMatchObject({
+      status: "failed",
+      type: "session_ended",
+    });
+  });
+
+  it("does not start a model round when the Runtime signal is already aborted", async () => {
+    const controller = new AbortController();
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    controller.abort(new Error("stop before round"));
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate,
+      signal: controller.signal,
+      task: "do not start",
+    })).rejects.toThrow("stop before round");
+
+    expect(responseCreate).not.toHaveBeenCalled();
+  });
+
+  it("waits for a mutating tool to settle before observing Runtime abort", async () => {
+    const controller = new AbortController();
+    const toolResult = createDeferred<Awaited<ReturnType<ToolRuntime["execute"]>>>();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => toolResult.promise),
+      toolDefinitions: () => [{
+        description: "Mutate a fixture.",
+        name: "mutate_fixture",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    const responseCreate = createResponseCreate({
+      output: [{
+        arguments: "{}",
+        call_id: "call_mutate",
+        name: "mutate_fixture",
+        type: "function_call",
+      }],
+      output_text: "",
+    });
+    const running = runMinimalLoop({
+      cwd: process.cwd(),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy("mutation allowed"),
+      responseCreate,
+      signal: controller.signal,
+      task: "mutate once",
+      toolRuntime,
+    });
+    let settled = false;
+    void running.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(toolRuntime.execute).toHaveBeenCalledOnce();
+    });
+
+    controller.abort(new Error("stop after tool"));
+    await flushPromises();
+    expect(settled).toBe(false);
+
+    toolResult.resolve({
+      content: "mutation completed",
+      status: "completed",
+      toolName: "mutate_fixture",
+    });
+    await expect(running).rejects.toThrow("stop after tool");
+    expect(callsFor(responseCreate)).toHaveLength(1);
+  });
+
+  it("does not execute a returned tool call when a one-argument model adapter settles after abort", async () => {
+    const controller = new AbortController();
+    const modelStarted = createDeferred<void>();
+    const modelResponse = createDeferred<Awaited<ReturnType<ResponseCreate>>>();
+    const responseCreate: ResponseCreate = async () => {
+      modelStarted.resolve();
+      return modelResponse.promise;
+    };
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "mutation completed",
+        status: "completed" as const,
+        toolName: "mutate_fixture",
+      })),
+      toolDefinitions: () => [{
+        description: "Mutate a fixture.",
+        name: "mutate_fixture",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    const running = runMinimalLoop({
+      cwd: process.cwd(),
+      permissionPolicy: allowPolicy("mutation allowed"),
+      responseCreate,
+      signal: controller.signal,
+      task: "do not mutate after abort",
+      toolRuntime,
+    });
+    await modelStarted.promise;
+
+    controller.abort(new Error("stop before consuming response"));
+    modelResponse.resolve({
+      output: [{
+        arguments: "{}",
+        call_id: "call_late_mutate",
+        name: "mutate_fixture",
+        type: "function_call",
+      }],
+      output_text: "",
+    });
+
+    await expect(running).rejects.toThrow("stop before consuming response");
+    expect(toolRuntime.execute).not.toHaveBeenCalled();
   });
 
   it("routes additional dynamic tools and closes them before session_ended", async () => {
@@ -1086,6 +1258,7 @@ describe("runMinimalLoop", () => {
   });
 
   it("auto-compacts older input history before the next model request", async () => {
+    const controller = new AbortController();
     const trace = createTraceRecorder();
     const toolOutputs = ["round 1 output ".repeat(20), "round 2 output ".repeat(20), "round 3 output ".repeat(20)];
     const toolRuntime: ToolRuntime = {
@@ -1188,11 +1361,19 @@ describe("runMinimalLoop", () => {
       lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
       permissionPolicy: allowPolicy(),
       responseCreate,
+      signal: controller.signal,
       task: "Read long chapters.",
       toolRuntime,
     });
 
     expect(callsFor(responseCreate)).toHaveLength(5);
+    expect(optionsFor(responseCreate)).toEqual([
+      { signal: controller.signal },
+      { signal: controller.signal },
+      { signal: controller.signal },
+      { signal: controller.signal },
+      { signal: controller.signal },
+    ]);
     expect(callsFor(responseCreate)[3]).toEqual(
       expect.objectContaining({
         model: "gpt-5.4-mini",
@@ -1226,6 +1407,77 @@ describe("runMinimalLoop", () => {
       }),
     );
     expect(trace.events.filter((event) => event.type === "model_request")).toHaveLength(4);
+  });
+
+  it("does not apply a compaction response that settles after Runtime abort", async () => {
+    const controller = new AbortController();
+    const trace = createTraceRecorder();
+    let normalCall = 0;
+    const responseCreate: ResponseCreate = async (request) => {
+      if (request.tools.length === 0) {
+        controller.abort(new Error("stop before applying compaction"));
+        return {
+          output: [],
+          output_text: [
+            "# Compacted Context",
+            "## Task",
+            "Read files.",
+            "## Progress",
+            "Two reads completed.",
+            "## Evidence",
+            "Read observations exist.",
+            "## Open Questions",
+            "None.",
+            "## Next Step",
+            "Stop.",
+          ].join("\n"),
+        };
+      }
+      normalCall += 1;
+      return {
+        output: [{
+          arguments: JSON.stringify({ path: `file-${normalCall}.txt` }),
+          call_id: `call_compaction_${normalCall}`,
+          name: "read",
+          type: "function_call",
+        }],
+        output_text: "",
+      };
+    };
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "read output ".repeat(20),
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [{
+        description: "Read a file.",
+        name: "read",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+
+    await expect(runMinimalLoop({
+      contextCompaction: {
+        hardCharBudget: 100_000,
+        recentRoundsToKeep: 1,
+        softCharBudget: 1,
+      },
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      maxToolRounds: 3,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      signal: controller.signal,
+      task: "Read files.",
+      toolRuntime,
+    })).rejects.toThrow("stop before applying compaction");
+
+    expect(trace.events).not.toContainEqual(expect.objectContaining({
+      type: "context_compacted",
+    }));
   });
 
   it("fails explicitly when reactive compaction still exceeds the hard budget", async () => {
@@ -2048,6 +2300,81 @@ describe("runMinimalLoop", () => {
     );
   });
 
+  it("cancels and awaits running child sessions before session_ended", async () => {
+    const childResult = createDeferred<{
+      childSessionId: string;
+      finalAnswer: string;
+      profile: "research";
+      status: "failed";
+      tracePath: string;
+    }>();
+    const order: string[] = [];
+    const trace = createTraceRecorder();
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "session_ended") {
+          order.push("session_ended");
+        }
+      },
+    };
+    const cancel = vi.fn(() => {
+      order.push("child_cancelled");
+      childResult.resolve({
+        childSessionId: "child-owned-1",
+        finalAnswer: "Child session failed: parent stopped",
+        profile: "research",
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-owned-1/trace.jsonl",
+      });
+    });
+    const childSessionRunner: ChildSessionRunner = {
+      run: vi.fn(),
+      start: vi.fn().mockResolvedValue({
+        cancel,
+        childSessionId: "child-owned-1",
+        profile: "research",
+        promise: childResult.promise,
+        status: "running",
+        tracePath: "/repo/.forge/sessions/child-owned-1/trace.jsonl",
+      }),
+    };
+    let modelCall = 0;
+    const responseCreate: ResponseCreate = async () => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          output: [{
+            arguments: JSON.stringify({
+              maxToolRounds: 2,
+              profile: "research",
+              runInBackground: true,
+              task: "Inspect the owned lifecycle.",
+            }),
+            call_id: "call_delegate_owned",
+            name: "delegate",
+            type: "function_call",
+          }],
+          output_text: "",
+        };
+      }
+      throw new Error("root model failed");
+    };
+
+    await expect(runMinimalLoop({
+      childSessionRunner,
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "start a child and fail",
+    })).rejects.toThrow("root model failed");
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(order).toEqual(["child_cancelled", "session_ended"]);
+  });
+
   it("does not add background support to an injected custom tool runtime", async () => {
     const toolRuntime: ToolRuntime = {
       execute: vi.fn(),
@@ -2106,6 +2433,26 @@ describe("runMinimalLoop", () => {
       maxRetries: 2,
       timeout: 120_000,
     });
+  });
+
+  it("passes the Runtime abort signal to the OpenAI SDK request options", async () => {
+    const controller = new AbortController();
+    createOpenAIResponseMock.mockResolvedValueOnce({
+      output: [],
+      output_text: "done",
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      signal: controller.signal,
+      task: "answer directly",
+    });
+
+    expect(createOpenAIResponseMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      { signal: controller.signal },
+    );
   });
 
   it("records normalized API usage and measured duration on model responses", async () => {
@@ -2667,5 +3014,121 @@ describe("createMinimalLoopSession", () => {
       content: expect.stringContaining("msg_leader_000001"),
       role: "user",
     }));
+  });
+
+  it("stops waiting for teammate activity when the Runtime is aborted", async () => {
+    const activity = createDeferred<Awaited<ReturnType<TeammateManager["settleBeforeFinal"]>>>();
+    const controller = new AbortController();
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "candidate while teammate is active",
+    });
+    const teammates = {
+      drainLeaderMessages: vi.fn(async () => []),
+      list: vi.fn(async () => []),
+      settleBeforeFinal: vi.fn(async () => activity.promise),
+    } as unknown as TeammateManager;
+    const running = runMinimalLoop({
+      cwd: process.cwd(),
+      promptAssets: { skills: [] },
+      responseCreate,
+      signal: controller.signal,
+      task: "wait for a teammate",
+      teammates,
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(teammates.settleBeforeFinal).toHaveBeenCalledOnce();
+    });
+
+    controller.abort(new Error("stop teammate wait"));
+    const outcome = await Promise.race([
+      running.then(
+        () => "resolved" as const,
+        () => "rejected" as const,
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
+    ]);
+    activity.resolve([]);
+    await running.catch(() => undefined);
+
+    expect(outcome).toBe("rejected");
+  });
+
+  it("does not start a teammate activity wait when the signal aborts before the gate", async () => {
+    const childResult = createDeferred<{
+      childSessionId: string;
+      finalAnswer: string;
+      profile: "research";
+      status: "completed";
+      tracePath: string;
+    }>();
+    const controller = new AbortController();
+    const childSessionRunner: ChildSessionRunner = {
+      run: vi.fn(),
+      start: vi.fn().mockResolvedValue({
+        cancel: vi.fn(),
+        childSessionId: "child-gate-abort",
+        profile: "research",
+        promise: childResult.promise,
+        status: "running",
+        tracePath: "/repo/.forge/sessions/child-gate-abort/trace.jsonl",
+      }),
+    };
+    const teammates = {
+      drainLeaderMessages: vi.fn(async () => []),
+      list: vi.fn(async () => []),
+      settleBeforeFinal: vi.fn(async () => []),
+    } as unknown as TeammateManager;
+    let modelCall = 0;
+    const responseCreate: ResponseCreate = async () => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          output: [{
+            arguments: JSON.stringify({
+              maxToolRounds: 2,
+              profile: "research",
+              runInBackground: true,
+              task: "Finish before the final gate.",
+            }),
+            call_id: "call_gate_child",
+            name: "delegate",
+            type: "function_call",
+          }],
+          output_text: "",
+        };
+      }
+
+      childResult.promise.then(() => {
+        controller.abort(new Error("stop before teammate gate"));
+      });
+      setTimeout(() => {
+        childResult.resolve({
+          childSessionId: "child-gate-abort",
+          finalAnswer: "Child completed before abort.",
+          profile: "research",
+          status: "completed",
+          tracePath: "/repo/.forge/sessions/child-gate-abort/trace.jsonl",
+        });
+      }, 0);
+      return { output: [], output_text: "candidate" };
+    };
+
+    await expect(runMinimalLoop({
+      childSessionRunner,
+      cwd: process.cwd(),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      signal: controller.signal,
+      task: "abort before teammate wait",
+      teammates,
+    })).rejects.toThrow("stop before teammate gate");
+
+    expect(teammates.settleBeforeFinal).not.toHaveBeenCalled();
   });
 });

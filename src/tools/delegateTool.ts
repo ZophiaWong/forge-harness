@@ -26,6 +26,7 @@ export interface ChildSessionRunResult {
 }
 
 export interface ChildSessionRunHandle {
+  cancel(): void;
   childSessionId: string;
   profile: ChildSessionProfile;
   promise: Promise<ChildSessionRunResult>;
