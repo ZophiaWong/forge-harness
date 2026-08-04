@@ -638,6 +638,48 @@ describe("child session profiles", () => {
     expect(responseCreate).not.toHaveBeenCalled();
   });
 
+  it("propagates handoff publication failure without fabricating a second child finish", async () => {
+    const root = await createRootTaskFixture();
+    const publicationError = new Error("child handoff publication failed");
+    const parentEvents: TraceEventPayload[] = [];
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+            if (event.type === "child_session_handoff") {
+              throw publicationError;
+            }
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate: async () => ({
+        output: [],
+        output_text: "Child execution completed before publication failed.",
+      }),
+      taskGraph: root.binding,
+    });
+
+    const outcome = await runner.run({
+      maxToolRounds: 2,
+      parentCallId: "call_handoff_publication_failure",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: false,
+      task: "Complete successfully, then expose the reporting failure.",
+    }).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (reason: unknown) => ({ reason, status: "rejected" as const }),
+    );
+
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([
+      expect.objectContaining({ status: "completed", type: "child_session_finished" }),
+    ]);
+    expect(outcome).toEqual({ reason: publicationError, status: "rejected" });
+  });
+
   it("prepends profile-specific prompt prose while preserving child skill invocations", () => {
     const task = formatChildProfileTask({
       profile: "research",

@@ -228,6 +228,7 @@ async function startChildSession(
 
   const promise = (async (): Promise<ChildSessionRunResult> => {
     let minimalLoopStarted = false;
+    let completedResult: ChildSessionRunResult;
     try {
       childController.signal.throwIfAborted();
       if (request.profile === "edit") {
@@ -266,7 +267,7 @@ async function startChildSession(
         ...(workspace ? { workspace } : {}),
       });
       const changedFiles = workspace ? await listChangedFiles(workspace.path) : undefined;
-      const result: ChildSessionRunResult = {
+      completedResult = {
         ...(changedFiles ? { changedFiles } : {}),
         childSessionId: childTrace.metadata.id,
         finalAnswer: final.finalAnswer,
@@ -275,31 +276,6 @@ async function startChildSession(
         tracePath: childTrace.paths.tracePath,
         ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
       };
-
-      await options.parentLifecycleEmitter.emit({
-        childSessionId: childTrace.metadata.id,
-        parentCallId: request.parentCallId,
-        profile: request.profile,
-        round: request.parentRound,
-        runInBackground: request.runInBackground,
-        status: "completed",
-        tracePath: childTrace.paths.tracePath,
-        type: "child_session_finished",
-        ...(workspace ? { workspace } : {}),
-      });
-      await options.parentLifecycleEmitter.emit({
-        ...(changedFiles ? { changedFiles } : {}),
-        childSessionId: childTrace.metadata.id,
-        finalAnswer: final.finalAnswer,
-        parentCallId: request.parentCallId,
-        profile: request.profile,
-        round: request.parentRound,
-        tracePath: childTrace.paths.tracePath,
-        type: "child_session_handoff",
-        ...(workspace ? { workspace } : {}),
-      });
-
-      return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (!minimalLoopStarted) {
@@ -328,6 +304,31 @@ async function startChildSession(
         ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
       };
     }
+
+    await options.parentLifecycleEmitter.emit({
+      childSessionId: childTrace.metadata.id,
+      parentCallId: request.parentCallId,
+      profile: request.profile,
+      round: request.parentRound,
+      runInBackground: request.runInBackground,
+      status: "completed",
+      tracePath: childTrace.paths.tracePath,
+      type: "child_session_finished",
+      ...(workspace ? { workspace } : {}),
+    });
+    await options.parentLifecycleEmitter.emit({
+      ...(completedResult.changedFiles ? { changedFiles: completedResult.changedFiles } : {}),
+      childSessionId: childTrace.metadata.id,
+      finalAnswer: completedResult.finalAnswer,
+      parentCallId: request.parentCallId,
+      profile: request.profile,
+      round: request.parentRound,
+      tracePath: childTrace.paths.tracePath,
+      type: "child_session_handoff",
+      ...(workspace ? { workspace } : {}),
+    });
+
+    return completedResult;
   })().finally(detachParentAbortListener);
 
   return {
