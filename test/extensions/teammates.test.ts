@@ -586,6 +586,123 @@ describe("TeammateManager", () => {
     expect(cleanupEvents.filter((event) => event.type === "team_cleanup")).toHaveLength(1);
   });
 
+  it.each([
+    {
+      exitSignal: "SIGTERM" as const,
+      expectedSignals: ["SIGTERM"],
+      label: "SIGTERM",
+      terminateTimeoutMs: 1_000,
+    },
+    {
+      exitSignal: "SIGKILL" as const,
+      expectedSignals: ["SIGTERM", "SIGKILL"],
+      label: "SIGKILL escalation",
+      terminateTimeoutMs: 0,
+    },
+  ])("joins queued worker events before finalizing $label shutdown", async ({
+    exitSignal,
+    expectedSignals,
+    terminateTimeoutMs,
+  }) => {
+    const baseCwd = await fs.mkdtemp(path.join(os.tmpdir(), "forge-teammates-exit-tail-"));
+    const teamRoot = path.join(baseCwd, "team");
+    const backing = createFileMailboxStore({ teamRoot });
+    const appendBlocked = deferred<void>();
+    const releaseAppend = deferred<void>();
+    const mailboxStore: MailboxStore = {
+      ...backing,
+      async append(input) {
+        if (input.kind === "turn_result") {
+          appendBlocked.resolve(undefined);
+          await releaseAppend.promise;
+        }
+        return backing.append(input);
+      },
+    };
+    const events: TraceEventPayload[] = [];
+    const adapter = new FakeProcessAdapter();
+    const manager = createTeammateManager({
+      baseCwd,
+      lifecycleEmitter: {
+        async emit(event) {
+          events.push(event);
+        },
+      },
+      mailboxStore,
+      processAdapter: adapter,
+      rootSessionId: "root-session",
+      sessionId: () => "session-a",
+      teamRoot,
+      terminateTimeoutMs,
+    });
+    await manager.initialize();
+    const started = manager.start({
+      instructions: "research",
+      message: "initial",
+      name: "researcher",
+      profile: "research",
+    });
+    const process = await adapter.nextProcess();
+    process.emit({ sessionId: "session-a", type: "ready" });
+    await started;
+    process.emit({
+      finalAnswer: "durable result",
+      sessionId: "session-a",
+      type: "turn_result",
+    });
+    await appendBlocked.promise;
+    process.kill.mockImplementation((signal) => {
+      if (signal === exitSignal) {
+        process.exit(0, signal);
+      }
+      return true;
+    });
+
+    let terminationSettled = false;
+    const termination = manager.terminateAll();
+    void termination.then(
+      () => { terminationSettled = true; },
+      () => { terminationSettled = true; },
+    );
+    await waitUntil(() => process.kill.mock.calls.length === expectedSignals.length);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(terminationSettled).toBe(false);
+    expect(JSON.parse(await fs.readFile(
+      path.join(teamRoot, "teammates", "researcher", "runtime.json"),
+      "utf8",
+    ))).toMatchObject({ state: "busy" });
+    expect(events).not.toContainEqual(expect.objectContaining({
+      name: "researcher",
+      state: "stopped",
+      type: "teammate_state_changed",
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "team_cleanup" }));
+
+    releaseAppend.resolve(undefined);
+    await termination;
+    await manager.flushEvents();
+
+    const stateEvents = events.filter(
+      (event): event is Extract<TraceEventPayload, { type: "teammate_state_changed" }> => (
+        event.type === "teammate_state_changed" && event.name === "researcher"
+      ),
+    );
+    expect(stateEvents.filter((event) => event.state === "stopped")).toHaveLength(1);
+    expect(stateEvents.at(-1)).toMatchObject({ state: "stopped" });
+    expect(events.filter((event) => event.type === "team_cleanup")).toEqual([
+      expect.objectContaining({ mode: "terminate", stopped: ["researcher"] }),
+    ]);
+    expect(JSON.parse(await fs.readFile(
+      path.join(teamRoot, "teammates", "researcher", "runtime.json"),
+      "utf8",
+    ))).toMatchObject({ state: "stopped" });
+    await expect(manager.list()).resolves.toEqual([
+      expect.objectContaining({ name: "researcher", state: "stopped" }),
+    ]);
+    expect(process.kill.mock.calls.map(([signal]) => signal)).toEqual(expectedSignals);
+  });
+
   it("retries a failed stopped-state persistence before becoming terminal", async () => {
     const cleanupEvents: TraceEventPayload[] = [];
     const fixture = await createFixture(["session-a"], {

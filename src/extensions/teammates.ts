@@ -630,10 +630,9 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
   ): Promise<void> => {
     const process = member.process;
     const exited = member.processExit;
-    if (member.processExitObserved) {
-      if (!member.stopRequested) {
-        await eventTail;
-      }
+    const hasObservedExit = (): boolean => member.processExitObserved === true;
+    if (hasObservedExit()) {
+      await eventTail;
       return;
     }
     if (!process) {
@@ -647,13 +646,13 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
           member.stopRequested = true;
           return true;
         }
-        if (!member.processExitObserved) {
+        if (!hasObservedExit()) {
           stopErrors.push(new Error(
             `teammate "${member.definition.name}" process did not accept ${signal}`,
           ));
         }
       } catch (error) {
-        if (!member.processExitObserved) {
+        if (!hasObservedExit()) {
           stopErrors.push(error);
         }
       }
@@ -667,6 +666,7 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
         });
         member.stopRequested = true;
         if (exited && await resolvesWithin(exited.promise, shutdownTimeoutMs)) {
+          await eventTail;
           throwStopErrors(stopErrors, member.definition.name);
           return;
         }
@@ -677,27 +677,32 @@ export function createTeammateManager(options: CreateTeammateManagerOptions): Te
 
     const termDelivered = deliverSignal("SIGTERM");
     if (
-      member.processExitObserved
+      hasObservedExit()
       || (termDelivered && exited && await resolvesWithin(exited.promise, terminateTimeoutMs))
     ) {
+      await eventTail;
       throwStopErrors(stopErrors, member.definition.name);
       return;
     }
 
     const killDelivered = deliverSignal("SIGKILL");
+    let exitConfirmed = hasObservedExit();
     if (killDelivered) {
       try {
         process.disconnect();
       } catch (error) {
         stopErrors.push(error);
       }
-      const exitConfirmed = member.processExitObserved
+      exitConfirmed = hasObservedExit()
         || (exited ? await resolvesWithin(exited.promise, terminateTimeoutMs) : false);
       if (!exitConfirmed) {
         stopErrors.push(new Error(
           `teammate "${member.definition.name}" did not exit after SIGKILL within ${terminateTimeoutMs}ms`,
         ));
       }
+    }
+    if (exitConfirmed) {
+      await eventTail;
     }
     throwStopErrors(stopErrors, member.definition.name);
   };
