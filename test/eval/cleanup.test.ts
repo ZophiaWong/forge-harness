@@ -24,6 +24,10 @@ async function createEvalRoot(): Promise<string> {
   return evalRoot;
 }
 
+function repositoryRootFor(evalRoot: string): string {
+  return path.dirname(path.dirname(evalRoot));
+}
+
 async function createRun(
   evalRoot: string,
   runId: string,
@@ -46,7 +50,11 @@ describe("eval artifact cleanup", () => {
     const evalRoot = await createEvalRoot();
     const runRoot = await createRun(evalRoot, "run-001", "completed");
 
-    await expect(cleanEvalRuns({ confirmed: false, evalRoot })).rejects.toThrow(/--yes/);
+    await expect(cleanEvalRuns({
+      confirmed: false,
+      evalRoot,
+      repositoryRoot: repositoryRootFor(evalRoot),
+    })).rejects.toThrow(/--yes/);
     await expect(fs.stat(runRoot)).resolves.toBeDefined();
   });
 
@@ -63,7 +71,12 @@ describe("eval artifact cleanup", () => {
     await fs.mkdir(unmarked);
     const removeWorktree = vi.fn(async () => {});
 
-    const result = await cleanEvalRuns({ confirmed: true, evalRoot, removeWorktree });
+    const result = await cleanEvalRuns({
+      confirmed: true,
+      evalRoot,
+      repositoryRoot: repositoryRootFor(evalRoot),
+      removeWorktree,
+    });
 
     expect(result).toEqual({
       removedRunIds: ["run-001"],
@@ -86,7 +99,11 @@ describe("eval artifact cleanup", () => {
     tempRoots.push(external);
     await fs.symlink(external, path.join(evalRoot, "run-link"));
 
-    await expect(cleanEvalRuns({ confirmed: true, evalRoot })).rejects.toThrow(/symlink/);
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot,
+      repositoryRoot: repositoryRootFor(evalRoot),
+    })).rejects.toThrow(/symlink/);
     await expect(fs.stat(valid)).resolves.toBeDefined();
     await expect(fs.stat(external)).resolves.toBeDefined();
   });
@@ -100,7 +117,11 @@ describe("eval artifact cleanup", () => {
     const outside = path.join(evalRoot, "outside");
     await fs.mkdir(outside);
 
-    await expect(cleanEvalRuns({ confirmed: true, evalRoot })).rejects.toThrow(/inside the eval run/);
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot,
+      repositoryRoot: repositoryRootFor(evalRoot),
+    })).rejects.toThrow(/inside the eval run/);
     await expect(fs.stat(runRoot)).resolves.toBeDefined();
     await expect(fs.stat(outside)).resolves.toBeDefined();
   });
@@ -117,10 +138,30 @@ describe("eval artifact cleanup", () => {
     await fs.symlink(external, path.join(runRoot, "linked-worktree"));
     const removeWorktree = vi.fn(async () => {});
 
-    await expect(cleanEvalRuns({ confirmed: true, evalRoot, removeWorktree }))
+    await expect(cleanEvalRuns({
+      confirmed: true,
+      evalRoot,
+      repositoryRoot: repositoryRootFor(evalRoot),
+      removeWorktree,
+    }))
       .rejects.toThrow(/symlink|inside the eval run/);
     expect(removeWorktree).not.toHaveBeenCalled();
     await expect(fs.stat(runRoot)).resolves.toBeDefined();
     await expect(fs.stat(external)).resolves.toBeDefined();
+  });
+
+  it("rejects a symlinked .forge ancestor before deleting any run", async () => {
+    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-repo-"));
+    const externalForge = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-external-forge-"));
+    tempRoots.push(repositoryRoot, externalForge);
+    const evalRoot = path.join(repositoryRoot, ".forge", "evals");
+    const externalEvalRoot = path.join(externalForge, "evals");
+    await fs.mkdir(externalEvalRoot);
+    const runRoot = await createRun(externalEvalRoot, "run-001", "completed");
+    await fs.symlink(externalForge, path.join(repositoryRoot, ".forge"));
+
+    await expect(cleanEvalRuns({ confirmed: true, evalRoot, repositoryRoot }))
+      .rejects.toThrow(/\.forge.*symlink|real directory/);
+    await expect(fs.stat(runRoot)).resolves.toBeDefined();
   });
 });

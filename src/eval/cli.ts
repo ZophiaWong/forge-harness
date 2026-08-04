@@ -129,6 +129,7 @@ export async function runEvalCli(
     const result = await dependencies.cleanRuns({
       confirmed: true,
       evalRoot: path.join(dependencies.repositoryRoot, ".forge", "evals"),
+      repositoryRoot: dependencies.repositoryRoot,
     });
     dependencies.log(`Removed ${result.removedRunIds.length} eval run(s).`);
     if (result.skippedActiveRunIds.length > 0) {

@@ -113,6 +113,7 @@ describe("eval CLI", () => {
     expect(cleanRuns).toHaveBeenCalledWith({
       confirmed: true,
       evalRoot: "/repo/.forge/evals",
+      repositoryRoot: "/repo",
     });
     await expect(runEvalCli(["run"], deps)).resolves.toBe(2);
   });

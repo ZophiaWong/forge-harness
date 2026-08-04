@@ -25,6 +25,7 @@ export interface RemoveEvalWorktreeInput {
 export interface CleanEvalRunsOptions {
   confirmed: boolean;
   evalRoot: string;
+  repositoryRoot: string;
   removeWorktree?: (input: RemoveEvalWorktreeInput) => Promise<void>;
 }
 
@@ -44,18 +45,11 @@ export async function cleanEvalRuns(options: CleanEvalRunsOptions): Promise<Clea
   if (!options.confirmed) {
     throw new Error("eval clean requires confirmation; pass --yes for non-interactive cleanup");
   }
-  const evalRoot = path.resolve(options.evalRoot);
-  if (path.basename(evalRoot) !== "evals" || path.basename(path.dirname(evalRoot)) !== ".forge") {
-    throw new Error("eval clean root must be an exact .forge/evals directory");
-  }
-
-  const rootStat = await lstatIfExists(evalRoot);
-  if (!rootStat) {
+  const exists = await assertEvalRootBoundary(options.repositoryRoot, options.evalRoot);
+  if (!exists) {
     return emptyResult();
   }
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-    throw new Error("eval clean root must be a real directory, not a symlink");
-  }
+  const evalRoot = path.resolve(options.evalRoot);
 
   const entries = (await fs.readdir(evalRoot, { withFileTypes: true }))
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -110,6 +104,40 @@ export async function cleanEvalRuns(options: CleanEvalRunsOptions): Promise<Clea
   }
 
   return { removedRunIds, skippedActiveRunIds, skippedUnmarkedNames };
+}
+
+async function assertEvalRootBoundary(repositoryRootInput: string, evalRootInput: string): Promise<boolean> {
+  const repositoryRoot = path.resolve(repositoryRootInput);
+  const forgeRoot = path.join(repositoryRoot, ".forge");
+  const expectedEvalRoot = path.join(forgeRoot, "evals");
+  const evalRoot = path.resolve(evalRootInput);
+  if (evalRoot !== expectedEvalRoot) {
+    throw new Error("eval clean root must be exactly <repository>/.forge/evals");
+  }
+  const repositoryStat = await fs.lstat(repositoryRoot);
+  if (repositoryStat.isSymbolicLink() || !repositoryStat.isDirectory()) {
+    throw new Error("repository root must be a real directory, not a symlink");
+  }
+  for (const [label, candidate] of [
+    [".forge directory", forgeRoot],
+    ["eval clean root", evalRoot],
+  ] as const) {
+    const stat = await lstatIfExists(candidate);
+    if (!stat) return false;
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`${label} must be a real directory, not a symlink`);
+    }
+  }
+  const [realRepositoryRoot, realForgeRoot, realEvalRoot] = await Promise.all([
+    fs.realpath(repositoryRoot),
+    fs.realpath(forgeRoot),
+    fs.realpath(evalRoot),
+  ]);
+  if (realForgeRoot !== path.join(realRepositoryRoot, ".forge")
+    || realEvalRoot !== path.join(realForgeRoot, "evals")) {
+    throw new Error("eval clean root escaped the repository path chain");
+  }
+  return true;
 }
 
 async function readMarker(markerPath: string): Promise<EvalRunMarker | undefined> {
