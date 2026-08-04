@@ -444,7 +444,7 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
   const finished = root.events.filter(isEvent("child_session_finished"));
   const handoffs = root.events.filter(isEvent("child_session_handoff"));
   const finals = root.events.filter(isEvent("final_answer"));
-  const sessionEnded = root.events.find(isEvent("session_ended"));
+  const sessionEnds = root.events.filter(isEvent("session_ended"));
   const startedIds = started.map((event) => event.childSessionId);
   const separateChildTraceViolated = new Set(startedIds).size !== startedIds.length
     || started.some((start) => (
@@ -455,23 +455,28 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
     start: (typeof started)[number],
     final: (typeof finals)[number],
   ): boolean => {
-    const matches = handoffs.filter((handoff) => (
-      handoff.childSessionId === start.childSessionId && handoff.sequence < final.sequence
-    ));
-    return matches.length === 1 && start.sequence < (matches[0]?.sequence ?? -1);
+    const matches = handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId);
+    return matches.length === 1
+      && start.sequence < (matches[0]?.sequence ?? -1)
+      && (matches[0]?.sequence ?? Infinity) < final.sequence;
   };
-  const handoffBeforeFinalViolated = finals.some((final) => started
+  const duplicateHandoff = started.some((start) => (
+    handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId).length > 1
+  ));
+  const handoffBeforeFinalViolated = duplicateHandoff || finals.some((final) => started
     .filter((start) => start.sequence < final.sequence)
     .some((start) => !validHandoffBeforeFinal(start, final)));
-  const hasQualifyingFinish = (start: (typeof started)[number]): boolean => Boolean(sessionEnded)
-    && finished.some((terminal) => (
-      terminal.childSessionId === start.childSessionId
-      && start.sequence < terminal.sequence
-      && terminal.sequence < (sessionEnded?.sequence ?? -1)
-    ));
-  const pendingAtSessionEnd = Boolean(sessionEnded) && started
-    .filter((start) => start.sequence < (sessionEnded?.sequence ?? -1))
-    .some((start) => !hasQualifyingFinish(start));
+  const hasQualifyingFinish = (
+    start: (typeof started)[number],
+    sessionEnd: (typeof sessionEnds)[number],
+  ): boolean => finished.some((terminal) => (
+    terminal.childSessionId === start.childSessionId
+    && start.sequence < terminal.sequence
+    && terminal.sequence < sessionEnd.sequence
+  ));
+  const pendingAtSessionEnd = sessionEnds.some((sessionEnd) => started
+    .filter((start) => start.sequence < sessionEnd.sequence)
+    .some((start) => !hasQualifyingFinish(start, sessionEnd)));
   const rootReadPaths = toolCalls(root).filter((call) => call.toolName === "read").map((call) => jsonPath(call.argumentsText));
   const childReadPaths = childSessions.flatMap((child) => toolCalls(child)
     .filter((call) => call.toolName === "read")
@@ -508,8 +513,11 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
     }),
     hardEvidence("pending-zero", {
       complete: started.length > 0
-        && Boolean(sessionEnded)
-        && started.every((start) => hasQualifyingFinish(start)),
+        && started.every((start) => {
+          const laterSessionEnds = sessionEnds.filter((sessionEnd) => start.sequence < sessionEnd.sequence);
+          return laterSessionEnds.length > 0
+            && laterSessionEnds.every((sessionEnd) => hasQualifyingFinish(start, sessionEnd));
+        }),
       violated: pendingAtSessionEnd,
     }),
     hard("git-unchanged", gitUnchanged(evidence)),
@@ -550,7 +558,6 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
     .filter((call) => call.toolName === "teammate_shutdown")
     .map((call) => ({ name: parseObject(call.argumentsText)?.name, sequence: call.sequence }))
     .filter((call): call is { name: string; sequence: number } => typeof call.name === "string");
-  const shutdownNames = shutdownCalls.map((call) => call.name);
   const expectedMemberNames = ["protocol-editor", "protocol-researcher"];
   const externalTask1Roles = externalEvidenceRoles(task1);
   const externalTask2Roles = externalEvidenceRoles(task2);
@@ -573,24 +580,36 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
   const fingerprintContradicted = new Set(fingerprintValues).size > 1
     || (task3?.verdict !== undefined && task3.verdict.status !== "passed")
     || (task3?.integrationReceipt !== undefined && task3.status !== "completed");
-  const expectedTeamMembers = expectedMemberNames
-    .map((name) => evidence.team?.members.find((member) => member.name === name))
-    .filter((member) => member !== undefined);
+  const expectedTeamMembers = evidence.team?.members.filter((member) => (
+    expectedMemberNames.includes(member.name)
+  )) ?? [];
+  const registrationsFor = (name: string, before = Infinity) => teammateRegistrations
+    .filter((registration) => registration.name === name && registration.sequence < before);
+  const hasPairedShutdown = (name: string, before = Infinity): boolean => {
+    const relevantRegistrations = registrationsFor(name, before);
+    const latestRegistration = Math.max(...relevantRegistrations.map((registration) => registration.sequence));
+    return relevantRegistrations.length > 0 && shutdownCalls.some((call) => (
+      call.name === name && latestRegistration < call.sequence && call.sequence < before
+    ));
+  };
   const teamQuiescentComplete = expectedMemberNames.every((name) => (
     evidence.team?.members.some((member) => (
       member.name === name && member.state === "stopped" && member.unreadCount === 0
     ))
-    && shutdownNames.includes(name)
+    && hasPairedShutdown(name)
   )) && evidence.team?.leaderUnreadCount === 0;
   const finalsAfterRegistration = finals.filter((candidateFinal) => (
     teammateRegistrations.some((registration) => registration.sequence < candidateFinal.sequence)
   ));
-  const teamQuiescentViolated = (teammateRegistrations.length > 0 || expectedTeamMembers.length > 0) && (
+  const teamQuiescentViolated = (
     expectedTeamMembers.some((member) => member.state !== "stopped" || member.unreadCount > 0)
-    || (evidence.team?.leaderUnreadCount ?? 0) > 0
-    || finalsAfterRegistration.some((candidateFinal) => expectedMemberNames.some((name) => (
-      !shutdownCalls.some((call) => call.name === name && call.sequence < candidateFinal.sequence)
-    )))
+    || (
+      (teammateRegistrations.length > 0 || expectedTeamMembers.length > 0)
+      && (evidence.team?.leaderUnreadCount ?? 0) > 0
+    )
+    || finalsAfterRegistration.some((candidateFinal) => expectedMemberNames
+      .filter((name) => registrationsFor(name, candidateFinal.sequence).length > 0)
+      .some((name) => !hasPairedShutdown(name, candidateFinal.sequence)))
   );
   const completionMechanismObserved = Boolean(task1 || task2 || task3 || integrateCall)
     || verificationResults.length > 0
