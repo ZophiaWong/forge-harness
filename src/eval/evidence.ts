@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { RecordedTraceEvent } from "../runtime/trace.js";
+import { parseRecordedTraceEvent } from "../runtime/traceSchema.js";
 import type { EvalTraceSession } from "./scenario.js";
 
 export interface CollectEvalTraceSessionsOptions {
@@ -13,6 +14,7 @@ export interface CollectEvalTraceSessionsOptions {
 export async function readEvalTrace(tracePath: string): Promise<RecordedTraceEvent[]> {
   const source = await fs.readFile(tracePath, "utf8");
   const events: RecordedTraceEvent[] = [];
+  let expectedSequence = 1;
   for (const [index, line] of source.split("\n").entries()) {
     if (line.trim().length === 0) {
       continue;
@@ -25,10 +27,19 @@ export async function readEvalTrace(tracePath: string): Promise<RecordedTraceEve
         `malformed trace JSON at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (!isRecordedTraceEvent(value)) {
+    let event: RecordedTraceEvent;
+    try {
+      event = parseRecordedTraceEvent(value);
+    } catch {
       throw new Error(`invalid trace event at line ${index + 1}`);
     }
-    events.push(value as RecordedTraceEvent);
+    if (event.sequence !== expectedSequence) {
+      throw new Error(
+        `invalid trace sequence at line ${index + 1}: expected sequence ${expectedSequence}, received ${event.sequence}`,
+      );
+    }
+    expectedSequence += 1;
+    events.push(event);
   }
   return events;
 }
@@ -105,20 +116,4 @@ async function assertPathInsideAttempt(attemptRoot: string, candidate: string): 
   if (!realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
     throw new Error("eval trace path must stay inside the eval attempt");
   }
-}
-
-function isRecordedTraceEvent(value: unknown): boolean {
-  return isRecord(value)
-    && typeof value.type === "string"
-    && typeof value.sessionId === "string"
-    && value.sessionId.length > 0
-    && typeof value.sequence === "number"
-    && Number.isSafeInteger(value.sequence)
-    && value.sequence > 0
-    && typeof value.timestamp === "string"
-    && !Number.isNaN(Date.parse(value.timestamp));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
