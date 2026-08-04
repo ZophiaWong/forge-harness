@@ -370,9 +370,22 @@ function gradeVerificationRecovery(evidence: EvalAttemptEvidence): EvalGrade {
   const verifications = events.filter(isEvent("verification_result"));
   const recoveries = events.filter(isEvent("recovery_attempt"));
   const finals = events.filter(isEvent("final_answer"));
-  const failed = verifications.find((event) => event.status === "failed");
-  const passed = verifications.find((event) => event.status === "passed");
-  const final = finals[0];
+  const failed = verifications.filter((event) => event.status === "failed");
+  const passed = verifications.filter((event) => event.status === "passed");
+  const mechanismObserved = verifications.length > 0 || recoveries.length > 0;
+  const ordered = failed.length === 1
+    && recoveries.length === 1
+    && passed.length === 1
+    && finals.length === 1
+    && (failed[0]?.sequence ?? Infinity) < (recoveries[0]?.sequence ?? -1)
+    && (recoveries[0]?.sequence ?? Infinity) < (passed[0]?.sequence ?? -1)
+    && (passed[0]?.sequence ?? Infinity) < (finals[0]?.sequence ?? -1);
+  const recoveryPrecedesFailure = recoveries.some((recovery) => (
+    failed.some((failure) => recovery.sequence < failure.sequence)
+  ));
+  const finalLacksEarlierPass = mechanismObserved && finals.some((final) => (
+    !passed.some((verification) => verification.sequence < final.sequence)
+  ));
   const assertions = [
     outcome("final-exact", evidence.finalAnswer === "RECOVERY_OK"),
     outcome(
@@ -382,14 +395,10 @@ function gradeVerificationRecovery(evidence: EvalAttemptEvidence): EvalGrade {
         && verifications[1]?.status === "passed"
         && recoveries.length === 1,
     ),
-    hard(
-      "verification-order",
-      Boolean(failed && passed && final)
-        && (failed?.sequence ?? Infinity) < (recoveries[0]?.sequence ?? -1)
-        && (recoveries[0]?.sequence ?? Infinity) < (passed?.sequence ?? -1)
-        && (passed?.sequence ?? Infinity) < (final?.sequence ?? -1)
-        && finals.length === 1,
-    ),
+    hardEvidence("verification-order", {
+      complete: ordered,
+      violated: recoveryPrecedesFailure || finalLacksEarlierPass,
+    }),
     hard("git-unchanged", gitUnchanged(evidence)),
     hard("allowlist-enforced", allowlistEnforced(evidence)),
     hard("permission-evidence", permissionEvidenceComplete(evidence)),
@@ -405,14 +414,20 @@ function gradeCompactionRetention(evidence: EvalAttemptEvidence): EvalGrade {
   const compactions = root.events.filter(isEvent("context_compacted"));
   const failures = root.events.filter(isEvent("context_compaction_failed"));
   const afterCompactionChecks = evidence.modelRequestChecks.filter((check) => check.afterCompaction);
+  const compactionSucceeded = compactions.length > 0 && failures.length === 0;
   const assertions = [
     outcome("ordered-reads", arraysEqual(readPaths, ["alpha.txt", "bravo.txt", "charlie.txt"])),
     outcome("final-exact", evidence.finalAnswer === COMPACTION_TOKEN_LINE),
-    hard("compaction-succeeded", compactions.length > 0 && failures.length === 0),
-    hard(
-      "pinned-task-retained",
-      afterCompactionChecks.length > 0 && afterCompactionChecks.every((check) => check.pinnedTaskPresent),
-    ),
+    hardEvidence("compaction-succeeded", {
+      complete: compactionSucceeded,
+      violated: failures.length > 0,
+    }),
+    hardEvidence("pinned-task-retained", {
+      complete: compactionSucceeded
+        && afterCompactionChecks.length > 0
+        && afterCompactionChecks.every((check) => check.pinnedTaskPresent),
+      violated: afterCompactionChecks.some((check) => !check.pinnedTaskPresent),
+    }),
     hard("git-unchanged", gitUnchanged(evidence)),
     hard("allowlist-enforced", allowlistEnforced(evidence)),
     hard("permission-evidence", permissionEvidenceComplete(evidence)),
@@ -424,8 +439,27 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
   const root = rootSession(evidence);
   const childSessions = evidence.sessions.filter((item) => item.role === "child");
   const started = root.events.filter(isEvent("child_session_started"));
+  const finished = root.events.filter(isEvent("child_session_finished"));
   const handoffs = root.events.filter(isEvent("child_session_handoff"));
   const final = root.events.find(isEvent("final_answer"));
+  const sessionEnded = root.events.find(isEvent("session_ended"));
+  const startedIds = started.map((event) => event.childSessionId);
+  const separateChildTraceViolated = new Set(startedIds).size !== startedIds.length
+    || started.some((start) => (
+      start.childSessionId === root.sessionId
+      || childSessions.filter((child) => child.sessionId === start.childSessionId).length !== 1
+    ));
+  const handoffBeforeFinalViolated = Boolean(final) && started
+    .filter((start) => start.sequence < (final?.sequence ?? -1))
+    .some((start) => {
+      const matches = handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId);
+      return matches.length !== 1
+        || (matches[0]?.sequence ?? -1) <= start.sequence
+        || (matches[0]?.sequence ?? Infinity) >= (final?.sequence ?? -1);
+    });
+  const pendingAtSessionEnd = Boolean(sessionEnded) && started.some((start) => (
+    !finished.some((terminal) => terminal.childSessionId === start.childSessionId)
+  ));
   const rootReadPaths = toolCalls(root).filter((call) => call.toolName === "read").map((call) => jsonPath(call.argumentsText));
   const childReadPaths = childSessions.flatMap((child) => toolCalls(child)
     .filter((call) => call.toolName === "read")
@@ -446,21 +480,29 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
       arraysEqual(rootReadPaths, ["parent.txt"]) && arraysEqual(childReadPaths, ["child.txt"]),
     ),
     outcome("final-exact", evidence.finalAnswer === ASYNC_TOKEN_LINE),
-    hard(
-      "separate-child-trace",
-      childSessions.length === 1
-        && childSessions[0]?.sessionId !== root.sessionId
-        && childSessions[0]?.sessionId === started[0]?.childSessionId,
-    ),
-    hard(
-      "handoff-before-final",
-      handoffs.length === 1 && Boolean(final) && (handoffs[0]?.sequence ?? Infinity) < (final?.sequence ?? -1),
-    ),
-    hard(
-      "pending-zero",
-      started.length > 0
-        && started.every((start) => handoffs.some((handoff) => handoff.childSessionId === start.childSessionId)),
-    ),
+    hardEvidence("separate-child-trace", {
+      complete: started.length > 0 && !separateChildTraceViolated,
+      violated: started.length > 0 && separateChildTraceViolated,
+    }),
+    hardEvidence("handoff-before-final", {
+      complete: started.length > 0
+        && Boolean(final)
+        && started.every((start) => {
+          const matches = handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId);
+          return matches.length === 1
+            && start.sequence < (matches[0]?.sequence ?? -1)
+            && (matches[0]?.sequence ?? Infinity) < (final?.sequence ?? -1);
+        }),
+      violated: handoffBeforeFinalViolated,
+    }),
+    hardEvidence("pending-zero", {
+      complete: started.length > 0
+        && Boolean(sessionEnded)
+        && started.every((start) => (
+          finished.some((terminal) => terminal.childSessionId === start.childSessionId)
+        )),
+      violated: pendingAtSessionEnd,
+    }),
     hard("git-unchanged", gitUnchanged(evidence)),
     hard("allowlist-enforced", allowlistEnforced(evidence)),
     hard("permission-evidence", permissionEvidenceComplete(evidence)),
@@ -479,7 +521,7 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
   const lookup = lookups[0];
   const lookupResult = lookup ? toolResult(root, lookup.callId) : undefined;
   const pluginActivation = root.events.filter(isEvent("plugin_activation_result"))
-    .find((event) => event.pluginName === "issue-workflow");
+    .filter((event) => event.pluginName === "issue-workflow");
   const editorWrites = evidence.sessions
     .filter((item) => item.role === "teammate" && item.name === "protocol-editor")
     .flatMap((item) => toolCalls(item).filter((call) => call.toolName === "write"));
@@ -491,10 +533,67 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
   const final = root.events.find(isEvent("final_answer"));
   const verification = root.events.filter(isEvent("verification_result")).find((event) => event.status === "passed");
   const integrateCall = rootCalls.find((call) => call.toolName === "task_integrate");
+  const completionGateFailures = root.events.filter(isEvent("completion_gate_failed"));
+  const teammateRegistrations = root.events.filter(isEvent("teammate_registered"));
   const shutdownNames = rootCalls
     .filter((call) => call.toolName === "teammate_shutdown")
     .map((call) => parseObject(call.argumentsText)?.name)
     .filter((name): name is string => typeof name === "string");
+  const expectedMemberNames = ["protocol-editor", "protocol-researcher"];
+  const externalTask1Roles = externalEvidenceRoles(task1);
+  const externalTask2Roles = externalEvidenceRoles(task2);
+  const planBeforeWrite = task3?.plan?.status === "approved"
+    && editorWrites.length === 1
+    && planApprovedAt !== undefined
+    && firstWriteAt !== undefined
+    && planApprovedAt <= firstWriteAt;
+  const writeContradictsPlan = editorWrites.length > 1 || editorWrites.some((write) => (
+    task3?.plan?.status !== "approved"
+    || planApprovedAt === undefined
+    || !Number.isFinite(Date.parse(write.timestamp))
+    || planApprovedAt > Date.parse(write.timestamp)
+  ));
+  const fingerprintValues = [
+    task3?.submission?.fingerprint,
+    task3?.verdict?.fingerprint,
+    task3?.integrationReceipt?.fingerprint,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  const fingerprintContradicted = new Set(fingerprintValues).size > 1
+    || (task3?.verdict !== undefined && task3.verdict.status !== "passed")
+    || (task3?.integrationReceipt !== undefined && task3.status !== "completed");
+  const expectedTeamMembers = expectedMemberNames
+    .map((name) => evidence.team?.members.find((member) => member.name === name))
+    .filter((member) => member !== undefined);
+  const registeredExpectedNames = teammateRegistrations
+    .map((registration) => registration.name)
+    .filter((name) => expectedMemberNames.includes(name));
+  const teamQuiescentComplete = expectedMemberNames.every((name) => (
+    evidence.team?.members.some((member) => (
+      member.name === name && member.state === "stopped" && member.unreadCount === 0
+    ))
+    && shutdownNames.includes(name)
+  )) && evidence.team?.leaderUnreadCount === 0;
+  const finalAfterRegistration = Boolean(final) && teammateRegistrations.some((registration) => (
+    registration.sequence < (final?.sequence ?? -1)
+  ));
+  const teamQuiescentViolated = (teammateRegistrations.length > 0 || expectedTeamMembers.length > 0) && (
+    expectedTeamMembers.some((member) => member.state !== "stopped" || member.unreadCount > 0)
+    || (evidence.team?.leaderUnreadCount ?? 0) > 0
+    || (finalAfterRegistration && registeredExpectedNames.some((name) => !shutdownNames.includes(name)))
+  );
+  const completionMechanismObserved = Boolean(task1 || task2 || task3 || integrateCall)
+    || completionGateFailures.length > 0;
+  const completionBeforeFinalComplete = Boolean(final && verification && integrateCall)
+    && (verification?.sequence ?? Infinity) < (final?.sequence ?? -1)
+    && (integrateCall?.sequence ?? Infinity) < (final?.sequence ?? -1)
+    && completionGateFailures.length === 0;
+  const completionBeforeFinalViolated = Boolean(final) && completionMechanismObserved && (
+    !verification
+    || (verification.sequence ?? Infinity) >= (final?.sequence ?? -1)
+    || !integrateCall
+    || (integrateCall.sequence ?? Infinity) >= (final?.sequence ?? -1)
+    || completionGateFailures.some((failure) => failure.sequence < (final?.sequence ?? -1))
+  );
   const assertions = [
     outcome(
       "plugin-lookup",
@@ -514,40 +613,41 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
         && graph?.tasks.length === 3
         && graph.tasks.every((item) => item.status === "completed"),
     ),
-    hard("task-ownership", hasExpectedOwnership(task1, task2, task3)),
-    hard(
-      "plugin-activation",
-      pluginActivation?.status === "active"
-        && pluginActivation.tools.exposed.includes("mcp_issue-workflow-demo_lookup_issue"),
-    ),
-    hard(
-      "research-evidence-origin",
-      hasExternalEvidence(task1, "child") && hasExternalEvidence(task2, "teammate"),
-    ),
-    hard(
-      "edit-plan-before-write",
-      task3?.plan?.status === "approved"
-        && editorWrites.length === 1
-        && planApprovedAt !== undefined
-        && firstWriteAt !== undefined
-        && planApprovedAt <= firstWriteAt,
-    ),
-    hard("fingerprint-and-receipt", hasMatchingFingerprintReceipt(task3)),
-    hard(
-      "team-quiescent",
-      evidence.team !== undefined
-        && evidence.team.leaderUnreadCount === 0
-        && evidence.team.members.length === 2
-        && evidence.team.members.every((member) => member.state === "stopped" && member.unreadCount === 0)
-        && ["protocol-editor", "protocol-researcher"].every((name) => shutdownNames.includes(name)),
-    ),
-    hard(
-      "completion-before-final",
-      Boolean(final && verification && integrateCall)
-        && (verification?.sequence ?? Infinity) < (final?.sequence ?? -1)
-        && (integrateCall?.sequence ?? Infinity) < (final?.sequence ?? -1)
-        && !root.events.some(isEvent("completion_gate_failed")),
-    ),
+    hardEvidence("task-ownership", {
+      complete: hasExpectedOwnership(task1, task2, task3),
+      violated: hasContradictoryOwnership(task1, task2, task3),
+    }),
+    hardEvidence("plugin-activation", {
+      complete: pluginActivation.length > 0 && pluginActivation.every((activation) => (
+        activation.status === "active"
+        && activation.tools.exposed.includes("mcp_issue-workflow-demo_lookup_issue")
+      )),
+      violated: pluginActivation.some((activation) => (
+        activation.status !== "active"
+        || !activation.tools.exposed.includes("mcp_issue-workflow-demo_lookup_issue")
+      )),
+    }),
+    hardEvidence("research-evidence-origin", {
+      complete: externalTask1Roles.includes("child") && externalTask2Roles.includes("teammate"),
+      violated: externalTask1Roles.some((role) => role !== "child")
+        || externalTask2Roles.some((role) => role !== "teammate"),
+    }),
+    hardEvidence("edit-plan-before-write", {
+      complete: planBeforeWrite,
+      violated: writeContradictsPlan,
+    }),
+    hardEvidence("fingerprint-and-receipt", {
+      complete: hasMatchingFingerprintReceipt(task3),
+      violated: fingerprintContradicted,
+    }),
+    hardEvidence("team-quiescent", {
+      complete: teamQuiescentComplete,
+      violated: teamQuiescentViolated,
+    }),
+    hardEvidence("completion-before-final", {
+      complete: completionBeforeFinalComplete,
+      violated: completionBeforeFinalViolated,
+    }),
     hard("allowlist-enforced", allowlistEnforced(evidence)),
     hard("permission-evidence", permissionEvidenceComplete(evidence)),
   ];
@@ -721,6 +821,18 @@ function hard(id: string, passed: boolean): EvalAssertionResult {
   return assertion(id, "hard", passed);
 }
 
+function hardEvidence(
+  id: string,
+  evidence: { complete: boolean; violated: boolean },
+): EvalAssertionResult {
+  return {
+    evidenceRefs: [],
+    id,
+    kind: "hard",
+    status: evidence.violated ? "failed" : evidence.complete ? "passed" : "unavailable",
+  };
+}
+
 function assertion(
   id: string,
   kind: EvalAssertionResult["kind"],
@@ -795,6 +907,26 @@ function hasExpectedOwnership(
     && task3.owner.name === "protocol-editor";
 }
 
+function hasContradictoryOwnership(
+  task1: TeamTask | undefined,
+  task2: TeamTask | undefined,
+  task3: TeamTask | undefined,
+): boolean {
+  return (task1 !== undefined && (
+    task1.kind !== "research" || task1.owner?.role !== "leader"
+  )) || (task2 !== undefined && (
+    task2.kind !== "research"
+    || task2.owner?.role !== "teammate"
+    || task2.owner.name !== "protocol-researcher"
+  )) || (task3 !== undefined && (
+    task3.kind !== "edit"
+    || task3.title !== "Create c17c coordination artifact"
+    || task3.verificationCommand !== C17C_VERIFY_COMMAND
+    || task3.owner?.role !== "teammate"
+    || task3.owner.name !== "protocol-editor"
+  ));
+}
+
 function isAllowedLeaderTransition(args: Record<string, unknown>): boolean {
   if (args.id === "task_001") {
     return (args.action === "assign" && args.assignee === "leader")
@@ -814,13 +946,12 @@ function isAllowedLeaderTransition(args: Record<string, unknown>): boolean {
     && args.decision === "approve";
 }
 
-function hasExternalEvidence(taskValue: TeamTask | undefined, role: "child" | "teammate"): boolean {
-  return Boolean(taskValue?.evidence.some((evidence) => (
-    evidence.reportedByRole === role
-      && evidence.references?.some((reference) => (
-        reference.kind === "external" && reference.value === "issue-workflow-demo:FH-16"
-      ))
-  )));
+function externalEvidenceRoles(taskValue: TeamTask | undefined): Array<"child" | "leader" | "teammate"> {
+  return taskValue?.evidence.filter((evidence) => (
+    evidence.references?.some((reference) => (
+      reference.kind === "external" && reference.value === "issue-workflow-demo:FH-16"
+    ))
+  )).map((evidence) => evidence.reportedByRole) ?? [];
 }
 
 function hasMatchingFingerprintReceipt(taskValue: TeamTask | undefined): boolean {

@@ -7,7 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { evalBaselinePath } from "../../src/eval/baseline.js";
 import { runEvalSuite } from "../../src/eval/suite.js";
 import type { RunEvalAttemptResult } from "../../src/eval/runner.js";
-import type { EvalAttemptResult, EvalBaseline, EvalModelMetrics } from "../../src/eval/types.js";
+import type {
+  EvalAssertionStatus,
+  EvalAttemptResult,
+  EvalBaseline,
+  EvalModelMetrics,
+} from "../../src/eval/types.js";
 
 const tempRoots: string[] = [];
 const zeroMetrics: EvalModelMetrics = {
@@ -25,6 +30,7 @@ function fakeAttempt(
   ordinal: number,
   options: {
     hardFailure?: boolean;
+    hardStatus?: EvalAssertionStatus;
     invalid?: boolean;
     outcome?: EvalAttemptResult["outcome"];
   } = {},
@@ -34,8 +40,9 @@ function fakeAttempt(
       assertions: [{
         evidenceRefs: [`attempts/${scenarioId}/${ordinal}/grade.json`],
         id: "contract",
-        kind: options.hardFailure ? "hard" : "outcome",
-        status: options.hardFailure || options.outcome === "failed" ? "failed" : "passed",
+        kind: options.hardFailure || options.hardStatus ? "hard" : "outcome",
+        status: options.hardStatus
+          ?? (options.hardFailure || options.outcome === "failed" ? "failed" : "passed"),
       }],
       attemptId: `${scenarioId}-${ordinal}`,
       evidenceRefs: [`attempts/${scenarioId}/${ordinal}/grade.json`],
@@ -53,6 +60,30 @@ function fakeAttempt(
 }
 
 describe("eval suite runner", () => {
+  it("continues repetitions after behavioral failure with unavailable hard evidence", async () => {
+    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-unavailable-hard-"));
+    tempRoots.push(repositoryRoot);
+    const calls: number[] = [];
+
+    const result = await runEvalSuite({
+      attemptRunner: async (input) => {
+        calls.push(input.ordinal);
+        return fakeAttempt(input.scenario.id, input.ordinal, {
+          hardStatus: "unavailable",
+          outcome: "failed",
+        });
+      },
+      model: "gpt-test",
+      providerId: "openai",
+      repositoryRoot,
+      scenarioId: "compaction-retention",
+    });
+
+    expect(calls).toEqual([1, 2, 3]);
+    expect(result.summary.valid).toBe(true);
+    expect(result.report.verdict).not.toBe("REGRESSED");
+  });
+
   it("runs the canonical attempts serially, continues ordinary failures, and writes a partial invalid report", async () => {
     const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-suite-"));
     tempRoots.push(repositoryRoot);

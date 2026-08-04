@@ -157,6 +157,68 @@ describe("canonical eval scenarios", () => {
     expect(assertionStatus(grade, "git-unchanged")).toBe("failed");
   });
 
+  it.each([
+    ["verification-recovery", ["verification-order"]],
+    ["compaction-retention", ["compaction-succeeded", "pinned-task-retained"]],
+    ["async-child-handoff", ["separate-child-trace", "handoff-before-final", "pending-zero"]],
+    ["c17c-team-completion", [
+      "task-ownership",
+      "plugin-activation",
+      "research-evidence-origin",
+      "edit-plan-before-write",
+      "fingerprint-and-receipt",
+      "team-quiescent",
+      "completion-before-final",
+    ]],
+  ])("does not fabricate hard failures when %s never reaches the mechanism", (scenarioId, hardIds) => {
+    const evidence = baseEvidence(
+      scenarioId as EvalAttemptEvidence["scenarioId"],
+      [recorded(1, { answer: "wrong", round: 1, type: "final_answer" })],
+    );
+    evidence.finalAnswer = "wrong";
+
+    const grade = getEvalScenario(scenarioId).grade(evidence);
+
+    expect(hardIds.map((id) => assertionStatus(grade, id)))
+      .toEqual(hardIds.map(() => "unavailable"));
+    expect(grade.outcome).toBe("failed");
+  });
+
+  it("fails compaction evidence when a compaction failure is observed", () => {
+    const evidence = baseEvidence("compaction-retention", [recorded(1, {
+      beforeCharCount: 2_000,
+      hardCharBudget: 1_000,
+      reason: "hard budget exceeded",
+      round: 1,
+      trigger: "auto",
+      type: "context_compaction_failed",
+    })]);
+
+    const grade = getEvalScenario("compaction-retention").grade(evidence);
+
+    expect(assertionStatus(grade, "compaction-succeeded")).toBe("failed");
+  });
+
+  it("fails handoff ordering when root finalizes after child start but before handoff", () => {
+    const evidence = baseEvidence("async-child-handoff", [
+      recorded(1, {
+        childSessionId: "child-session",
+        parentCallId: "delegate",
+        profile: "research",
+        round: 1,
+        runInBackground: true,
+        task: "Read child.txt and return CHILD_TOKEN=delta.",
+        tracePath: "/private/child.jsonl",
+        type: "child_session_started",
+      }),
+      recorded(2, { answer: "wrong", round: 2, type: "final_answer" }),
+    ]);
+
+    const grade = getEvalScenario("async-child-handoff").grade(evidence);
+
+    expect(assertionStatus(grade, "handoff-before-final")).toBe("failed");
+  });
+
   it("requires exactly one failed verification recovery before the final answer", () => {
     const evidence = baseEvidence("verification-recovery", [
       recorded(1, { answer: "RECOVERY_OK", round: 1, type: "candidate_answer" }),
@@ -284,6 +346,7 @@ describe("canonical eval scenarios", () => {
         round: 4,
         type: "final_answer",
       }),
+      recorded(11, { rounds: 4, status: "completed", type: "session_ended" }),
     ];
     const childEvents = callEvents({
       arguments: { path: "child.txt" },
