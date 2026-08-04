@@ -460,10 +460,7 @@ function gradeAsyncChildHandoff(evidence: EvalAttemptEvidence): EvalGrade {
       && start.sequence < (matches[0]?.sequence ?? -1)
       && (matches[0]?.sequence ?? Infinity) < final.sequence;
   };
-  const duplicateHandoff = started.some((start) => (
-    handoffs.filter((handoff) => handoff.childSessionId === start.childSessionId).length > 1
-  ));
-  const handoffBeforeFinalViolated = duplicateHandoff || finals.some((final) => started
+  const handoffBeforeFinalViolated = finals.some((final) => started
     .filter((start) => start.sequence < final.sequence)
     .some((start) => !validHandoffBeforeFinal(start, final)));
   const hasQualifyingFinish = (
@@ -592,11 +589,14 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
       call.name === name && latestRegistration < call.sequence && call.sequence < before
     ));
   };
+  const hasCompletionShutdown = (name: string): boolean => registrationsFor(name).length > 0
+    ? hasPairedShutdown(name)
+    : shutdownCalls.some((call) => call.name === name);
   const teamQuiescentComplete = expectedMemberNames.every((name) => (
     evidence.team?.members.some((member) => (
       member.name === name && member.state === "stopped" && member.unreadCount === 0
     ))
-    && hasPairedShutdown(name)
+    && hasCompletionShutdown(name)
   )) && evidence.team?.leaderUnreadCount === 0;
   const finalsAfterRegistration = finals.filter((candidateFinal) => (
     teammateRegistrations.some((registration) => registration.sequence < candidateFinal.sequence)

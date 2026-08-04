@@ -441,6 +441,18 @@ describe("canonical eval scenarios", () => {
     expect(assertionStatus(grade, "handoff-before-final")).toBe("failed");
   });
 
+  it("leaves duplicate child handoffs unavailable until a later root final exists", () => {
+    const evidence = baseEvidence("async-child-handoff", [
+      childStarted(1),
+      childHandoff(2),
+      childHandoff(3),
+    ]);
+
+    const grade = getEvalScenario("async-child-handoff").grade(evidence);
+
+    expect(assertionStatus(grade, "handoff-before-final")).toBe("unavailable");
+  });
+
   it("checks every root final that follows a child start", () => {
     const evidence = baseEvidence("async-child-handoff", [
       recorded(1, { answer: "early", round: 1, type: "final_answer" }),
@@ -639,8 +651,6 @@ describe("canonical eval scenarios", () => {
         ].join("\n"),
         sequence: 1,
       }),
-      teammateRegistered(4, "protocol-researcher"),
-      teammateRegistered(5, "protocol-editor"),
       ...callEvents({
         arguments: { command: C17C_VERIFY_COMMAND, id: "task_003" },
         callId: "verify",
@@ -775,6 +785,24 @@ describe("canonical eval scenarios", () => {
     const grade = getEvalScenario("c17c-team-completion").grade(evidence);
 
     expect(assertionStatus(grade, "team-quiescent")).toBe("failed");
+  });
+
+  it("passes terminal team evidence with both shutdown calls when no registration events exist", () => {
+    const evidence = c17cEvidence([
+      teammateShutdown(1, "protocol-researcher"),
+      teammateShutdown(2, "protocol-editor"),
+    ]);
+    evidence.team = {
+      leaderUnreadCount: 0,
+      members: [
+        { name: "protocol-editor", state: "stopped", unreadCount: 0 },
+        { name: "protocol-researcher", state: "stopped", unreadCount: 0 },
+      ],
+    };
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "team-quiescent")).toBe("passed");
   });
 
   it("checks every root final after teammate registration for earlier shutdowns", () => {
