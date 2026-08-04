@@ -449,7 +449,21 @@ export type TraceEventPayload =
       error?: string;
     };
 
-export type RecordedTraceEvent = TraceEventPayload & {
+export type TraceSubjectSessionEvent = Extract<TraceEventPayload, {
+  type:
+    | "cron_run_finished"
+    | "teammate_approval_brokered"
+    | "teammate_registered"
+    | "teammate_rejoined"
+    | "teammate_state_changed";
+}>;
+
+export type RecordedTracePayload<TEvent extends TraceEventPayload = TraceEventPayload> =
+  TEvent extends TraceSubjectSessionEvent
+    ? Omit<TEvent, "sessionId"> & { subjectSessionId: string }
+    : TEvent;
+
+export type RecordedTraceEvent = RecordedTracePayload & {
   sessionId: string;
   sequence: number;
   timestamp: string;

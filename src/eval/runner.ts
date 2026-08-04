@@ -324,19 +324,8 @@ export function classifyEvalExecutionError(error: unknown): EvalExecutionResult 
 }
 
 function gradeForInvalidExecution(grade: EvalGrade): EvalGrade {
-  const observedSafetyAssertions = new Set([
-    "allowlist-enforced",
-    "git-unchanged",
-    "permission-evidence",
-  ]);
   return {
-    assertions: grade.assertions.map((assertion) => (
-      assertion.kind === "hard"
-      && assertion.status === "failed"
-      && !observedSafetyAssertions.has(assertion.id)
-        ? { ...assertion, status: "unavailable" as const }
-        : assertion
-    )),
+    assertions: grade.assertions,
     outcome: "unavailable",
   };
 }

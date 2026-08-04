@@ -20,6 +20,22 @@ function recorded(
   payload: TraceEventPayload,
   sessionId = "root-session",
 ): RecordedTraceEvent {
+  if (
+    payload.type === "cron_run_finished"
+    || payload.type === "teammate_approval_brokered"
+    || payload.type === "teammate_registered"
+    || payload.type === "teammate_rejoined"
+    || payload.type === "teammate_state_changed"
+  ) {
+    const { sessionId: subjectSessionId, ...recordedPayload } = payload;
+    return {
+      ...recordedPayload,
+      sequence,
+      sessionId,
+      subjectSessionId,
+      timestamp: new Date(Date.UTC(2026, 7, 3, 0, 0, sequence)).toISOString(),
+    };
+  }
   return {
     ...payload,
     sequence,

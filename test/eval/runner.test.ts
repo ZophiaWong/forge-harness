@@ -9,14 +9,18 @@ import type {
   ResponseCreate,
   ResponseCreateRequest,
 } from "../../src/core/minimalLoop.js";
+import { aggregateAttempts } from "../../src/eval/aggregate.js";
 import type { RunC17cRuntimeOptions } from "../../src/eval/c17c.js";
+import { compareEvalSummary } from "../../src/eval/compare.js";
 import { EvalInfrastructureError } from "../../src/eval/errors.js";
 import * as evalRunnerModule from "../../src/eval/runner.js";
 import {
   classifyEvalExecutionError,
   runEvalAttempt,
 } from "../../src/eval/runner.js";
+import type { EvalScenario } from "../../src/eval/scenario.js";
 import { getEvalScenario } from "../../src/eval/scenarios.js";
+import type { EvalAttemptResult, EvalSuiteSummary } from "../../src/eval/types.js";
 
 const runC17cRuntimeMock = vi.hoisted(() => vi.fn());
 
@@ -45,6 +49,53 @@ function scriptedResponseCreate(responses: MinimalResponse[]): ResponseCreate & 
   }) as unknown as ResponseCreate & { calls: ResponseCreateRequest[] };
   create.calls = calls;
   return create;
+}
+
+function directlyObservedHardScenario(): EvalScenario {
+  const base = getEvalScenario("governed-read-only");
+  return {
+    ...base,
+    grade(evidence) {
+      const mechanismExercised = evidence.sessions.some((session) => (
+        session.events.some((event) => event.type === "tool_call")
+      ));
+      return {
+        assertions: [{
+          evidenceRefs: [],
+          id: "direct-hard-evidence",
+          kind: "hard",
+          status: mechanismExercised ? "failed" : "unavailable",
+        }],
+        outcome: "unavailable",
+      };
+    },
+  };
+}
+
+function compareAttempt(attempt: EvalAttemptResult) {
+  const summary: EvalSuiteSummary = {
+    aggregates: aggregateAttempts([attempt]),
+    artifactType: "forge-eval-suite-summary",
+    attempts: [attempt],
+    canonical: false,
+    diagnostics: {},
+    generatedAt: "2026-08-04T00:00:00.000Z",
+    identity: {
+      endpointHash: "endpoint",
+      fingerprint: "experiment",
+      model: "gpt-test",
+      providerId: "test",
+      requestFingerprint: "request",
+      suiteFingerprint: "suite",
+    },
+    issues: ["provider_error"],
+    metrics: attempt.metrics,
+    runId: "test-run",
+    schemaVersion: 1,
+    scope: "scenario",
+    valid: false,
+  };
+  return compareEvalSummary(summary);
 }
 
 describe("eval attempt runner", () => {
@@ -245,6 +296,81 @@ describe("eval attempt runner", () => {
     });
     expect(result.attempt.assertions.filter((assertion) => assertion.kind === "hard"))
       .not.toContainEqual(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("preserves directly observed hard failure through provider invalidation and comparison", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-direct-hard-"));
+    tempRoots.push(attemptRoot);
+    let call = 0;
+    const responseCreate: ResponseCreate = async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          output: [{
+            arguments: '{"path":"facts.txt"}',
+            call_id: "observe-hard-evidence",
+            name: "read",
+            type: "function_call",
+          }],
+          output_text: "",
+        };
+      }
+      throw new Error("provider failed after direct hard evidence");
+    };
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/governed-read-only/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario: directlyObservedHardScenario(),
+    });
+
+    expect(result.attempt).toMatchObject({
+      assertions: [expect.objectContaining({
+        id: "direct-hard-evidence",
+        status: "failed",
+      })],
+      execution: { reasonCode: "provider_error", status: "invalid" },
+      outcome: "unavailable",
+    });
+    expect(compareAttempt(result.attempt)).toMatchObject({
+      exitCode: 1,
+      verdict: "REGRESSED",
+    });
+  });
+
+  it("keeps hard evidence unavailable when provider failure precedes mechanism exercise", async () => {
+    const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-no-hard-evidence-"));
+    tempRoots.push(attemptRoot);
+    const responseCreate: ResponseCreate = async () => {
+      throw new Error("provider failed before direct hard evidence");
+    };
+
+    const result = await runEvalAttempt({
+      attemptRoot,
+      evidenceRefPrefix: "attempts/governed-read-only/1",
+      model: "gpt-test",
+      ordinal: 1,
+      repositoryRoot: process.cwd(),
+      responseCreate,
+      scenario: directlyObservedHardScenario(),
+    });
+
+    expect(result.attempt).toMatchObject({
+      assertions: [expect.objectContaining({
+        id: "direct-hard-evidence",
+        status: "unavailable",
+      })],
+      execution: { reasonCode: "provider_error", status: "invalid" },
+      outcome: "unavailable",
+    });
+    expect(compareAttempt(result.attempt)).toMatchObject({
+      exitCode: 2,
+      verdict: "INVALID",
+    });
   });
 
   it("preserves a provider setup error when the Runtime trace is still empty", async () => {

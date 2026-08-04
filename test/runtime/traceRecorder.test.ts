@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { createJsonlTraceRecorder } from "../../src/runtime/traceRecorder.js";
+import { parseRecordedTraceEvent } from "../../src/runtime/traceSchema.js";
 
 describe("JsonlTraceRecorder", () => {
   it("appends recorded events with session id, sequence, and timestamp", async () => {
@@ -54,6 +55,70 @@ describe("JsonlTraceRecorder", () => {
         timestamp: "2026-06-25T08:01:03.000Z",
         type: "final_answer",
       },
+    ]);
+  });
+
+  it("preserves payload subject session ids without replacing the recorder session id", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-trace-"));
+    const tracePath = path.join(dir, "trace.jsonl");
+    const recorder = createJsonlTraceRecorder({
+      sessionId: "root-session",
+      tracePath,
+    });
+
+    await recorder.record({
+      cronId: "cron-1",
+      sessionId: "cron-session",
+      status: "completed",
+      title: "nightly",
+      type: "cron_run_finished",
+    });
+    await recorder.record({
+      name: "researcher",
+      profile: "research",
+      sessionId: "teammate-1",
+      state: "starting",
+      tracePath: path.join(dir, "teammate-1.jsonl"),
+      type: "teammate_registered",
+      unreadCount: 0,
+    });
+    await recorder.record({
+      name: "researcher",
+      previousState: "starting",
+      profile: "research",
+      sessionId: "teammate-1",
+      state: "idle",
+      tracePath: path.join(dir, "teammate-1.jsonl"),
+      type: "teammate_state_changed",
+      unreadCount: 0,
+    });
+    await recorder.record({
+      approved: true,
+      name: "researcher",
+      requestId: "approval-1",
+      sessionId: "teammate-1",
+      toolName: "edit",
+      type: "teammate_approval_brokered",
+    });
+    await recorder.record({
+      name: "researcher",
+      previousSessionId: "teammate-1",
+      recoveryMessageId: "recovery-1",
+      sessionId: "teammate-2",
+      tracePath: path.join(dir, "teammate-2.jsonl"),
+      type: "teammate_rejoined",
+    });
+
+    const lines = (await fs.readFile(tracePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+
+    expect(lines.map((event) => parseRecordedTraceEvent(event))).toHaveLength(5);
+    expect(lines.map((event) => event.sessionId)).toEqual(Array(5).fill("root-session"));
+    expect(lines.map((event) => event.subjectSessionId)).toEqual([
+      "cron-session",
+      "teammate-1",
+      "teammate-1",
+      "teammate-1",
+      "teammate-2",
     ]);
   });
 });
