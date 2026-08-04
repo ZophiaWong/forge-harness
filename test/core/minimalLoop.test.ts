@@ -24,6 +24,7 @@ vi.mock("openai", () => ({
 
 import {
   createMinimalLoopSession,
+  getSuppressedErrors,
   runMinimalLoop,
   type ResponseCreate,
 } from "../../src/core/minimalLoop.js";
@@ -40,9 +41,11 @@ import type { ToolRuntime } from "../../src/tools/types.js";
 
 function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[]): ResponseCreate {
   const calls: Parameters<ResponseCreate>[0][] = [];
+  const options: Parameters<ResponseCreate>[1][] = [];
 
-  const responseCreate: ResponseCreate = async (request) => {
+  const responseCreate: ResponseCreate = async (request, createOptions) => {
     calls.push(request);
+    options.push(createOptions);
     const response = responses.shift();
 
     if (!response) {
@@ -55,12 +58,19 @@ function createResponseCreate(...responses: Awaited<ReturnType<ResponseCreate>>[
   Object.defineProperty(responseCreate, "calls", {
     value: calls,
   });
+  Object.defineProperty(responseCreate, "options", {
+    value: options,
+  });
 
   return responseCreate;
 }
 
 function callsFor(responseCreate: ResponseCreate): Parameters<ResponseCreate>[0][] {
   return (responseCreate as ResponseCreate & { calls: Parameters<ResponseCreate>[0][] }).calls;
+}
+
+function optionsFor(responseCreate: ResponseCreate): Parameters<ResponseCreate>[1][] {
+  return (responseCreate as ResponseCreate & { options: Parameters<ResponseCreate>[1][] }).options;
 }
 
 function allowPolicy(reason = "test allows action"): PermissionPolicy {
@@ -128,16 +138,19 @@ function verifierWithResults(...results: VerificationResult[]): Verifier {
 
 interface Deferred<T> {
   promise: Promise<T>;
+  reject(reason?: unknown): void;
   resolve(value: T): void;
 }
 
 function createDeferred<T>(): Deferred<T> {
+  let reject!: (reason?: unknown) => void;
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    reject = promiseReject;
     resolve = promiseResolve;
   });
 
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 async function flushPromises(): Promise<void> {
@@ -149,6 +162,492 @@ describe("runMinimalLoop", () => {
   beforeEach(() => {
     createOpenAIResponseMock.mockReset();
     OpenAIMock.mockClear();
+  });
+
+  it("passes the Runtime abort signal to model requests", async () => {
+    const controller = new AbortController();
+    let observed: AbortSignal | undefined;
+    const responseCreate: ResponseCreate = async (_request, createOptions) => {
+      observed = createOptions?.signal;
+      return { output: [], output_text: "done" };
+    };
+
+    await runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate,
+      signal: controller.signal,
+      task: "finish",
+    });
+
+    expect(observed).toBe(controller.signal);
+  });
+
+  it("records a failed session end before rejecting an aborted model request", async () => {
+    const controller = new AbortController();
+    const trace = createTraceRecorder();
+    const responseCreate: ResponseCreate = async (_request, createOptions) => {
+      if (!createOptions?.signal) {
+        throw new Error("missing Runtime signal");
+      }
+      controller.abort(new Error("stop blocked model"));
+      createOptions.signal.throwIfAborted();
+      return { output: [], output_text: "unreachable" };
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      responseCreate,
+      signal: controller.signal,
+      task: "stop the model",
+    })).rejects.toThrow("stop blocked model");
+
+    expect(trace.events.at(-1)).toMatchObject({
+      status: "failed",
+      type: "session_ended",
+    });
+  });
+
+  it("preserves the aborted model error and records session_ended when tool cleanup fails", async () => {
+    const controller = new AbortController();
+    const primaryError = new Error("primary model abort");
+    const trace = createTraceRecorder();
+    const close = vi.fn(async () => {
+      throw new Error("tool cleanup failed");
+    });
+    const responseCreate: ResponseCreate = async () => {
+      controller.abort(primaryError);
+      throw primaryError;
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      responseCreate,
+      signal: controller.signal,
+      task: "preserve the primary error",
+      toolRuntime: {
+        close,
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(trace.events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+    expect(trace.events).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining("tool cleanup failed"),
+      type: "session_failed",
+    }));
+  });
+
+  it("attaches a terminal recorder failure to the primary Runtime error", async () => {
+    const primaryError = new Error("primary Runtime failure");
+    const terminalRecorderError = new Error("terminal recorder failed");
+    const events: TraceEventPayload[] = [];
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "session_ended") {
+              throw terminalRecorderError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "preserve terminal recorder evidence",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect((primaryError as Error & { suppressed?: unknown[] }).suppressed).toEqual([
+      terminalRecorderError,
+    ]);
+    expect(events.filter((event) => event.type === "session_ended")).toHaveLength(1);
+  });
+
+  it("attaches cleanup, cleanup-evidence, and terminal failures to the primary Runtime error", async () => {
+    const primaryError = new Error("primary Runtime failure");
+    const cleanupError = new Error("tool cleanup failed");
+    const cleanupEvidenceError = new Error("cleanup evidence recorder failed");
+    const terminalRecorderError = new Error("terminal recorder failed");
+    let sessionFailedCount = 0;
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            if (event.type === "session_failed") {
+              sessionFailedCount += 1;
+              if (sessionFailedCount === 2) {
+                throw cleanupEvidenceError;
+              }
+            }
+            if (event.type === "session_ended") {
+              throw terminalRecorderError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "preserve every teardown failure",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect((primaryError as Error & { suppressed?: unknown[] }).suppressed).toEqual([
+      cleanupError,
+      cleanupEvidenceError,
+      terminalRecorderError,
+    ]);
+  });
+
+  it("preserves a scalar existing suppressed value before appending cleanup failure", async () => {
+    const existingError = new Error("existing suppressed failure");
+    const cleanupError = new Error("new cleanup failure");
+    const primaryError = new Error("primary Runtime failure") as Error & { suppressed?: unknown };
+    primaryError.suppressed = existingError;
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "normalize scalar suppressed evidence",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(getSuppressedErrors(primaryError)).toEqual([existingError, cleanupError]);
+  });
+
+  it("retrieves cleanup and terminal failures for a frozen primary Error", async () => {
+    const cleanupError = new Error("frozen-primary cleanup failed");
+    const terminalRecorderError = new Error("frozen-primary terminal recorder failed");
+    const primaryError = Object.freeze(new Error("frozen primary Runtime failure"));
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            if (event.type === "session_ended") {
+              throw terminalRecorderError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "retain frozen primary teardown evidence",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(getSuppressedErrors(primaryError)).toEqual([cleanupError, terminalRecorderError]);
+  });
+
+  it("preserves a non-configurable suppressed value through the WeakMap accessor", async () => {
+    const existingValue = { source: "legacy cleanup" };
+    const cleanupError = new Error("new cleanup failure");
+    const primaryError = new Error("non-configurable primary Runtime failure");
+    Object.defineProperty(primaryError, "suppressed", {
+      configurable: false,
+      value: existingValue,
+      writable: false,
+    });
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "retain non-configurable teardown evidence",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect((primaryError as Error & { suppressed: unknown }).suppressed).toBe(existingValue);
+    expect(getSuppressedErrors(primaryError)).toEqual([existingValue, cleanupError]);
+  });
+
+  it("leaves a weird existing suppressed value unchanged when teardown succeeds", async () => {
+    const primaryError = new Error("primary Runtime failure") as Error & { suppressed?: unknown };
+    primaryError.suppressed = 17;
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "preserve weird existing evidence",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect(primaryError.suppressed).toBe(17);
+    expect(getSuppressedErrors(primaryError)).toEqual([17]);
+  });
+
+  it("records a failed terminal status when cleanup fails after a final answer", async () => {
+    const trace = createTraceRecorder();
+    const close = vi.fn(async () => {
+      throw new Error("completed-path cleanup failed");
+    });
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      responseCreate: async () => ({ output: [], output_text: "candidate" }),
+      task: "finish then clean up",
+      toolRuntime: {
+        close,
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toThrow("completed-path cleanup failed");
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(trace.events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+    expect(trace.events).not.toContainEqual(expect.objectContaining({
+      status: "completed",
+      type: "session_ended",
+    }));
+  });
+
+  it("does not start a model round when the Runtime signal is already aborted", async () => {
+    const controller = new AbortController();
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    controller.abort(new Error("stop before round"));
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      responseCreate,
+      signal: controller.signal,
+      task: "do not start",
+    })).rejects.toThrow("stop before round");
+
+    expect(responseCreate).not.toHaveBeenCalled();
+  });
+
+  it("waits for a mutating tool to settle before observing Runtime abort", async () => {
+    const controller = new AbortController();
+    const toolResult = createDeferred<Awaited<ReturnType<ToolRuntime["execute"]>>>();
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => toolResult.promise),
+      toolDefinitions: () => [{
+        description: "Mutate a fixture.",
+        name: "mutate_fixture",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    const responseCreate = createResponseCreate({
+      output: [{
+        arguments: "{}",
+        call_id: "call_mutate",
+        name: "mutate_fixture",
+        type: "function_call",
+      }],
+      output_text: "",
+    });
+    const running = runMinimalLoop({
+      cwd: process.cwd(),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy("mutation allowed"),
+      responseCreate,
+      signal: controller.signal,
+      task: "mutate once",
+      toolRuntime,
+    });
+    let settled = false;
+    void running.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(toolRuntime.execute).toHaveBeenCalledOnce();
+    });
+
+    controller.abort(new Error("stop after tool"));
+    await flushPromises();
+    expect(settled).toBe(false);
+
+    toolResult.resolve({
+      content: "mutation completed",
+      status: "completed",
+      toolName: "mutate_fixture",
+    });
+    await expect(running).rejects.toThrow("stop after tool");
+    expect(callsFor(responseCreate)).toHaveLength(1);
+  });
+
+  it("does not execute a returned tool call when a one-argument model adapter settles after abort", async () => {
+    const controller = new AbortController();
+    const modelStarted = createDeferred<void>();
+    const modelResponse = createDeferred<Awaited<ReturnType<ResponseCreate>>>();
+    const responseCreate: ResponseCreate = async () => {
+      modelStarted.resolve();
+      return modelResponse.promise;
+    };
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "mutation completed",
+        status: "completed" as const,
+        toolName: "mutate_fixture",
+      })),
+      toolDefinitions: () => [{
+        description: "Mutate a fixture.",
+        name: "mutate_fixture",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    const running = runMinimalLoop({
+      cwd: process.cwd(),
+      permissionPolicy: allowPolicy("mutation allowed"),
+      responseCreate,
+      signal: controller.signal,
+      task: "do not mutate after abort",
+      toolRuntime,
+    });
+    await modelStarted.promise;
+
+    controller.abort(new Error("stop before consuming response"));
+    modelResponse.resolve({
+      output: [{
+        arguments: "{}",
+        call_id: "call_late_mutate",
+        name: "mutate_fixture",
+        type: "function_call",
+      }],
+      output_text: "",
+    });
+
+    await expect(running).rejects.toThrow("stop before consuming response");
+    expect(toolRuntime.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a final answer when model_response recording aborts the Runtime", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("abort from model_response recorder");
+    const trace = createTraceRecorder();
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "model_response") {
+          controller.abort(abortError);
+        }
+      },
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      responseCreate: async () => ({ output: [], output_text: "must not finish" }),
+      signal: controller.signal,
+      task: "abort while recording the response",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(abortError);
+
+    expect(trace.events).not.toContainEqual(expect.objectContaining({ type: "final_answer" }));
+    expect(trace.events.at(-1)).toMatchObject({ status: "failed", type: "session_ended" });
+  });
+
+  it("does not execute a tool when model_response recording aborts the Runtime", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("abort tool response recording");
+    const trace = createTraceRecorder();
+    const execute = vi.fn(async () => ({
+      content: "must not execute",
+      status: "completed" as const,
+      toolName: "mutate_fixture",
+    }));
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "model_response") {
+          controller.abort(abortError);
+        }
+      },
+    };
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      permissionPolicy: allowPolicy(),
+      responseCreate: async () => ({
+        output: [{
+          arguments: "{}",
+          call_id: "call_abort_recording",
+          name: "mutate_fixture",
+          type: "function_call",
+        }],
+        output_text: "",
+      }),
+      signal: controller.signal,
+      task: "do not execute after recorder abort",
+      toolRuntime: {
+        execute,
+        toolDefinitions: () => [{
+          description: "Mutate a fixture.",
+          name: "mutate_fixture",
+          parameters: { type: "object" },
+          strict: false,
+          type: "function",
+        }],
+      },
+    })).rejects.toBe(abortError);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(trace.events.at(-1)).toMatchObject({ status: "failed", type: "session_ended" });
   });
 
   it("routes additional dynamic tools and closes them before session_ended", async () => {
@@ -1086,6 +1585,7 @@ describe("runMinimalLoop", () => {
   });
 
   it("auto-compacts older input history before the next model request", async () => {
+    const controller = new AbortController();
     const trace = createTraceRecorder();
     const toolOutputs = ["round 1 output ".repeat(20), "round 2 output ".repeat(20), "round 3 output ".repeat(20)];
     const toolRuntime: ToolRuntime = {
@@ -1163,6 +1663,14 @@ describe("runMinimalLoop", () => {
           "## Next Step",
           "Continue with recent reads.",
         ].join("\n"),
+        telemetry: {
+          durationMs: 25,
+          usage: {
+            inputTokens: 300,
+            outputTokens: 40,
+            totalTokens: 340,
+          },
+        },
       },
       {
         output: [],
@@ -1180,11 +1688,19 @@ describe("runMinimalLoop", () => {
       lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
       permissionPolicy: allowPolicy(),
       responseCreate,
+      signal: controller.signal,
       task: "Read long chapters.",
       toolRuntime,
     });
 
     expect(callsFor(responseCreate)).toHaveLength(5);
+    expect(optionsFor(responseCreate)).toEqual([
+      { signal: controller.signal },
+      { signal: controller.signal },
+      { signal: controller.signal },
+      { signal: controller.signal },
+      { signal: controller.signal },
+    ]);
     expect(callsFor(responseCreate)[3]).toEqual(
       expect.objectContaining({
         model: "gpt-5.4-mini",
@@ -1205,11 +1721,90 @@ describe("runMinimalLoop", () => {
         missingHeadings: [],
         round: 4,
         summary: expect.stringContaining("# Compacted Context"),
+        telemetry: {
+          durationMs: 25,
+          usage: {
+            inputTokens: 300,
+            outputTokens: 40,
+            totalTokens: 340,
+          },
+        },
         trigger: "auto",
         type: "context_compacted",
       }),
     );
     expect(trace.events.filter((event) => event.type === "model_request")).toHaveLength(4);
+  });
+
+  it("does not apply a compaction response that settles after Runtime abort", async () => {
+    const controller = new AbortController();
+    const trace = createTraceRecorder();
+    let normalCall = 0;
+    const responseCreate: ResponseCreate = async (request) => {
+      if (request.tools.length === 0) {
+        controller.abort(new Error("stop before applying compaction"));
+        return {
+          output: [],
+          output_text: [
+            "# Compacted Context",
+            "## Task",
+            "Read files.",
+            "## Progress",
+            "Two reads completed.",
+            "## Evidence",
+            "Read observations exist.",
+            "## Open Questions",
+            "None.",
+            "## Next Step",
+            "Stop.",
+          ].join("\n"),
+        };
+      }
+      normalCall += 1;
+      return {
+        output: [{
+          arguments: JSON.stringify({ path: `file-${normalCall}.txt` }),
+          call_id: `call_compaction_${normalCall}`,
+          name: "read",
+          type: "function_call",
+        }],
+        output_text: "",
+      };
+    };
+    const toolRuntime: ToolRuntime = {
+      execute: vi.fn(async () => ({
+        content: "read output ".repeat(20),
+        status: "completed" as const,
+        toolName: "read",
+      })),
+      toolDefinitions: () => [{
+        description: "Read a file.",
+        name: "read",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+
+    await expect(runMinimalLoop({
+      contextCompaction: {
+        hardCharBudget: 100_000,
+        recentRoundsToKeep: 1,
+        softCharBudget: 1,
+      },
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      maxToolRounds: 3,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      signal: controller.signal,
+      task: "Read files.",
+      toolRuntime,
+    })).rejects.toThrow("stop before applying compaction");
+
+    expect(trace.events).not.toContainEqual(expect.objectContaining({
+      type: "context_compacted",
+    }));
   });
 
   it("fails explicitly when reactive compaction still exceeds the hard budget", async () => {
@@ -2032,6 +2627,81 @@ describe("runMinimalLoop", () => {
     );
   });
 
+  it("cancels and awaits running child sessions before session_ended", async () => {
+    const childResult = createDeferred<{
+      childSessionId: string;
+      finalAnswer: string;
+      profile: "research";
+      status: "failed";
+      tracePath: string;
+    }>();
+    const order: string[] = [];
+    const trace = createTraceRecorder();
+    const recorder: TraceRecorder = {
+      async record(event) {
+        await trace.recorder.record(event);
+        if (event.type === "session_ended") {
+          order.push("session_ended");
+        }
+      },
+    };
+    const cancel = vi.fn(() => {
+      order.push("child_cancelled");
+      childResult.resolve({
+        childSessionId: "child-owned-1",
+        finalAnswer: "Child session failed: parent stopped",
+        profile: "research",
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-owned-1/trace.jsonl",
+      });
+    });
+    const childSessionRunner: ChildSessionRunner = {
+      run: vi.fn(),
+      start: vi.fn().mockResolvedValue({
+        cancel,
+        childSessionId: "child-owned-1",
+        profile: "research",
+        promise: childResult.promise,
+        status: "running",
+        tracePath: "/repo/.forge/sessions/child-owned-1/trace.jsonl",
+      }),
+    };
+    let modelCall = 0;
+    const responseCreate: ResponseCreate = async () => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          output: [{
+            arguments: JSON.stringify({
+              maxToolRounds: 2,
+              profile: "research",
+              runInBackground: true,
+              task: "Inspect the owned lifecycle.",
+            }),
+            call_id: "call_delegate_owned",
+            name: "delegate",
+            type: "function_call",
+          }],
+          output_text: "",
+        };
+      }
+      throw new Error("root model failed");
+    };
+
+    await expect(runMinimalLoop({
+      childSessionRunner,
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder }),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "start a child and fail",
+    })).rejects.toThrow("root model failed");
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(order).toEqual(["child_cancelled", "session_ended"]);
+  });
+
   it("does not add background support to an injected custom tool runtime", async () => {
     const toolRuntime: ToolRuntime = {
       execute: vi.fn(),
@@ -2087,7 +2757,105 @@ describe("runMinimalLoop", () => {
     expect(OpenAIMock).toHaveBeenCalledWith({
       apiKey: "test-key",
       baseURL: "https://gateway.example/v1",
+      maxRetries: 2,
+      timeout: 120_000,
     });
+  });
+
+  it("passes the Runtime abort signal to the OpenAI SDK request options", async () => {
+    const controller = new AbortController();
+    createOpenAIResponseMock.mockResolvedValueOnce({
+      output: [],
+      output_text: "done",
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      signal: controller.signal,
+      task: "answer directly",
+    });
+
+    expect(createOpenAIResponseMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      { signal: controller.signal },
+    );
+  });
+
+  it("records normalized API usage and measured duration on model responses", async () => {
+    const trace = createTraceRecorder();
+    createOpenAIResponseMock.mockResolvedValueOnce({
+      output: [],
+      output_text: "done",
+      usage: {
+        input_tokens: 1_200,
+        input_tokens_details: {
+          cached_tokens: 800,
+        },
+        output_tokens: 140,
+        output_tokens_details: {
+          reasoning_tokens: 80,
+        },
+        total_tokens: 1_340,
+      },
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      task: "answer directly",
+    });
+
+    expect(trace.events).toContainEqual({
+      functionCallCount: 0,
+      outputText: "done",
+      round: 1,
+      telemetry: {
+        durationMs: expect.any(Number),
+        usage: {
+          cachedInputTokens: 800,
+          inputTokens: 1_200,
+          outputTokens: 140,
+          reasoningTokens: 80,
+          totalTokens: 1_340,
+        },
+      },
+      type: "model_response",
+    });
+    const responseEvent = trace.events.find((event) => event.type === "model_response");
+    expect(responseEvent?.telemetry?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("keeps available token totals when a compatible gateway omits usage details", async () => {
+    const trace = createTraceRecorder();
+    createOpenAIResponseMock.mockResolvedValueOnce({
+      output: [],
+      output_text: "done",
+      usage: {
+        input_tokens: 90,
+        output_tokens: 10,
+        total_tokens: 100,
+      },
+    });
+
+    await runMinimalLoop({
+      apiKey: "test-key",
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({ recorder: trace.recorder }),
+      task: "answer directly",
+    });
+
+    expect(trace.events).toContainEqual(expect.objectContaining({
+      telemetry: expect.objectContaining({
+        usage: {
+          inputTokens: 90,
+          outputTokens: 10,
+          totalTokens: 100,
+        },
+      }),
+      type: "model_response",
+    }));
   });
 
   it("treats an empty baseURL as the default OpenAI endpoint", async () => {
@@ -2105,6 +2873,8 @@ describe("runMinimalLoop", () => {
 
     expect(OpenAIMock).toHaveBeenCalledWith({
       apiKey: "test-key",
+      maxRetries: 2,
+      timeout: 120_000,
     });
   });
 
@@ -2133,6 +2903,8 @@ describe("runMinimalLoop", () => {
     expect(OpenAIMock).toHaveBeenCalledWith({
       apiKey: "test-key",
       baseURL: "https://env-gateway.example/v1",
+      maxRetries: 2,
+      timeout: 120_000,
     });
   });
 
@@ -2516,6 +3288,293 @@ describe("createMinimalLoopSession", () => {
     ]);
   });
 
+  it("lets a running turn failure dominate a concurrent completed close", async () => {
+    const modelStarted = createDeferred<void>();
+    const modelResponse = createDeferred<Awaited<ReturnType<ResponseCreate>>>();
+    const terminalStarted = createDeferred<void>();
+    const releaseTerminal = createDeferred<void>();
+    const primaryError = new Error("turn failed after close request");
+    const events: TraceEventPayload[] = [];
+    const session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "session_ended") {
+              terminalStarted.resolve();
+              await releaseTerminal.promise;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        modelStarted.resolve();
+        return modelResponse.promise;
+      },
+      task: "fail while a completed close is waiting",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+    let runError: unknown;
+    let runSettled = false;
+    const running = session.runTurn().catch((error: unknown) => {
+      runError = error;
+      runSettled = true;
+    });
+    await modelStarted.promise;
+
+    const closing = session.close("completed");
+    modelResponse.reject(primaryError);
+    await terminalStarted.promise;
+    await flushPromises();
+    const rejectedBeforeTerminalEvidence = runSettled;
+    releaseTerminal.resolve();
+    await closing;
+    await running;
+
+    expect(rejectedBeforeTerminalEvidence).toBe(false);
+    expect(runError).toBe(primaryError);
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  });
+
+  it("lets an awaited model_response recorder close reentrantly before its failure dominates", async () => {
+    const primaryError = new Error("model response recorder failed after close");
+    const events: TraceEventPayload[] = [];
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "model_response") {
+              await session.close("completed");
+              throw primaryError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => ({ output: [], output_text: "candidate" }),
+      task: "close from model response recording",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await expect(session.runTurn()).rejects.toBe(primaryError);
+
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  }, 500);
+
+  it("propagates owned teardown failure after awaited custom tool execution closes reentrantly", async () => {
+    const events: TraceEventPayload[] = [];
+    const teardownError = new Error("active tool teardown failed");
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    const responseCreate = createResponseCreate(
+      {
+        output: [{
+          arguments: "{}",
+          call_id: "call_close_from_tool",
+          name: "close_from_tool",
+          type: "function_call",
+        }],
+        output_text: "",
+      },
+      { output: [], output_text: "closed cleanly" },
+    );
+    const toolRuntime: ToolRuntime = {
+      async close() {
+        throw teardownError;
+      },
+      async execute() {
+        await session.close("completed");
+        return {
+          content: "close requested",
+          status: "completed",
+          toolName: "close_from_tool",
+        };
+      },
+      toolDefinitions: () => [{
+        description: "Request session close from active tool execution.",
+        name: "close_from_tool",
+        parameters: { type: "object" },
+        strict: false,
+        type: "function",
+      }],
+    };
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+          },
+        },
+      }),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      task: "close from custom tool execution",
+      toolRuntime,
+    });
+
+    await expect(session.runTurn()).rejects.toThrow("active tool teardown failed");
+
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      answer: "closed cleanly",
+      type: "final_answer",
+    }));
+  }, 500);
+
+  it("treats a stale Turn 1 descendant close during Turn 2 as an external caller", async () => {
+    const staleTrigger = createDeferred<void>();
+    const turnTwoStarted = createDeferred<void>();
+    const turnTwoResponse = createDeferred<Awaited<ReturnType<ResponseCreate>>>();
+    const cleanupError = new Error("stale descendant observed teardown failure");
+    const events: TraceEventPayload[] = [];
+    let modelCall = 0;
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    let staleCloseError: unknown;
+    let staleCloseSettled = false;
+    let staleCloseTask: Promise<void> | undefined;
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "model_response" && event.round === 1) {
+              staleCloseTask = (async () => {
+                await staleTrigger.promise;
+                try {
+                  await session.close("completed");
+                } catch (error) {
+                  staleCloseError = error;
+                } finally {
+                  staleCloseSettled = true;
+                }
+              })();
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        modelCall += 1;
+        if (modelCall === 1) {
+          return { output: [], output_text: "turn one complete" };
+        }
+        turnTwoStarted.resolve();
+        return turnTwoResponse.promise;
+      },
+      task: "keep stale callback ownership isolated by turn",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await expect(session.runTurn()).resolves.toEqual({
+      finalAnswer: "turn one complete",
+      rounds: 1,
+    });
+    if (!staleCloseTask) {
+      throw new Error("Turn 1 did not schedule its stale close descendant");
+    }
+
+    let turnTwoError: unknown;
+    let turnTwoResult: Awaited<ReturnType<typeof session.runTurn>> | undefined;
+    const turnTwo = session.runTurn("run turn two").then(
+      (result) => {
+        turnTwoResult = result;
+      },
+      (error: unknown) => {
+        turnTwoError = error;
+      },
+    );
+    await turnTwoStarted.promise;
+    staleTrigger.resolve();
+    await flushPromises();
+    const staleReturnedBeforeTurnTwoReleased = staleCloseSettled;
+
+    turnTwoResponse.resolve({ output: [], output_text: "turn two complete" });
+    await turnTwo;
+    await staleCloseTask;
+
+    expect(staleReturnedBeforeTurnTwoReleased).toBe(false);
+    expect(turnTwoError).toBeUndefined();
+    expect(turnTwoResult).toEqual({ finalAnswer: "turn two complete", rounds: 1 });
+    expect(staleCloseError).toBeInstanceOf(AggregateError);
+    expect(staleCloseError).toMatchObject({
+      message: expect.stringContaining(cleanupError.message),
+    });
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  });
+
+  it("does not deadlock when tool cleanup awaits a recursive public close", async () => {
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    const close = vi.fn(async () => {
+      await session.close("completed");
+    });
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      responseCreate: async () => ({ output: [], output_text: "unused" }),
+      task: "close reentrantly from tool cleanup",
+      toolRuntime: {
+        close,
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await session.close("completed");
+
+    expect(close).toHaveBeenCalledOnce();
+  }, 500);
+
+  it("does not deadlock when the terminal recorder awaits a recursive public close", async () => {
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    const events: TraceEventPayload[] = [];
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "session_ended") {
+              await session.close("completed");
+            }
+          },
+        },
+      }),
+      responseCreate: async () => ({ output: [], output_text: "unused" }),
+      task: "close reentrantly from terminal evidence",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await session.close("completed");
+
+    expect(events.filter((event) => event.type === "session_ended")).toHaveLength(1);
+  }, 500);
+
   it("waits for team activity at the final gate without polling the model", async () => {
     const activity = createDeferred<Awaited<ReturnType<TeammateManager["settleBeforeFinal"]>>>();
     const responseCreate = createResponseCreate(
@@ -2569,5 +3628,121 @@ describe("createMinimalLoopSession", () => {
       content: expect.stringContaining("msg_leader_000001"),
       role: "user",
     }));
+  });
+
+  it("stops waiting for teammate activity when the Runtime is aborted", async () => {
+    const activity = createDeferred<Awaited<ReturnType<TeammateManager["settleBeforeFinal"]>>>();
+    const controller = new AbortController();
+    const responseCreate = createResponseCreate({
+      output: [],
+      output_text: "candidate while teammate is active",
+    });
+    const teammates = {
+      drainLeaderMessages: vi.fn(async () => []),
+      list: vi.fn(async () => []),
+      settleBeforeFinal: vi.fn(async () => activity.promise),
+    } as unknown as TeammateManager;
+    const running = runMinimalLoop({
+      cwd: process.cwd(),
+      promptAssets: { skills: [] },
+      responseCreate,
+      signal: controller.signal,
+      task: "wait for a teammate",
+      teammates,
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(teammates.settleBeforeFinal).toHaveBeenCalledOnce();
+    });
+
+    controller.abort(new Error("stop teammate wait"));
+    const outcome = await Promise.race([
+      running.then(
+        () => "resolved" as const,
+        () => "rejected" as const,
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
+    ]);
+    activity.resolve([]);
+    await running.catch(() => undefined);
+
+    expect(outcome).toBe("rejected");
+  });
+
+  it("does not start a teammate activity wait when the signal aborts before the gate", async () => {
+    const childResult = createDeferred<{
+      childSessionId: string;
+      finalAnswer: string;
+      profile: "research";
+      status: "completed";
+      tracePath: string;
+    }>();
+    const controller = new AbortController();
+    const childSessionRunner: ChildSessionRunner = {
+      run: vi.fn(),
+      start: vi.fn().mockResolvedValue({
+        cancel: vi.fn(),
+        childSessionId: "child-gate-abort",
+        profile: "research",
+        promise: childResult.promise,
+        status: "running",
+        tracePath: "/repo/.forge/sessions/child-gate-abort/trace.jsonl",
+      }),
+    };
+    const teammates = {
+      drainLeaderMessages: vi.fn(async () => []),
+      list: vi.fn(async () => []),
+      settleBeforeFinal: vi.fn(async () => []),
+    } as unknown as TeammateManager;
+    let modelCall = 0;
+    const responseCreate: ResponseCreate = async () => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          output: [{
+            arguments: JSON.stringify({
+              maxToolRounds: 2,
+              profile: "research",
+              runInBackground: true,
+              task: "Finish before the final gate.",
+            }),
+            call_id: "call_gate_child",
+            name: "delegate",
+            type: "function_call",
+          }],
+          output_text: "",
+        };
+      }
+
+      childResult.promise.then(() => {
+        controller.abort(new Error("stop before teammate gate"));
+      });
+      setTimeout(() => {
+        childResult.resolve({
+          childSessionId: "child-gate-abort",
+          finalAnswer: "Child completed before abort.",
+          profile: "research",
+          status: "completed",
+          tracePath: "/repo/.forge/sessions/child-gate-abort/trace.jsonl",
+        });
+      }, 0);
+      return { output: [], output_text: "candidate" };
+    };
+
+    await expect(runMinimalLoop({
+      childSessionRunner,
+      cwd: process.cwd(),
+      maxToolRounds: 2,
+      permissionPolicy: allowPolicy(),
+      responseCreate,
+      signal: controller.signal,
+      task: "abort before teammate wait",
+      teammates,
+    })).rejects.toThrow("stop before teammate gate");
+
+    expect(teammates.settleBeforeFinal).not.toHaveBeenCalled();
   });
 });

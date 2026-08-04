@@ -49,6 +49,7 @@ export interface CreateChildSessionRunnerOptions {
   parentSessionId: string;
   permissionPolicy?: PermissionPolicy;
   responseCreate?: ResponseCreate;
+  signal?: AbortSignal;
   taskGraph?: SessionTaskGraphBinding;
 }
 
@@ -161,6 +162,7 @@ async function startChildSession(
   options: CreateChildSessionRunnerOptions,
   request: ChildSessionRunRequest,
 ): Promise<ChildSessionRunHandle> {
+  options.signal?.throwIfAborted();
   const childTask = formatChildProfileTask({
     profile: request.profile,
     task: request.task,
@@ -192,20 +194,43 @@ async function startChildSession(
   const childLifecycleEmitter = createLifecycleEmitter({ recorder: childTrace.recorder });
   let executionCwd = options.baseCwd;
   let workspace: SessionWorkspaceMetadata | undefined;
+  const childController = new AbortController();
+  const parentSignal = options.signal;
+  let parentAbortListener: (() => void) | undefined;
+  if (parentSignal?.aborted) {
+    childController.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentAbortListener = () => childController.abort(parentSignal.reason);
+    parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+  }
+  const detachParentAbortListener = (): void => {
+    if (parentSignal && parentAbortListener) {
+      parentSignal.removeEventListener("abort", parentAbortListener);
+      parentAbortListener = undefined;
+    }
+  };
 
-  await options.parentLifecycleEmitter.emit({
-    childSessionId: childTrace.metadata.id,
-    parentCallId: request.parentCallId,
-    profile: request.profile,
-    round: request.parentRound,
-    runInBackground: request.runInBackground,
-    task: request.task,
-    tracePath: childTrace.paths.tracePath,
-    type: "child_session_started",
-  });
+  try {
+    await options.parentLifecycleEmitter.emit({
+      childSessionId: childTrace.metadata.id,
+      parentCallId: request.parentCallId,
+      profile: request.profile,
+      round: request.parentRound,
+      runInBackground: request.runInBackground,
+      task: request.task,
+      tracePath: childTrace.paths.tracePath,
+      type: "child_session_started",
+    });
+  } catch (error) {
+    detachParentAbortListener();
+    throw error;
+  }
 
   const promise = (async (): Promise<ChildSessionRunResult> => {
+    let minimalLoopStarted = false;
+    let completedResult: ChildSessionRunResult;
     try {
+      childController.signal.throwIfAborted();
       if (request.profile === "edit") {
         workspace = await prepareWorktreeSession({
           baseCwd: options.baseCwd,
@@ -214,7 +239,11 @@ async function startChildSession(
         });
         executionCwd = workspace.path;
       }
+      childController.signal.throwIfAborted();
+      const promptAssets = await loadRepoPromptAssets(options.baseCwd);
+      childController.signal.throwIfAborted();
 
+      minimalLoopStarted = true;
       const final = await runMinimalLoop({
         ...(options.apiKey ? { apiKey: options.apiKey } : {}),
         ...(options.approver ? { approver: options.approver } : {}),
@@ -225,8 +254,9 @@ async function startChildSession(
         maxToolRounds: request.maxToolRounds,
         model: options.model,
         ...(options.permissionPolicy ? { permissionPolicy: options.permissionPolicy } : {}),
-        promptAssets: await loadRepoPromptAssets(options.baseCwd),
+        promptAssets,
         ...(options.responseCreate ? { responseCreate: options.responseCreate } : {}),
+        signal: childController.signal,
         task: childTask,
         toolRuntime: createChildProfileToolRuntime({
           cwd: executionCwd,
@@ -237,7 +267,7 @@ async function startChildSession(
         ...(workspace ? { workspace } : {}),
       });
       const changedFiles = workspace ? await listChangedFiles(workspace.path) : undefined;
-      const result: ChildSessionRunResult = {
+      completedResult = {
         ...(changedFiles ? { changedFiles } : {}),
         childSessionId: childTrace.metadata.id,
         finalAnswer: final.finalAnswer,
@@ -246,33 +276,12 @@ async function startChildSession(
         tracePath: childTrace.paths.tracePath,
         ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
       };
-
-      await options.parentLifecycleEmitter.emit({
-        childSessionId: childTrace.metadata.id,
-        parentCallId: request.parentCallId,
-        profile: request.profile,
-        round: request.parentRound,
-        runInBackground: request.runInBackground,
-        status: "completed",
-        tracePath: childTrace.paths.tracePath,
-        type: "child_session_finished",
-        ...(workspace ? { workspace } : {}),
-      });
-      await options.parentLifecycleEmitter.emit({
-        ...(changedFiles ? { changedFiles } : {}),
-        childSessionId: childTrace.metadata.id,
-        finalAnswer: final.finalAnswer,
-        parentCallId: request.parentCallId,
-        profile: request.profile,
-        round: request.parentRound,
-        tracePath: childTrace.paths.tracePath,
-        type: "child_session_handoff",
-        ...(workspace ? { workspace } : {}),
-      });
-
-      return result;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      if (!minimalLoopStarted) {
+        await childLifecycleEmitter.emit({ message: reason, type: "session_failed" });
+        await childLifecycleEmitter.emit({ rounds: 0, status: "failed", type: "session_ended" });
+      }
       await options.parentLifecycleEmitter.emit({
         childSessionId: childTrace.metadata.id,
         parentCallId: request.parentCallId,
@@ -295,9 +304,37 @@ async function startChildSession(
         ...(workspace ? { workspace: { branch: workspace.branch, path: workspace.path } } : {}),
       };
     }
-  })();
+
+    await options.parentLifecycleEmitter.emit({
+      childSessionId: childTrace.metadata.id,
+      parentCallId: request.parentCallId,
+      profile: request.profile,
+      round: request.parentRound,
+      runInBackground: request.runInBackground,
+      status: "completed",
+      tracePath: childTrace.paths.tracePath,
+      type: "child_session_finished",
+      ...(workspace ? { workspace } : {}),
+    });
+    await options.parentLifecycleEmitter.emit({
+      ...(completedResult.changedFiles ? { changedFiles: completedResult.changedFiles } : {}),
+      childSessionId: childTrace.metadata.id,
+      finalAnswer: completedResult.finalAnswer,
+      parentCallId: request.parentCallId,
+      profile: request.profile,
+      round: request.parentRound,
+      tracePath: childTrace.paths.tracePath,
+      type: "child_session_handoff",
+      ...(workspace ? { workspace } : {}),
+    });
+
+    return completedResult;
+  })().finally(detachParentAbortListener);
 
   return {
+    cancel() {
+      childController.abort();
+    },
     childSessionId: childTrace.metadata.id,
     profile: request.profile,
     promise,
@@ -333,6 +370,7 @@ export interface AsyncChildSessionNotification {
 }
 
 export interface AsyncChildSessionManager extends ChildSessionRunner {
+  cancelRunning(): Promise<void>;
   drainNotifications(): AsyncChildSessionNotification[];
   getTerminal(childSessionId: string): ChildSessionTerminalRecord | undefined;
   pendingCount(): number;
@@ -347,6 +385,22 @@ export interface ChildSessionTerminalRecord {
   result: ChildSessionRunResult;
 }
 
+export class ChildSessionCancellationContractError extends Error {
+  readonly childSessionId: string;
+
+  constructor(childSessionId: string, options: { cause: unknown }) {
+    const causeMessage = options.cause instanceof Error
+      ? options.cause.message
+      : String(options.cause);
+    super(
+      `Child session "${childSessionId}" cancel() violated its non-throwing, eventual-settlement contract: ${causeMessage}`,
+      options,
+    );
+    this.name = "ChildSessionCancellationContractError";
+    this.childSessionId = childSessionId;
+  }
+}
+
 export function createAsyncChildSessionManager(options: {
   runner: ChildSessionRunner;
 }): AsyncChildSessionManager {
@@ -355,6 +409,7 @@ export function createAsyncChildSessionManager(options: {
     order: number;
     request: ChildSessionRunRequest;
     result?: ChildSessionRunResult;
+    settlement: Promise<void>;
     terminalNotified: boolean;
   }
 
@@ -373,6 +428,36 @@ export function createAsyncChildSessionManager(options: {
   };
 
   return {
+    async cancelRunning() {
+      const running = sessions.filter((session) => !session.result);
+      const cancellationErrors: unknown[] = [];
+      const cancellableSettlements: Promise<void>[] = [];
+      for (const session of running) {
+        try {
+          session.handle.cancel();
+          cancellableSettlements.push(session.settlement);
+        } catch (error) {
+          cancellationErrors.push(new ChildSessionCancellationContractError(
+            session.handle.childSessionId,
+            { cause: error },
+          ));
+        }
+      }
+      const settlements = await Promise.allSettled(cancellableSettlements);
+      for (const settlement of settlements) {
+        if (settlement.status === "rejected") {
+          cancellationErrors.push(settlement.reason);
+        }
+      }
+      if (cancellationErrors.length > 0) {
+        throw new AggregateError(
+          cancellationErrors,
+          `Child session cancellation failed: ${cancellationErrors
+            .map((error) => error instanceof Error ? error.message : String(error))
+            .join("; ")}`,
+        );
+      }
+    },
     drainNotifications() {
       return sessions
         .filter((session) => session.result && !session.terminalNotified)
@@ -437,12 +522,7 @@ export function createAsyncChildSessionManager(options: {
     async settleBeforeFinal() {
       const running = sessions.filter((session) => !session.result);
       if (running.length > 0) {
-        await Promise.race(running.map((session) =>
-          session.handle.promise.then(
-            () => undefined,
-            () => undefined,
-          )
-        ));
+        await Promise.race(running.map((session) => session.settlement));
       }
       return this.drainNotifications();
     },
@@ -452,16 +532,15 @@ export function createAsyncChildSessionManager(options: {
         handle,
         order: nextOrder,
         request: structuredClone(request),
+        settlement: Promise.resolve(),
         terminalNotified: false,
       };
-      nextOrder += 1;
-      sessions.push(session);
-      void handle.promise
-        .then((result) => {
+      session.settlement = handle.promise.then(
+        (result) => {
           session.result = result;
           rememberTerminal(session.request, result);
-        })
-        .catch((error) => {
+        },
+        (error) => {
           session.result = {
             childSessionId: handle.childSessionId,
             finalAnswer: `Child session failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -470,7 +549,10 @@ export function createAsyncChildSessionManager(options: {
             tracePath: handle.tracePath,
           };
           rememberTerminal(session.request, session.result);
-        });
+        },
+      );
+      nextOrder += 1;
+      sessions.push(session);
       return handle;
     },
   };

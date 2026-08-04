@@ -2,7 +2,7 @@
 
 Forge Harness is a TypeScript coding-agent runtime. A root run owns the model loop, action policy, context projection, Session evidence, optional isolated workspaces, delegated sessions, and the c17c team completion protocol.
 
-This document describes the repository at the `c17c Coordination / Completion Protocol` boundary. The [project architecture](01-project-architecture.md) and [tutorial roadmap](02-tutorial-roadmap.md) also discuss how the course reached this point, including future pressure that is not implemented here.
+This document describes the Runtime behavior at the `c17c Coordination / Completion Protocol` boundary plus an evergreen offline regression harness. The eval does not introduce a new tutorial chapter. The [project architecture](01-project-architecture.md) and [tutorial roadmap](02-tutorial-roadmap.md) discuss how the course reached c17c and the future pressure that remains outside this hardening work.
 
 ![Forge Harness c17c runtime architecture](assets/architecture-overview.svg)
 
@@ -30,7 +30,7 @@ The five Forge layers describe engineering responsibilities. They are not five d
 | `L1 Loop & Execution` | Turn control, model requests, tool dispatch, and final-answer flow. | [`src/core/minimalLoop.ts`](../src/core/minimalLoop.ts), [`src/tools/runtime.ts`](../src/tools/runtime.ts), [`src/tools/compositeRuntime.ts`](../src/tools/compositeRuntime.ts) |
 | `L2 Governance & Action Boundary` | Risk classification, permission decisions, approvals, path boundaries, plan review, and trusted startup. | [`src/governance/`](../src/governance), [`src/cli/approval.ts`](../src/cli/approval.ts), [`src/tools/pathBoundary.ts`](../src/tools/pathBoundary.ts), [`src/extensions/pluginPreflight.ts`](../src/extensions/pluginPreflight.ts) |
 | `L3 Context & Knowledge` | Prompt inputs, selected skills, project memory, observations, compaction summaries, notifications, and mailbox messages. | [`src/context/`](../src/context), [`src/core/minimalLoop.ts`](../src/core/minimalLoop.ts) |
-| `L4 State, Evidence & Reliability` | Session metadata, append-only Trace events, RuntimeState projection, verification results, task evidence, and integration receipts. | [`src/runtime/session.ts`](../src/runtime/session.ts), [`src/runtime/trace.ts`](../src/runtime/trace.ts), [`src/runtime/state.ts`](../src/runtime/state.ts), [`src/runtime/verification.ts`](../src/runtime/verification.ts) |
+| `L4 State, Evidence & Reliability` | Session metadata, append-only Trace events, RuntimeState projection, verification results, task evidence, integration receipts, and offline regression reports. | [`src/runtime/session.ts`](../src/runtime/session.ts), [`src/runtime/trace.ts`](../src/runtime/trace.ts), [`src/runtime/state.ts`](../src/runtime/state.ts), [`src/runtime/verification.ts`](../src/runtime/verification.ts), [`src/eval/`](../src/eval) |
 | `L5 Coordination & Scale` | Background tasks, scheduled runs, child sessions, TaskGraph, teammates, mailboxes, Git integration, and completion gating. | [`src/runtime/`](../src/runtime), [`src/extensions/`](../src/extensions), [`src/domain/`](../src/domain) |
 
 A mechanism can belong to several layers. Worktree binding is both an action boundary and coordination support. TaskGraph is shared coordination state and durable completion evidence. c17c spans all five layers because ownership, review, execution, evidence, and finalization meet in one protocol.
@@ -109,6 +109,14 @@ An incomplete gate returns blockers to the model. A failed gate records `complet
 
 The root verifier runs only after the gate is ready. A recoverable verification failure records `recovery_attempt`, sends the failure summary back to the model, and permits one repair cycle by default. A blocked result or exhausted recovery budget ends the run without a final answer.
 
+## Pre-deployment regression boundary
+
+[`src/eval/`](../src/eval) reuses the production prompt loader, loop, permission pipeline, child/teammate factories, and plugin/MCP activation path. It runs fixed minimal Git fixtures outside user traffic, grades Runtime-owned facts deterministically, and compares aggregate scenario and assertion pass counts with a compatible baseline.
+
+Experiment identity contains controlled provider, model, request, scenario, fixture, grader, action-policy, attempt-count, and Runtime-knob inputs. Candidate source, prompt implementation, tool implementation, dependency versions, and environment details remain diagnostics because they are the variables being evaluated. Token usage and measured model duration are also diagnostics; neither changes the verdict.
+
+Raw attempt evidence stays local under `.forge/evals/`. The public summary, JSON report, Markdown report, and promoted baseline reject prompt text, model output, raw tool arguments, absolute paths, and Trace payloads. See [Offline eval and regression reports](offline-eval.md).
+
 ## Extension startup boundary
 
 Configured plugins pass strict descriptor and component preflight before any plugin module is imported or plugin MCP process is started. The CLI then collects per-Session trust decisions. Only approved plugins may contribute skill text, in-process hooks, or configured MCP servers.
@@ -124,5 +132,6 @@ The c17c Runtime does not implement:
 - a plugin marketplace, downloader, persistent trust database, or package manager;
 - an operating-system sandbox, container runtime, or credential isolation;
 - RAG, a vector database, a web UI, or a hosted control plane.
+- semantic LLM judging, price-based gating, model leaderboards, statistical claims, or automatic model calls on pushes and pull requests.
 
 These are possible hardening directions, not hidden current features. The frozen Runtime demonstrates one governed root run with explicit context, evidence, isolation, delegation, and deterministic completion checks.

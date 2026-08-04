@@ -16,8 +16,9 @@ import {
 import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import { createCliSessionTrace, type SessionMetadata } from "../../src/runtime/session.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
-import type { TraceEventPayload } from "../../src/runtime/trace.js";
-import type { ChildSessionRunResult } from "../../src/tools/delegateTool.js";
+import type { RecordedTraceEvent, TraceEventPayload } from "../../src/runtime/trace.js";
+import { parseRecordedTraceEvent } from "../../src/runtime/traceSchema.js";
+import type { ChildSessionRunHandle, ChildSessionRunResult } from "../../src/tools/delegateTool.js";
 
 describe("child session profiles", () => {
   it("uses fresh profile tool surfaces without bash, delegate, or cron tools", () => {
@@ -387,6 +388,298 @@ describe("child session profiles", () => {
     });
   });
 
+  it.each(["parent", "handle"] as const)(
+    "aborts child model work from the $trigger signal and removes the parent listener after settlement",
+    async (trigger) => {
+      const root = await createRootTaskFixture();
+      const parentController = new AbortController();
+      const addListener = vi.spyOn(parentController.signal, "addEventListener");
+      const removeListener = vi.spyOn(parentController.signal, "removeEventListener");
+      const modelStarted = createDeferred<void>();
+      let childSignal: AbortSignal | undefined;
+      const runner = createChildSessionRunner({
+        baseCwd: root.repo,
+        parentLifecycleEmitter: createLifecycleEmitter({
+          recorder: {
+            async record() {
+              return undefined;
+            },
+          },
+        }),
+        parentSessionId: root.session.metadata.id,
+        responseCreate: async (_request, createOptions) => {
+          childSignal = createOptions?.signal;
+          modelStarted.resolve();
+          if (!childSignal) {
+            throw new Error("missing child signal");
+          }
+          return new Promise((_resolve, reject) => {
+            childSignal!.addEventListener("abort", () => reject(childSignal!.reason), { once: true });
+          });
+        },
+        signal: parentController.signal,
+        taskGraph: root.binding,
+      });
+      const handle = await runner.start({
+        maxToolRounds: 2,
+        parentCallId: `call_abort_${trigger}`,
+        parentRound: 1,
+        profile: "research",
+        runInBackground: true,
+        task: "Wait for cancellation.",
+      });
+      await modelStarted.promise;
+
+      if (trigger === "parent") {
+        parentController.abort(new Error("parent stopped"));
+      } else {
+        handle.cancel();
+      }
+      await expect(handle.promise).resolves.toMatchObject({ status: "failed" });
+
+      expect(childSignal).toBeDefined();
+      expect(childSignal).not.toBe(parentController.signal);
+      expect(childSignal?.aborted).toBe(true);
+      expect(addListener).toHaveBeenCalledOnce();
+      expect(removeListener).toHaveBeenCalledOnce();
+      expect(removeListener.mock.calls[0]?.[1]).toBe(addListener.mock.calls[0]?.[1]);
+    },
+  );
+
+  it("rejects an already-aborted edit child before trace, lifecycle, workspace, or model side effects", async () => {
+    const root = await createRootTaskFixture({ git: true });
+    const controller = new AbortController();
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const sessionsRoot = path.join(root.repo, ".forge", "sessions");
+    const worktreesRoot = path.join(root.repo, ".forge", "worktrees");
+    const sessionsBefore = await fs.readdir(sessionsRoot);
+    const worktreesBefore = await fs.readdir(worktreesRoot).catch(() => [] as string[]);
+    const branchesBefore = await gitLines(root.repo, ["branch", "--format=%(refname:short)"]);
+    controller.abort(new Error("parent already stopped"));
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate,
+      signal: controller.signal,
+      taskGraph: root.binding,
+    });
+
+    await expect(runner.start({
+      maxToolRounds: 2,
+      parentCallId: "call_preaborted_edit",
+      parentRound: 1,
+      profile: "edit",
+      runInBackground: true,
+      task: "Must not create a worktree.",
+    })).rejects.toThrow("parent already stopped");
+
+    expect(responseCreate).not.toHaveBeenCalled();
+    expect(parentEvents).toEqual([]);
+    await expect(fs.readdir(sessionsRoot)).resolves.toEqual(sessionsBefore);
+    await expect(fs.readdir(worktreesRoot).catch(() => [] as string[])).resolves.toEqual(worktreesBefore);
+    await expect(gitLines(root.repo, ["branch", "--format=%(refname:short)"])).resolves.toEqual(branchesBefore);
+  });
+
+  it("terminalizes an edit child when child_session_started recording aborts its parent", async () => {
+    const root = await createRootTaskFixture({ git: true });
+    const controller = new AbortController();
+    const abortError = new Error("parent stopped while recording child start");
+    const addListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const worktreesRoot = path.join(root.repo, ".forge", "worktrees");
+    const worktreesBefore = await fs.readdir(worktreesRoot).catch(() => [] as string[]);
+    const branchesBefore = await gitLines(root.repo, ["branch", "--format=%(refname:short)"]);
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+            if (event.type === "child_session_started") {
+              expect(addListener).toHaveBeenCalledOnce();
+              controller.abort(abortError);
+            }
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate,
+      signal: controller.signal,
+      taskGraph: root.binding,
+    });
+
+    const result = await runner.run({
+      maxToolRounds: 2,
+      parentCallId: "call_abort_during_child_start",
+      parentRound: 1,
+      profile: "edit",
+      runInBackground: false,
+      task: "Must stop before preparing a worktree.",
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(parentEvents.filter((event) => event.type === "child_session_started")).toHaveLength(1);
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([
+      expect.objectContaining({
+        reason: abortError.message,
+        status: "failed",
+        type: "child_session_finished",
+      }),
+    ]);
+    expect(parentEvents.filter((event) => event.type === "child_session_handoff")).toEqual([]);
+    expect(await readTraceEvents(result.tracePath)).toEqual([
+      expect.objectContaining({ message: abortError.message, type: "session_failed" }),
+      expect.objectContaining({ rounds: 0, status: "failed", type: "session_ended" }),
+    ]);
+    expect(responseCreate).not.toHaveBeenCalled();
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(removeListener.mock.calls[0]?.[1]).toBe(addListener.mock.calls[0]?.[1]);
+    await expect(fs.readdir(worktreesRoot).catch(() => [] as string[])).resolves.toEqual(worktreesBefore);
+    await expect(gitLines(root.repo, ["branch", "--format=%(refname:short)"])).resolves.toEqual(branchesBefore);
+  });
+
+  it("cleans up cancellation ownership when child registration emission fails", async () => {
+    const root = await createRootTaskFixture();
+    const controller = new AbortController();
+    const registrationError = new Error("child registration write failed");
+    const addListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+            if (event.type === "child_session_started") {
+              throw registrationError;
+            }
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate,
+      signal: controller.signal,
+      taskGraph: root.binding,
+    });
+
+    await expect(runner.start({
+      maxToolRounds: 2,
+      parentCallId: "call_registration_failure",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: true,
+      task: "Do not run after registration failure.",
+    })).rejects.toBe(registrationError);
+
+    expect(addListener).toHaveBeenCalledOnce();
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(removeListener.mock.calls[0]?.[1]).toBe(addListener.mock.calls[0]?.[1]);
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([]);
+    expect(responseCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failure: "prompt setup", profile: "research" as const },
+    { failure: "worktree setup", profile: "edit" as const },
+  ])("terminalizes a published child after $failure fails", async ({ profile }) => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "forge-child-preloop-"));
+    if (profile === "research") {
+      await fs.mkdir(path.join(repo, ".forge", "skills", "Invalid-Name"), { recursive: true });
+    }
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const runner = createChildSessionRunner({
+      baseCwd: repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+          },
+        },
+      }),
+      parentSessionId: "root-session",
+      responseCreate,
+    });
+
+    const result = await runner.run({
+      maxToolRounds: 2,
+      parentCallId: `call_${profile}_preloop_failure`,
+      parentRound: 1,
+      profile,
+      runInBackground: false,
+      task: "Fail before the model starts.",
+    });
+    const childEvents = await readTraceEvents(result.tracePath);
+
+    expect(result.status).toBe("failed");
+    expect(parentEvents.filter((event) => event.type === "child_session_started")).toHaveLength(1);
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([
+      expect.objectContaining({ status: "failed", type: "child_session_finished" }),
+    ]);
+    expect(parentEvents.filter((event) => event.type === "child_session_handoff")).toEqual([]);
+    expect(childEvents.filter((event) => event.type === "session_failed")).toHaveLength(1);
+    expect(childEvents.at(-1)).toMatchObject({
+      rounds: 0,
+      status: "failed",
+      type: "session_ended",
+    });
+    expect(responseCreate).not.toHaveBeenCalled();
+  });
+
+  it("propagates handoff publication failure without fabricating a second child finish", async () => {
+    const root = await createRootTaskFixture();
+    const publicationError = new Error("child handoff publication failed");
+    const parentEvents: TraceEventPayload[] = [];
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+            if (event.type === "child_session_handoff") {
+              throw publicationError;
+            }
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate: async () => ({
+        output: [],
+        output_text: "Child execution completed before publication failed.",
+      }),
+      taskGraph: root.binding,
+    });
+
+    const outcome = await runner.run({
+      maxToolRounds: 2,
+      parentCallId: "call_handoff_publication_failure",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: false,
+      task: "Complete successfully, then expose the reporting failure.",
+    }).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (reason: unknown) => ({ reason, status: "rejected" as const }),
+    );
+
+    expect(parentEvents.filter((event) => event.type === "child_session_finished")).toEqual([
+      expect.objectContaining({ status: "completed", type: "child_session_finished" }),
+    ]);
+    expect(outcome).toEqual({ reason: publicationError, status: "rejected" });
+  });
+
   it("prepends profile-specific prompt prose while preserving child skill invocations", () => {
     const task = formatChildProfileTask({
       profile: "research",
@@ -433,6 +726,164 @@ describe("child session profiles", () => {
 });
 
 describe("AsyncChildSessionManager", () => {
+  it("cancels every unresolved handle and waits until pending count reaches zero", async () => {
+    const deferred = createDeferred<ChildSessionRunResult>();
+    const handle: ChildSessionRunHandle = {
+      cancel: vi.fn(() => {
+        deferred.resolve({
+          childSessionId: "child-cancelled",
+          finalAnswer: "Child session failed: cancelled",
+          profile: "research",
+          status: "failed",
+          tracePath: "/repo/.forge/sessions/child-cancelled/trace.jsonl",
+        });
+      }),
+      childSessionId: "child-cancelled",
+      profile: "research",
+      promise: deferred.promise,
+      status: "running",
+      tracePath: "/repo/.forge/sessions/child-cancelled/trace.jsonl",
+    };
+    const manager = createAsyncChildSessionManager({
+      runner: {
+        run: vi.fn(),
+        start: vi.fn().mockResolvedValue(handle),
+      },
+    });
+    await manager.start({
+      maxToolRounds: 4,
+      parentCallId: "call_cancel",
+      parentRound: 1,
+      profile: "research",
+      runInBackground: true,
+      task: "Cancel this child.",
+    });
+
+    await manager.cancelRunning();
+
+    expect(handle.cancel).toHaveBeenCalledTimes(1);
+    expect(manager.pendingCount()).toBe(0);
+  });
+
+  it("cancels and awaits every unresolved handle before propagating a cancellation error", async () => {
+    const first = createDeferred<ChildSessionRunResult>();
+    const second = createDeferred<ChildSessionRunResult>();
+    const firstCancel = vi.fn(() => {
+      first.resolve({
+        childSessionId: "child-cancel-first",
+        finalAnswer: "First child settled during cancellation.",
+        profile: "research",
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-cancel-first/trace.jsonl",
+      });
+      throw new Error("first cancel failed");
+    });
+    const secondCancel = vi.fn(() => {
+      second.resolve({
+        childSessionId: "child-cancel-second",
+        finalAnswer: "Second child settled during cancellation.",
+        profile: "research",
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-cancel-second/trace.jsonl",
+      });
+    });
+    const manager = createAsyncChildSessionManager({
+      runner: {
+        run: vi.fn(),
+        start: vi.fn()
+          .mockResolvedValueOnce({
+            cancel: firstCancel,
+            childSessionId: "child-cancel-first",
+            profile: "research",
+            promise: first.promise,
+            status: "running",
+            tracePath: "/repo/.forge/sessions/child-cancel-first/trace.jsonl",
+          })
+          .mockResolvedValueOnce({
+            cancel: secondCancel,
+            childSessionId: "child-cancel-second",
+            profile: "research",
+            promise: second.promise,
+            status: "running",
+            tracePath: "/repo/.forge/sessions/child-cancel-second/trace.jsonl",
+          }),
+      },
+    });
+    const request = {
+      maxToolRounds: 4,
+      parentCallId: "call_cancel_all",
+      parentRound: 1,
+      profile: "research" as const,
+      runInBackground: true,
+      task: "Cancel every child.",
+    };
+    await manager.start(request);
+    await manager.start({ ...request, parentCallId: "call_cancel_all_2" });
+
+    await expect(manager.cancelRunning()).rejects.toThrow("first cancel failed");
+
+    expect(firstCancel).toHaveBeenCalledOnce();
+    expect(secondCancel).toHaveBeenCalledOnce();
+    expect(manager.pendingCount()).toBe(0);
+  });
+
+  it("reports a throwing cancel contract violation without claiming the child is quiescent", async () => {
+    const neverSettles = createDeferred<ChildSessionRunResult>();
+    const conforming = createDeferred<ChildSessionRunResult>();
+    const violatingCancel = vi.fn(() => {
+      throw new Error("cancel threw before settlement");
+    });
+    const conformingCancel = vi.fn(() => {
+      conforming.resolve({
+        childSessionId: "child-conforming",
+        finalAnswer: "Conforming child settled during cancellation.",
+        profile: "research",
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-conforming/trace.jsonl",
+      });
+    });
+    const manager = createAsyncChildSessionManager({
+      runner: {
+        run: vi.fn(),
+        start: vi.fn()
+          .mockResolvedValueOnce({
+            cancel: violatingCancel,
+            childSessionId: "child-violating",
+            profile: "research",
+            promise: neverSettles.promise,
+            status: "running",
+            tracePath: "/repo/.forge/sessions/child-violating/trace.jsonl",
+          })
+          .mockResolvedValueOnce({
+            cancel: conformingCancel,
+            childSessionId: "child-conforming",
+            profile: "research",
+            promise: conforming.promise,
+            status: "running",
+            tracePath: "/repo/.forge/sessions/child-conforming/trace.jsonl",
+          }),
+      },
+    });
+    const request = {
+      maxToolRounds: 4,
+      parentCallId: "call_contract_violation",
+      parentRound: 1,
+      profile: "research" as const,
+      runInBackground: true,
+      task: "Expose an invalid cancellation handle.",
+    };
+    await manager.start(request);
+    await manager.start({ ...request, parentCallId: "call_conforming_cancel" });
+
+    await expect(manager.cancelRunning()).rejects.toThrow(
+      'Child session "child-violating" cancel() violated its non-throwing, eventual-settlement contract',
+    );
+
+    expect(violatingCancel).toHaveBeenCalledOnce();
+    expect(conformingCancel).toHaveBeenCalledOnce();
+    expect(manager.pendingCount()).toBe(1);
+  }, 500);
+
   it("starts multiple child sessions and drains terminal notifications once in start order", async () => {
     const first = createDeferred<ChildSessionRunResult>();
     const second = createDeferred<ChildSessionRunResult>();
@@ -624,6 +1075,13 @@ async function execGit(cwd: string, args: string[]): Promise<void> {
   await promisify(execFile)("git", args, { cwd });
 }
 
+async function gitLines(cwd: string, args: string[]): Promise<string[]> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const result = await promisify(execFile)("git", args, { cwd });
+  return result.stdout.trim().split("\n").filter((line) => line.length > 0);
+}
+
 async function createRootTaskFixture(options: { git?: boolean } = {}) {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), "forge-child-task-"));
   if (options.git) {
@@ -678,4 +1136,13 @@ function createDeferred<T>(): Deferred<T> {
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function readTraceEvents(tracePath: string): Promise<RecordedTraceEvent[]> {
+  const contents = await fs.readFile(tracePath, "utf8");
+  return contents
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => parseRecordedTraceEvent(JSON.parse(line)));
 }

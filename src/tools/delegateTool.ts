@@ -26,6 +26,12 @@ export interface ChildSessionRunResult {
 }
 
 export interface ChildSessionRunHandle {
+  /**
+   * Requests cancellation. Implementations must be idempotent, must not throw,
+   * and must cause `promise` to settle eventually. The manager cannot prove
+   * quiescence for a handle that violates this contract.
+   */
+  cancel(): void;
   childSessionId: string;
   profile: ChildSessionProfile;
   promise: Promise<ChildSessionRunResult>;

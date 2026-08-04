@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   activateApprovedPluginHooks,
@@ -114,6 +114,60 @@ describe("plugin activation phases", () => {
     await result.close();
     await result.close();
     expect(closed).toEqual(["later-zeta", "earlier-only"]);
+  });
+
+  it("awaits every MCP close before aggregating close failures once", async () => {
+    const descriptors = resolvePluginDescriptors([
+      plugin("cleanup", 0, { servers: ["alpha", "beta"] }),
+    ], "/execution");
+    const decisions = descriptors.map((descriptor) => ({
+      descriptor,
+      result: { approved: true as const },
+    }));
+    const alphaError = new Error("alpha close failed");
+    const betaError = new Error("beta close failed");
+    const alphaGate = deferred<void>();
+    const closeOrder: string[] = [];
+    let settled = false;
+    const result = await startApprovedPluginMcpServers({
+      decisions,
+      lifecycleEmitter: emitter([]),
+      async startSession(options) {
+        const session = fakeSession(options.server.id, []);
+        session.close = options.server.id === "cleanup-alpha"
+          ? async () => {
+              closeOrder.push("alpha_started");
+              await alphaGate.promise;
+              closeOrder.push("alpha_settled");
+              throw alphaError;
+            }
+          : async () => {
+              closeOrder.push("beta_settled");
+              throw betaError;
+            };
+        return session;
+      },
+    });
+
+    const closing = result.close();
+    expect(result.close()).toBe(closing);
+    void closing.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await vi.waitFor(() => {
+      expect(closeOrder).toEqual(["beta_settled", "alpha_started"]);
+    });
+    expect(settled).toBe(false);
+    alphaGate.resolve();
+
+    await expect(closing).rejects.toSatisfy((error: unknown) => (
+      error instanceof AggregateError
+      && error.errors.length === 2
+      && error.errors[0] === betaError
+      && error.errors[1] === alphaError
+    ));
+    expect(closeOrder).toEqual(["beta_settled", "alpha_started", "alpha_settled"]);
   });
 
   it("builds complete active, degraded, and failed startup snapshots without treating deny or extra as degradation", () => {
@@ -293,4 +347,12 @@ function fakeSession(id: string, closed: string[]): PluginMcpSessionLike {
     permissionPolicies: new Map(),
     toolDefinitions: () => [],
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }

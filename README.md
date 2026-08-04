@@ -127,6 +127,20 @@ npm run smoke:c17c-child
 
 The capstone smoke combines TaskGraph ownership, review, verification, Git integration, and CompletionGate. The child smoke focuses on one-shot edit-source integration. Neither proves future model adherence or external service availability.
 
+## Offline behavioral eval
+
+The pre-deployment eval runs 13 model-driven attempts against fixed Forge scenarios, then compares deterministic grader counts with a versioned baseline:
+
+```bash
+npm run eval -- run --model <model>
+```
+
+Here “offline” means outside real user traffic, not disconnected from the model API. Token and latency telemetry is reported but never changes the behavioral verdict. Version 1 has no LLM judge, price table, model leaderboard, automatic pull-request trigger, or nightly model run.
+
+The linked [regression report](docs/assets/evidence/offline-eval-regression-report.md) is retained as a historical pre-hardening sample. It records an earlier independent 13-attempt `UNCHANGED` run, but does not evidence the hardened contract or current experiment identity. Current evidence requires a new valid canonical baseline followed by the first independent comparable candidate run; it is not resampled for a preferred verdict.
+
+The suite, baseline promotion rules, exit codes, manual GitHub workflow, and cleanup boundary are documented in [Offline eval and regression reports](docs/offline-eval.md). The eval is evergreen Runtime hardening and does not consume tutorial chapter `c18`.
+
 ## Demo runbooks
 
 - [Verification / Recovery](docs/demos/verification-recovery.md)
@@ -142,6 +156,7 @@ Each runbook separates a repeatable deterministic check from an optional model-d
 - [Architecture overview](docs/architecture-overview.md): current c17c execution, state, trust, isolation, and completion boundaries.
 - [Engineering case study](docs/engineering-case-study.md): the failures that forced each Runtime mechanism and the alternatives not taken.
 - [Evidence Index](docs/evidence-index.md): claim-to-source, test, smoke, and live-evidence mapping.
+- [Offline eval](docs/offline-eval.md): canonical scenarios, comparability, baseline promotion, reports, and limitations.
 - [Design Studies](docs/design-studies/README.md): context management, Tool Runtime, Session persistence, and multi-agent coordination.
 - [Deep Agent Runtime Research](https://github.com/ZophiaWong/forge-harness/tree/research/agent-runtime-design-studies/docs/design-studies): separate-branch source studies comparing Forge, Pi, and a provenance-limited Claude local snapshot across loop completion, tool boundaries, context, Sessions, coordination, and extension trust.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): the two-part Chinese learning path.

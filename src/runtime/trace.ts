@@ -1,6 +1,7 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
 import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
+import type { ModelCallTelemetry } from "../domain/model.js";
 import type {
   TeamTaskFailureCode,
   TeamTaskGraphHealth,
@@ -164,6 +165,7 @@ export type TraceEventPayload =
       omittedSourceCharCount: number;
       missingHeadings: RequiredCompactionHeading[];
       summary: string;
+      telemetry?: ModelCallTelemetry;
     }
   | {
       type: "context_compaction_failed";
@@ -179,6 +181,7 @@ export type TraceEventPayload =
       round: number;
       outputText: string;
       functionCallCount: number;
+      telemetry?: ModelCallTelemetry;
     }
   | {
       type: "tool_call";
@@ -446,7 +449,21 @@ export type TraceEventPayload =
       error?: string;
     };
 
-export type RecordedTraceEvent = TraceEventPayload & {
+export type TraceSubjectSessionEvent = Extract<TraceEventPayload, {
+  type:
+    | "cron_run_finished"
+    | "teammate_approval_brokered"
+    | "teammate_registered"
+    | "teammate_rejoined"
+    | "teammate_state_changed";
+}>;
+
+export type RecordedTracePayload<TEvent extends TraceEventPayload = TraceEventPayload> =
+  TEvent extends TraceSubjectSessionEvent
+    ? Omit<TEvent, "sessionId"> & { subjectSessionId: string }
+    : TEvent;
+
+export type RecordedTraceEvent = RecordedTracePayload & {
   sessionId: string;
   sequence: number;
   timestamp: string;

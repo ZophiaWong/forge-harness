@@ -381,6 +381,9 @@ function capturingRunner(requests: ChildSessionRunRequest[]) {
     async start(request: ChildSessionRunRequest) {
       requests.push(request);
       return {
+        cancel() {
+          return undefined;
+        },
         childSessionId: "child-linked",
         profile: request.profile,
         promise: Promise.resolve({

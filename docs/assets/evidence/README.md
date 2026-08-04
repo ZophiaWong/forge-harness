@@ -26,6 +26,10 @@ Each JSON snapshot contains:
 
 These files are evidence summaries, not replacement audit logs and not cryptographic attestations. Reproduce a capability through the matching document in [`docs/demos/`](../../demos), then inspect the new local `.forge/sessions/<session-id>/` directory for the full record.
 
+Offline eval reports follow the same redaction boundary but represent a different evidence shape. A promoted baseline contains only aggregate behavior counts and metrics. A candidate `report.md` contains compatibility, count differences, hard/infrastructure findings, and optional token/latency coverage. Local `.forge/evals/<run-id>/attempts/` data is never a public artifact. See [Offline eval and regression reports](../../offline-eval.md).
+
+The curated [offline eval regression report](offline-eval-regression-report.md) is retained as a historical pre-hardening sample. It records an earlier independent 13-attempt `UNCHANGED` run, but does not evidence the hardened contract or current experiment identity. Current evidence requires a new valid canonical baseline followed by the first independent comparable candidate run; it is not resampled for a preferred verdict.
+
 ## Evidence levels
 
 | Level | What it establishes |
@@ -34,5 +38,6 @@ These files are evidence summaries, not replacement audit logs and not cryptogra
 | Automated test | A focused deterministic case exercises that boundary. |
 | Deterministic smoke | Several components run together without a model API call. |
 | Curated live snapshot | A model-driven run reached the expected Runtime invariants once. |
+| Compatible regression report | A fixed candidate batch changed, preserved, or regressed scenario/assertion pass counts relative to one versioned baseline. |
 
 A live snapshot does not make model behavior deterministic. The Runtime gate, state transition, verifier, or integration check is the deterministic part.

@@ -13,6 +13,11 @@ export interface PermissionPolicy {
   decide(toolCall: ToolCallRequest): PermissionDecision;
 }
 
+export interface PermissionAllowlistRule {
+  arguments?: Record<string, unknown>;
+  name: string;
+}
+
 export interface ApprovalRequest {
   decision: PermissionDecision;
   toolCall: ToolCallRequest;
