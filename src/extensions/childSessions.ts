@@ -205,6 +205,7 @@ async function startChildSession(
     tracePath: childTrace.paths.tracePath,
     type: "child_session_started",
   });
+  options.signal?.throwIfAborted();
 
   const childController = new AbortController();
   const parentSignal = options.signal;
@@ -368,6 +369,22 @@ export interface ChildSessionTerminalRecord {
   result: ChildSessionRunResult;
 }
 
+export class ChildSessionCancellationContractError extends Error {
+  readonly childSessionId: string;
+
+  constructor(childSessionId: string, options: { cause: unknown }) {
+    const causeMessage = options.cause instanceof Error
+      ? options.cause.message
+      : String(options.cause);
+    super(
+      `Child session "${childSessionId}" cancel() violated its non-throwing, eventual-settlement contract: ${causeMessage}`,
+      options,
+    );
+    this.name = "ChildSessionCancellationContractError";
+    this.childSessionId = childSessionId;
+  }
+}
+
 export function createAsyncChildSessionManager(options: {
   runner: ChildSessionRunner;
 }): AsyncChildSessionManager {
@@ -398,14 +415,19 @@ export function createAsyncChildSessionManager(options: {
     async cancelRunning() {
       const running = sessions.filter((session) => !session.result);
       const cancellationErrors: unknown[] = [];
+      const cancellableSettlements: Promise<void>[] = [];
       for (const session of running) {
         try {
           session.handle.cancel();
+          cancellableSettlements.push(session.settlement);
         } catch (error) {
-          cancellationErrors.push(error);
+          cancellationErrors.push(new ChildSessionCancellationContractError(
+            session.handle.childSessionId,
+            { cause: error },
+          ));
         }
       }
-      const settlements = await Promise.allSettled(running.map((session) => session.settlement));
+      const settlements = await Promise.allSettled(cancellableSettlements);
       for (const settlement of settlements) {
         if (settlement.status === "rejected") {
           cancellationErrors.push(settlement.reason);

@@ -137,16 +137,19 @@ function verifierWithResults(...results: VerificationResult[]): Verifier {
 
 interface Deferred<T> {
   promise: Promise<T>;
+  reject(reason?: unknown): void;
   resolve(value: T): void;
 }
 
 function createDeferred<T>(): Deferred<T> {
+  let reject!: (reason?: unknown) => void;
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    reject = promiseReject;
     resolve = promiseResolve;
   });
 
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 async function flushPromises(): Promise<void> {
@@ -237,6 +240,83 @@ describe("runMinimalLoop", () => {
       message: expect.stringContaining("tool cleanup failed"),
       type: "session_failed",
     }));
+  });
+
+  it("attaches a terminal recorder failure to the primary Runtime error", async () => {
+    const primaryError = new Error("primary Runtime failure");
+    const terminalRecorderError = new Error("terminal recorder failed");
+    const events: TraceEventPayload[] = [];
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "session_ended") {
+              throw terminalRecorderError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "preserve terminal recorder evidence",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect((primaryError as Error & { suppressed?: unknown[] }).suppressed).toEqual([
+      terminalRecorderError,
+    ]);
+    expect(events.filter((event) => event.type === "session_ended")).toHaveLength(1);
+  });
+
+  it("attaches cleanup, cleanup-evidence, and terminal failures to the primary Runtime error", async () => {
+    const primaryError = new Error("primary Runtime failure");
+    const cleanupError = new Error("tool cleanup failed");
+    const cleanupEvidenceError = new Error("cleanup evidence recorder failed");
+    const terminalRecorderError = new Error("terminal recorder failed");
+    let sessionFailedCount = 0;
+
+    await expect(runMinimalLoop({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            if (event.type === "session_failed") {
+              sessionFailedCount += 1;
+              if (sessionFailedCount === 2) {
+                throw cleanupEvidenceError;
+              }
+            }
+            if (event.type === "session_ended") {
+              throw terminalRecorderError;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        throw primaryError;
+      },
+      task: "preserve every teardown failure",
+      toolRuntime: {
+        close: async () => {
+          throw cleanupError;
+        },
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    })).rejects.toBe(primaryError);
+
+    expect((primaryError as Error & { suppressed?: unknown[] }).suppressed).toEqual([
+      cleanupError,
+      cleanupEvidenceError,
+      terminalRecorderError,
+    ]);
   });
 
   it("records a failed terminal status when cleanup fails after a final answer", async () => {
@@ -3101,6 +3181,109 @@ describe("createMinimalLoopSession", () => {
       expect.objectContaining({ rounds: 3, status: "completed" }),
     ]);
   });
+
+  it("lets a running turn failure dominate a concurrent completed close", async () => {
+    const modelStarted = createDeferred<void>();
+    const modelResponse = createDeferred<Awaited<ReturnType<ResponseCreate>>>();
+    const terminalStarted = createDeferred<void>();
+    const releaseTerminal = createDeferred<void>();
+    const primaryError = new Error("turn failed after close request");
+    const events: TraceEventPayload[] = [];
+    const session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "session_ended") {
+              terminalStarted.resolve();
+              await releaseTerminal.promise;
+            }
+          },
+        },
+      }),
+      responseCreate: async () => {
+        modelStarted.resolve();
+        return modelResponse.promise;
+      },
+      task: "fail while a completed close is waiting",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+    let runError: unknown;
+    let runSettled = false;
+    const running = session.runTurn().catch((error: unknown) => {
+      runError = error;
+      runSettled = true;
+    });
+    await modelStarted.promise;
+
+    const closing = session.close("completed");
+    modelResponse.reject(primaryError);
+    await terminalStarted.promise;
+    await flushPromises();
+    const rejectedBeforeTerminalEvidence = runSettled;
+    releaseTerminal.resolve();
+    await closing;
+    await running;
+
+    expect(rejectedBeforeTerminalEvidence).toBe(false);
+    expect(runError).toBe(primaryError);
+    expect(events.filter((event) => event.type === "session_ended")).toEqual([
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  });
+
+  it("does not deadlock when tool cleanup awaits a recursive public close", async () => {
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    const close = vi.fn(async () => {
+      await session.close("completed");
+    });
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      responseCreate: async () => ({ output: [], output_text: "unused" }),
+      task: "close reentrantly from tool cleanup",
+      toolRuntime: {
+        close,
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await session.close("completed");
+
+    expect(close).toHaveBeenCalledOnce();
+  }, 500);
+
+  it("does not deadlock when the terminal recorder awaits a recursive public close", async () => {
+    let session: Awaited<ReturnType<typeof createMinimalLoopSession>>;
+    const events: TraceEventPayload[] = [];
+    session = await createMinimalLoopSession({
+      cwd: process.cwd(),
+      lifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            events.push(event);
+            if (event.type === "session_ended") {
+              await session.close("completed");
+            }
+          },
+        },
+      }),
+      responseCreate: async () => ({ output: [], output_text: "unused" }),
+      task: "close reentrantly from terminal evidence",
+      toolRuntime: {
+        execute: vi.fn(),
+        toolDefinitions: () => [],
+      },
+    });
+
+    await session.close("completed");
+
+    expect(events.filter((event) => event.type === "session_ended")).toHaveLength(1);
+  }, 500);
 
   it("waits for team activity at the final gate without polling the model", async () => {
     const activity = createDeferred<Awaited<ReturnType<TeammateManager["settleBeforeFinal"]>>>();

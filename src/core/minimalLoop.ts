@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 
 import OpenAI from "openai";
@@ -224,7 +225,9 @@ export async function runMinimalLoop(options: MinimalLoopOptions): Promise<Minim
     reportFinalState(options);
     return result;
   } catch (error) {
-    await session.close("failed").catch(() => undefined);
+    const teardownErrors: unknown[] = [];
+    await captureCleanupError(teardownErrors, () => session.close("failed"));
+    attachSuppressedErrors(error, teardownErrors);
     throw error;
   }
 }
@@ -318,23 +321,66 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
     recentRoundsToKeep: contextCompaction?.recentRoundsToKeep ?? DEFAULT_COMPACTION_OPTIONS.recentRoundsToKeep,
   });
   let closed = false;
+  let closePhase: "open" | "requested" | "tearing_down" | "closed" = "open";
   let closePromise: Promise<void> | undefined;
+  let requestedCloseStatus: SessionEndStatus = "completed";
+  let activeTurnSettlement = Promise.resolve();
+  let releaseActiveTurn = (): void => undefined;
+  const closeCallbackContext = new AsyncLocalStorage<true>();
   let running = false;
   let responseCreate: ResponseCreate;
-  const closeSession = (status: SessionEndStatus): Promise<void> => {
+  const runCloseCallback: SessionCloseCallbackRunner = async (operation) =>
+    closeCallbackContext.run(true, operation);
+  const requestCloseStatus = (status: SessionEndStatus): void => {
+    closed = true;
+    if (status === "failed") {
+      requestedCloseStatus = "failed";
+    }
+    if (closePhase === "open") {
+      closePhase = "requested";
+    }
+  };
+  const closeSessionInternal = (status: SessionEndStatus): Promise<void> => {
+    requestCloseStatus(status);
     if (closePromise) {
       return closePromise;
     }
-    closed = true;
-    closePromise = finishSession(
-      lifecycleEmitter,
-      backgroundTasks,
-      childSessions,
-      toolRuntime,
-      lastRound,
-      status,
-    );
+    closePromise = (async () => {
+      await activeTurnSettlement;
+      closePhase = "tearing_down";
+      try {
+        await finishSession(
+          lifecycleEmitter,
+          backgroundTasks,
+          childSessions,
+          toolRuntime,
+          lastRound,
+          () => requestedCloseStatus,
+          runCloseCallback,
+        );
+      } finally {
+        closePhase = "closed";
+      }
+    })();
     return closePromise;
+  };
+  const closeSession = (status: SessionEndStatus): Promise<void> => {
+    if (closeCallbackContext.getStore()) {
+      return Promise.resolve();
+    }
+    return closeSessionInternal(status);
+  };
+  const beginActiveTurn = (): void => {
+    let released = false;
+    activeTurnSettlement = new Promise<void>((resolve) => {
+      releaseActiveTurn = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        resolve();
+      };
+    });
   };
 
   try {
@@ -360,8 +406,14 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
     responseCreate = options.responseCreate ?? createOpenAIResponseCreate(apiKey, baseURL);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await lifecycleEmitter.emit({ message, type: "session_failed" }).catch(() => undefined);
-    await closeSession("failed").catch(() => undefined);
+    const teardownErrors: unknown[] = [];
+    const teardown = closeSessionInternal("failed");
+    await captureCleanupError(
+      teardownErrors,
+      () => runCloseCallback(() => lifecycleEmitter.emit({ message, type: "session_failed" })),
+    );
+    await captureCleanupError(teardownErrors, () => teardown);
+    attachSuppressedErrors(error, teardownErrors);
     throw error;
   }
 
@@ -395,6 +447,7 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
 
       let recoveryAttempts = 0;
       running = true;
+      beginActiveTurn();
 
       try {
         for (let turnRound = 1; turnRound <= turnMaxToolRounds; turnRound += 1) {
@@ -662,13 +715,20 @@ export async function createMinimalLoopSession(options: MinimalLoopOptions): Pro
         throw new Error(`Minimal loop stopped after ${turnMaxToolRounds} tool rounds without a final answer.`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await lifecycleEmitter.emit({ message, type: "session_failed" }).catch(() => undefined);
-        if (!closed) {
-          await closeSession("failed").catch(() => undefined);
-        }
+        const teardownErrors: unknown[] = [];
+        const teardown = closeSessionInternal("failed");
+        await captureCleanupError(
+          teardownErrors,
+          () => runCloseCallback(() => lifecycleEmitter.emit({ message, type: "session_failed" })),
+        );
+        running = false;
+        releaseActiveTurn();
+        await captureCleanupError(teardownErrors, () => teardown);
+        attachSuppressedErrors(error, teardownErrors);
         throw error;
       } finally {
         running = false;
+        releaseActiveTurn();
       }
     },
   };
@@ -1088,29 +1148,45 @@ async function finishSession(
   childSessions: AsyncChildSessionManager | undefined,
   toolRuntime: ToolRuntime,
   rounds: number,
-  status: SessionEndStatus,
+  requestedStatus: () => SessionEndStatus,
+  runCloseCallback: SessionCloseCallbackRunner,
 ): Promise<void> {
   const cleanupErrors: unknown[] = [];
-  await captureCleanupError(cleanupErrors, () => cleanupBackgroundTasks(backgroundTasks));
-  await captureCleanupError(cleanupErrors, async () => childSessions?.cancelRunning());
-  await captureCleanupError(cleanupErrors, async () => toolRuntime.close?.());
+  await captureCleanupError(
+    cleanupErrors,
+    () => runCloseCallback(() => cleanupBackgroundTasks(backgroundTasks)),
+  );
+  await captureCleanupError(
+    cleanupErrors,
+    () => runCloseCallback(async () => childSessions?.cancelRunning()),
+  );
+  await captureCleanupError(
+    cleanupErrors,
+    () => runCloseCallback(async () => toolRuntime.close?.()),
+  );
 
   if (cleanupErrors.length > 0) {
     const message = formatCleanupErrorMessage(cleanupErrors);
-    await captureCleanupError(cleanupErrors, () => lifecycleEmitter.emit({
-      message,
-      type: "session_failed",
-    }));
-    await captureCleanupError(cleanupErrors, () => lifecycleEmitter.emit({
-      rounds,
-      status: "failed",
-      type: "session_ended",
-    }));
-    throw new AggregateError(cleanupErrors, message);
+    await captureCleanupError(
+      cleanupErrors,
+      () => runCloseCallback(() => lifecycleEmitter.emit({
+        message,
+        type: "session_failed",
+      })),
+    );
   }
 
-  await lifecycleEmitter.emit({ rounds, status, type: "session_ended" });
+  const status = cleanupErrors.length > 0 ? "failed" : requestedStatus();
+  await captureCleanupError(
+    cleanupErrors,
+    () => runCloseCallback(() => lifecycleEmitter.emit({ rounds, status, type: "session_ended" })),
+  );
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, formatCleanupErrorMessage(cleanupErrors));
+  }
 }
+
+type SessionCloseCallbackRunner = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 async function cleanupBackgroundTasks(backgroundTasks: BackgroundTaskManager | undefined): Promise<void> {
   if (!backgroundTasks) {
@@ -1141,6 +1217,43 @@ function formatCleanupErrorMessage(errors: unknown[]): string {
   return `Session cleanup failed: ${errors
     .map((error) => error instanceof Error ? error.message : String(error))
     .join("; ")}`;
+}
+
+function attachSuppressedErrors(primaryError: unknown, teardownErrors: unknown[]): void {
+  if (!(primaryError instanceof Error)) {
+    return;
+  }
+
+  const primaryWithSuppressed = primaryError as Error & { suppressed?: unknown[] };
+  const suppressed = [...(primaryWithSuppressed.suppressed ?? [])];
+  for (const teardownError of teardownErrors.flatMap((error) => flattenTeardownErrors(error))) {
+    if (teardownError !== primaryError && !suppressed.includes(teardownError)) {
+      suppressed.push(teardownError);
+    }
+  }
+  if (suppressed.length === 0) {
+    return;
+  }
+
+  try {
+    Object.defineProperty(primaryWithSuppressed, "suppressed", {
+      configurable: true,
+      enumerable: true,
+      value: suppressed,
+      writable: true,
+    });
+  } catch {
+    // A frozen primary error still takes precedence over teardown failures.
+  }
+}
+
+function flattenTeardownErrors(error: unknown, seen = new Set<unknown>()): unknown[] {
+  if (!(error instanceof AggregateError) || seen.has(error)) {
+    return [error];
+  }
+
+  seen.add(error);
+  return error.errors.flatMap((nestedError) => flattenTeardownErrors(nestedError, seen));
 }
 
 export function createOpenAIResponseCreate(apiKey: string | undefined, baseURL: string | undefined): ResponseCreate {

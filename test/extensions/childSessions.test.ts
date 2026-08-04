@@ -487,6 +487,50 @@ describe("child session profiles", () => {
     await expect(gitLines(root.repo, ["branch", "--format=%(refname:short)"])).resolves.toEqual(branchesBefore);
   });
 
+  it("stops an edit child when child_session_started recording aborts its parent", async () => {
+    const root = await createRootTaskFixture({ git: true });
+    const controller = new AbortController();
+    const abortError = new Error("parent stopped while recording child start");
+    const parentEvents: TraceEventPayload[] = [];
+    const responseCreate = vi.fn(async () => ({ output: [], output_text: "unreachable" }));
+    const worktreesRoot = path.join(root.repo, ".forge", "worktrees");
+    const worktreesBefore = await fs.readdir(worktreesRoot).catch(() => [] as string[]);
+    const branchesBefore = await gitLines(root.repo, ["branch", "--format=%(refname:short)"]);
+    const runner = createChildSessionRunner({
+      baseCwd: root.repo,
+      parentLifecycleEmitter: createLifecycleEmitter({
+        recorder: {
+          async record(event) {
+            parentEvents.push(event);
+            if (event.type === "child_session_started") {
+              controller.abort(abortError);
+            }
+          },
+        },
+      }),
+      parentSessionId: root.session.metadata.id,
+      responseCreate,
+      signal: controller.signal,
+      taskGraph: root.binding,
+    });
+
+    await expect(runner.run({
+      maxToolRounds: 2,
+      parentCallId: "call_abort_during_child_start",
+      parentRound: 1,
+      profile: "edit",
+      runInBackground: false,
+      task: "Must stop before preparing a worktree.",
+    })).rejects.toBe(abortError);
+
+    expect(parentEvents).toEqual([
+      expect.objectContaining({ type: "child_session_started" }),
+    ]);
+    expect(responseCreate).not.toHaveBeenCalled();
+    await expect(fs.readdir(worktreesRoot).catch(() => [] as string[])).resolves.toEqual(worktreesBefore);
+    await expect(gitLines(root.repo, ["branch", "--format=%(refname:short)"])).resolves.toEqual(branchesBefore);
+  });
+
   it("prepends profile-specific prompt prose while preserving child skill invocations", () => {
     const task = formatChildProfileTask({
       profile: "research",
@@ -633,6 +677,63 @@ describe("AsyncChildSessionManager", () => {
     expect(secondCancel).toHaveBeenCalledOnce();
     expect(manager.pendingCount()).toBe(0);
   });
+
+  it("reports a throwing cancel contract violation without claiming the child is quiescent", async () => {
+    const neverSettles = createDeferred<ChildSessionRunResult>();
+    const conforming = createDeferred<ChildSessionRunResult>();
+    const violatingCancel = vi.fn(() => {
+      throw new Error("cancel threw before settlement");
+    });
+    const conformingCancel = vi.fn(() => {
+      conforming.resolve({
+        childSessionId: "child-conforming",
+        finalAnswer: "Conforming child settled during cancellation.",
+        profile: "research",
+        status: "failed",
+        tracePath: "/repo/.forge/sessions/child-conforming/trace.jsonl",
+      });
+    });
+    const manager = createAsyncChildSessionManager({
+      runner: {
+        run: vi.fn(),
+        start: vi.fn()
+          .mockResolvedValueOnce({
+            cancel: violatingCancel,
+            childSessionId: "child-violating",
+            profile: "research",
+            promise: neverSettles.promise,
+            status: "running",
+            tracePath: "/repo/.forge/sessions/child-violating/trace.jsonl",
+          })
+          .mockResolvedValueOnce({
+            cancel: conformingCancel,
+            childSessionId: "child-conforming",
+            profile: "research",
+            promise: conforming.promise,
+            status: "running",
+            tracePath: "/repo/.forge/sessions/child-conforming/trace.jsonl",
+          }),
+      },
+    });
+    const request = {
+      maxToolRounds: 4,
+      parentCallId: "call_contract_violation",
+      parentRound: 1,
+      profile: "research" as const,
+      runInBackground: true,
+      task: "Expose an invalid cancellation handle.",
+    };
+    await manager.start(request);
+    await manager.start({ ...request, parentCallId: "call_conforming_cancel" });
+
+    await expect(manager.cancelRunning()).rejects.toThrow(
+      'Child session "child-violating" cancel() violated its non-throwing, eventual-settlement contract',
+    );
+
+    expect(violatingCancel).toHaveBeenCalledOnce();
+    expect(conformingCancel).toHaveBeenCalledOnce();
+    expect(manager.pendingCount()).toBe(1);
+  }, 500);
 
   it("starts multiple child sessions and drains terminal notifications once in start order", async () => {
     const first = createDeferred<ChildSessionRunResult>();
