@@ -559,11 +559,15 @@ function gradeC17cTeamCompletion(evidence: EvalAttemptEvidence): EvalGrade {
   const externalTask1Roles = externalEvidenceRoles(task1);
   const externalTask2Roles = externalEvidenceRoles(task2);
   const planBeforeWrite = task3?.plan?.status === "approved"
-    && editorWrites.length === 1
+    && editorWrites.length > 0
     && planApprovedAt !== undefined
     && firstWriteAt !== undefined
-    && planApprovedAt <= firstWriteAt;
-  const writeContradictsPlan = editorWrites.length > 1 || editorWrites.some((write) => (
+    && planApprovedAt <= firstWriteAt
+    && editorWrites.every((write) => {
+      const writeAt = Date.parse(write.timestamp);
+      return Number.isFinite(writeAt) && planApprovedAt <= writeAt;
+    });
+  const writeContradictsPlan = editorWrites.some((write) => (
     task3?.plan?.status !== "approved"
     || planApprovedAt === undefined
     || !Number.isFinite(Date.parse(write.timestamp))

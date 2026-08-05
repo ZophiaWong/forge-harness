@@ -137,7 +137,7 @@ npm run eval -- run --model <model>
 
 Here “offline” means outside real user traffic, not disconnected from the model API. Token and latency telemetry is reported but never changes the behavioral verdict. Version 1 has no LLM judge, price table, model leaderboard, automatic pull-request trigger, or nightly model run.
 
-The linked [regression report](docs/assets/evidence/offline-eval-regression-report.md) is retained as a historical pre-hardening sample. It records an earlier independent 13-attempt `UNCHANGED` run, but does not evidence the hardened contract or current experiment identity. Current evidence requires a new valid canonical baseline followed by the first independent comparable candidate run; it is not resampled for a preferred verdict.
+The linked [regression report](docs/assets/evidence/offline-eval-regression-report.md) records the first independent valid and comparable batch for the current hardened identity. Its `REGRESSED` verdict is kept as-is: async child handoff improved, while one compaction ordering assertion declined. The promoted baseline is committed at [`eval/baselines/`](eval/baselines/), and the candidate was not resampled for a preferred verdict.
 
 The suite, baseline promotion rules, exit codes, manual GitHub workflow, and cleanup boundary are documented in [Offline eval and regression reports](docs/offline-eval.md). The eval is evergreen Runtime hardening and does not consume tutorial chapter `c18`.
 

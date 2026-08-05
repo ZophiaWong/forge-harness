@@ -115,7 +115,7 @@ The root verifier runs only after the gate is ready. A recoverable verification 
 
 Experiment identity contains controlled provider, model, request, scenario, fixture, grader, action-policy, attempt-count, and Runtime-knob inputs. Candidate source, prompt implementation, tool implementation, dependency versions, and environment details remain diagnostics because they are the variables being evaluated. Token usage and measured model duration are also diagnostics; neither changes the verdict.
 
-Raw attempt evidence stays local under `.forge/evals/`. The public summary, JSON report, Markdown report, and promoted baseline reject prompt text, model output, raw tool arguments, absolute paths, and Trace payloads. See [Offline eval and regression reports](offline-eval.md).
+Raw attempt evidence stays local under `.forge/evals/`. The public summary, JSON report, Markdown report, and promoted baseline reject prompt text, model output, raw tool arguments, absolute paths, and Trace payloads. The current curated candidate is the first valid comparable batch for its identity and is recorded in the [offline eval regression report](assets/evidence/offline-eval-regression-report.md). See [Offline eval and regression reports](offline-eval.md) for the operating rules.
 
 ## Extension startup boundary
 
