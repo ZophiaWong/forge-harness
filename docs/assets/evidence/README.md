@@ -28,7 +28,7 @@ These files are evidence summaries, not replacement audit logs and not cryptogra
 
 Offline eval reports follow the same redaction boundary but represent a different evidence shape. A promoted baseline contains only aggregate behavior counts and metrics. A candidate `report.md` contains compatibility, count differences, hard/infrastructure findings, and optional token/latency coverage. Local `.forge/evals/<run-id>/attempts/` data is never a public artifact. See [Offline eval and regression reports](../../offline-eval.md).
 
-The curated [offline eval regression report](offline-eval-regression-report.md) is retained as a historical pre-hardening sample. It records an earlier independent 13-attempt `UNCHANGED` run, but does not evidence the hardened contract or current experiment identity. Current evidence requires a new valid canonical baseline followed by the first independent comparable candidate run; it is not resampled for a preferred verdict.
+The curated [offline eval regression report](offline-eval-regression-report.md) records the first independent valid and comparable batch for the current hardened identity. Its `REGRESSED` verdict is retained because one compaction ordering assertion declined even though async child handoff improved; the candidate was not resampled for a preferred verdict. The matching promoted baseline is committed under [`eval/baselines/`](../../../eval/baselines/).
 
 ## Evidence levels
 

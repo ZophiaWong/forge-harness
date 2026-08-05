@@ -137,7 +137,7 @@ npm run eval -- run --model <model>
 
 这里的 “offline” 指不承载真实用户流量，不代表断网；运行仍会调用模型 API。Token 与 latency 只进入报告，不影响 behavioral verdict。v1 不包含 LLM-as-a-judge、价格表、多模型榜单、自动 PR 触发或 nightly model run。
 
-这份 [regression report](docs/assets/evidence/offline-eval-regression-report.md) 保留为 hardening 前的历史样本。它记录较早的一次独立 13-attempt `UNCHANGED` 运行，但不能作为 hardened contract 或当前 experiment identity 的证据。当前证据需要先建立新的有效 canonical baseline，再执行第一批独立且可比较的 candidate run；不会为了得到偏好的 verdict 而重采样。
+这份 [regression report](docs/assets/evidence/offline-eval-regression-report.md) 记录当前 hardened identity 的第一批有效且可比较的独立运行。它的 `REGRESSED` verdict 原样保留：async child handoff 有一项改善，但 compaction ordering 有一项下降。promoted baseline 已提交在 [`eval/baselines/`](eval/baselines/)，candidate 没有为了得到偏好的 verdict 而重采样。
 
 [Offline eval and regression reports](docs/offline-eval.md)说明了 canonical scenarios、baseline promotion、exit code、手动 GitHub workflow 与清理边界。这是 evergreen Runtime hardening，不占用教程 `c18`。
 

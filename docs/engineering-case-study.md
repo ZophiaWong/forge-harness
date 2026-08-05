@@ -84,7 +84,7 @@ The baseline stores pass counts for each scenario and each outcome assertion. A 
 
 Token usage and model-call duration are useful for explaining change, but v1 does not convert tokens into price or make efficiency a release gate. It also avoids semantic LLM judging, significance claims, automatic pull-request calls, and resampling until a green run appears. The first independent valid comparable batch is the evidence sample, even when its verdict is red.
 
-The linked [regression report](assets/evidence/offline-eval-regression-report.md) is retained as a historical pre-hardening sample. It records an earlier independent 13-attempt `UNCHANGED` run, not evidence for the hardened contract or current experiment identity. Current evidence requires a new valid canonical baseline followed by the first independent comparable candidate run, without resampling for a preferred verdict.
+The linked [regression report](assets/evidence/offline-eval-regression-report.md) records the first independent valid and comparable batch for the current hardened identity. Its `REGRESSED` verdict is kept as evidence: async child handoff improved, while one compaction ordering assertion declined. The candidate was not resampled for a preferred verdict.
 
 ## Known maintenance pressure
 
@@ -102,7 +102,7 @@ Refactoring these modules is maintenance work within the c17c boundary. It shoul
 
 ## Validation strategy
 
-The repository uses four evidence levels:
+The repository uses five evidence levels:
 
 1. Source defines ownership and state transitions.
 2. Focused Vitest cases exercise individual boundaries and failure paths.
