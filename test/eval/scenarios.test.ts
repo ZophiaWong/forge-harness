@@ -1006,6 +1006,42 @@ describe("canonical eval scenarios", () => {
     expect(assertionStatus(grade, "edit-plan-before-write")).toBe("failed");
   });
 
+  it("allows repeated editor writes after plan approval", () => {
+    const graph = completedC17cGraph();
+    const evidence = c17cEvidence();
+    const editorEvents = callEvents({
+      arguments: {
+        content: "issue: FH-16\nstatus: integrated by c17c\n",
+        path: "c17c-coordination-demo.txt",
+      },
+      callId: "approved-write-1",
+      name: "write",
+      sequence: 1,
+      sessionId: "editor-session",
+    }).concat(callEvents({
+      arguments: {
+        content: "issue: FH-16\nstatus: integrated by c17c\n",
+        path: "c17c-coordination-demo.txt",
+      },
+      callId: "approved-write-2",
+      name: "write",
+      sequence: 2,
+      sessionId: "editor-session",
+    })).map((event) => ({
+      ...event,
+      timestamp: "2026-08-03T00:10:00.000Z",
+    }));
+    evidence.sessions.push(session("teammate", editorEvents, {
+      name: "protocol-editor",
+      profile: "edit",
+    }));
+    evidence.taskGraph = graph;
+
+    const grade = getEvalScenario("c17c-team-completion").grade(evidence);
+
+    expect(assertionStatus(grade, "edit-plan-before-write")).toBe("passed");
+  });
+
   it("fails contradictory submission, verdict, and receipt fingerprints", () => {
     const graph = completedC17cGraph();
     const task3 = requiredTask(graph, "task_003");
