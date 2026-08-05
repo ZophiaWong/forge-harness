@@ -1,0 +1,83 @@
+{
+  "aggregates": [
+    {
+      "assertionPassCounts": {
+        "background-child": 3,
+        "final-exact": 3,
+        "tokens-read-in-own-sessions": 2
+      },
+      "attemptCount": 3,
+      "passCount": 2,
+      "scenarioId": "async-child-handoff"
+    },
+    {
+      "assertionPassCounts": {
+        "artifact-exact": 1,
+        "plugin-lookup": 1,
+        "protocol-complete": 1
+      },
+      "attemptCount": 1,
+      "passCount": 1,
+      "scenarioId": "c17c-team-completion"
+    },
+    {
+      "assertionPassCounts": {
+        "final-exact": 3,
+        "ordered-reads": 3
+      },
+      "attemptCount": 3,
+      "passCount": 3,
+      "scenarioId": "compaction-retention"
+    },
+    {
+      "assertionPassCounts": {
+        "fact-read": 3,
+        "final-exact": 3,
+        "no-mutation-attempt": 3
+      },
+      "attemptCount": 3,
+      "passCount": 3,
+      "scenarioId": "governed-read-only"
+    },
+    {
+      "assertionPassCounts": {
+        "final-exact": 3,
+        "recovery-completed": 3
+      },
+      "attemptCount": 3,
+      "passCount": 3,
+      "scenarioId": "verification-recovery"
+    }
+  ],
+  "artifactType": "forge-eval-baseline",
+  "identity": {
+    "endpointHash": "ee071e382ae11baecc06ca51545a6d4f3fa74cb3ea12b605d63d0b19ae84fea7",
+    "fingerprint": "f7d6048d0ce0bfe2ffa43003f5cc01e8414591eda93b60faa1edc95d63a32046",
+    "model": "gpt-5.4-mini",
+    "providerId": "my-gateway",
+    "requestFingerprint": "c26e6ddf4a007c3153c65a4a9e3c32d4f3c37713b726cd36484753fbb501364c",
+    "suiteFingerprint": "a61c333e2deb358a0a3cbae71d6368acea8c3b1b20f1f09bf158a01852ba9b2c"
+  },
+  "metrics": {
+    "callCount": 104,
+    "duration": {
+      "knownCalls": 104,
+      "status": "complete",
+      "totalMs": 197093
+    },
+    "tokens": {
+      "knownCalls": 104,
+      "status": "complete",
+      "totals": {
+        "cachedInputTokens": 145408,
+        "inputTokens": 324120,
+        "outputTokens": 13184,
+        "reasoningTokens": 5490,
+        "totalTokens": 337304
+      }
+    }
+  },
+  "promotedAt": "2026-08-05T01:54:00.422Z",
+  "schemaVersion": 1,
+  "sourceRunId": "20260805-015056-2f364ccf"
+}
