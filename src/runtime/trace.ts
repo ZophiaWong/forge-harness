@@ -1,5 +1,9 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
-import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
+import type {
+  ContextCompactionTrigger,
+  RecordedCompactionHeading,
+  RequiredCompactionHeading,
+} from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ModelCallTelemetry } from "../domain/model.js";
 import type {
@@ -163,7 +167,7 @@ export type TraceEventPayload =
       keptRecentRoundCount: number;
       summaryCharCount: number;
       omittedSourceCharCount: number;
-      missingHeadings: RequiredCompactionHeading[];
+      missingHeadings: RecordedCompactionHeading[];
       summary: string;
       telemetry?: ModelCallTelemetry;
     }

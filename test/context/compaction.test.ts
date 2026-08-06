@@ -89,8 +89,8 @@ describe("buildCompactionSource", () => {
     expect(source.text).toContain("# Runtime State");
     expect(source.text).toContain("status: running");
     expect(source.text).toContain("task_summary: The agent is gathering evidence before writing the answer.");
-    expect(source.text).toContain("# Older History To Compact");
-    expect(source.text).toContain("Recent rounds are intentionally not included here because they stay raw");
+    expect(source.text).toContain("# Active Context To Re-evaluate");
+    expect(source.text).toContain("current compacted context and raw rounds");
     expect(source.text).toContain("# Recent History Kept Raw");
     expect(source.text).toContain("round: 2");
     expect(source.text).toContain("tool: read");
@@ -151,7 +151,7 @@ describe("InputHistoryManager", () => {
     });
     history.appendRoundItems(3, [modelCall("call_3", 3), toolOutput("call_3", "round 3 output")]);
     history.applyCompaction({
-      missingHeadings: ["Evidence"],
+      missingHeadings: ["Errors"],
       sourceRoundCount: 1,
       summary: "# Compacted Context\n\n## Task\nSecond summary.",
       trigger: "reactive",
@@ -176,12 +176,178 @@ describe("InputHistoryManager", () => {
       role: "user",
     });
   });
+
+  it("carries the current compacted context into the next source without counting it as a raw round", () => {
+    const history = createInputHistoryManager({
+      pinnedTask: TASK_ITEM,
+      recentRoundsToKeep: 1,
+    });
+
+    history.appendRoundItems(1, [modelCall("call_1", 1), toolOutput("call_1", "alpha marker")]);
+    history.appendRoundItems(2, [modelCall("call_2", 2), toolOutput("call_2", "round 2 output")]);
+    history.appendRoundItems(3, [modelCall("call_3", 3), toolOutput("call_3", "round 3 output")]);
+    history.applyCompaction({
+      missingHeadings: [],
+      sourceRoundCount: 2,
+      summary: [
+        "# Compacted Context",
+        "## User Intent",
+        "Keep the alpha marker.",
+        "## Files",
+        "None",
+        "## Errors",
+        "None",
+        "## Pending Tasks",
+        "None",
+        "## Current Work",
+        "The first compaction completed.",
+        "## Next Step",
+        "Read the next round.",
+      ].join("\n"),
+      trigger: "auto",
+    });
+
+    history.appendRoundItems(4, [modelCall("call_4", 4), toolOutput("call_4", "round 4 output")]);
+    history.appendRoundItems(5, [modelCall("call_5", 5), toolOutput("call_5", "round 5 output")]);
+    const source = buildCompactionSource({
+      history: history.compactableHistory(),
+      recentHistory: history.recentHistory(),
+      sourceItemCharLimit: 4_000,
+      task: TASK_ITEM.content ?? "",
+    });
+
+    expect(source.sourceRoundCount).toBe(2);
+    expect(source.text).toContain("item: compacted_context");
+    expect(source.text).toContain("Keep the alpha marker.");
+    expect(source.text).toContain("round 3 output");
+    expect(source.text).toContain("round: 4");
+  });
+
+  it("rolls compacted context through three consecutive compactions", () => {
+    const history = createInputHistoryManager({
+      pinnedTask: TASK_ITEM,
+      recentRoundsToKeep: 1,
+    });
+    const summary = (marker: string) => [
+      "# Compacted Context",
+      "## User Intent",
+      marker,
+      "## Files",
+      "None",
+      "## Errors",
+      "None",
+      "## Pending Tasks",
+      "None",
+      "## Current Work",
+      "Compaction is being tested.",
+      "## Next Step",
+      "Continue.",
+    ].join("\n");
+
+    for (const round of [1, 2, 3]) {
+      history.appendRoundItems(round, [
+        modelCall(`call_${round}`, round),
+        toolOutput(`call_${round}`, round === 1 ? "alpha marker" : `round ${round} output`),
+      ]);
+    }
+    history.applyCompaction({
+      missingHeadings: [],
+      sourceRoundCount: 2,
+      summary: summary("alpha marker retained in S1"),
+      trigger: "auto",
+    });
+
+    for (const round of [4, 5]) {
+      history.appendRoundItems(round, [modelCall(`call_${round}`, round), toolOutput(`call_${round}`, `round ${round} output`)]);
+    }
+    const secondSource = buildCompactionSource({
+      history: history.compactableHistory(),
+      recentHistory: history.recentHistory(),
+      sourceItemCharLimit: 4_000,
+      task: TASK_ITEM.content ?? "",
+    });
+    expect(secondSource.sourceRoundCount).toBe(2);
+    expect(secondSource.text).toContain("alpha marker retained in S1");
+    history.applyCompaction({
+      missingHeadings: [],
+      sourceRoundCount: secondSource.sourceRoundCount,
+      summary: summary("alpha marker retained in S2"),
+      trigger: "auto",
+    });
+
+    for (const round of [6, 7]) {
+      history.appendRoundItems(round, [modelCall(`call_${round}`, round), toolOutput(`call_${round}`, `round ${round} output`)]);
+    }
+    const thirdSource = buildCompactionSource({
+      history: history.compactableHistory(),
+      recentHistory: history.recentHistory(),
+      sourceItemCharLimit: 4_000,
+      task: TASK_ITEM.content ?? "",
+    });
+
+    expect(thirdSource.sourceRoundCount).toBe(2);
+    expect(thirdSource.text).toContain("alpha marker retained in S2");
+    expect(thirdSource.text).toContain("round 5 output");
+    expect(thirdSource.text).toContain("round 6 output");
+  });
+
+  it("keeps the carried compacted context intact when raw items use a small source limit", () => {
+    const history = createInputHistoryManager({
+      pinnedTask: TASK_ITEM,
+      recentRoundsToKeep: 1,
+    });
+
+    history.appendRoundItems(1, [modelCall("call_1", 1), toolOutput("call_1", "round 1 output")]);
+    history.appendRoundItems(2, [modelCall("call_2", 2), toolOutput("call_2", "round 2 output")]);
+    history.applyCompaction({
+      missingHeadings: [],
+      sourceRoundCount: 1,
+      summary: `# Compacted Context\n## User Intent\n${"x".repeat(5_000)}\n## Files\nFINAL-CONTEXT-MARKER\n## Errors\nNone\n## Pending Tasks\nNone\n## Current Work\nNone\n## Next Step\nContinue.`,
+      trigger: "auto",
+    });
+    history.appendRoundItems(3, [modelCall("call_3", 3), toolOutput("call_3", "round 3 output")]);
+    history.appendRoundItems(4, [modelCall("call_4", 4), toolOutput("call_4", "round 4 output")]);
+
+    const source = buildCompactionSource({
+      history: history.compactableHistory(),
+      recentHistory: history.recentHistory(),
+      sourceItemCharLimit: 40,
+      task: TASK_ITEM.content ?? "",
+    });
+
+    expect(source.text).toContain("FINAL-CONTEXT-MARKER");
+    expect(source.text).toContain("[source item truncated");
+  });
 });
 
 describe("inspectCompactionSummary", () => {
+  it("recognizes the fixed operational handoff headings", () => {
+    const summary = [
+      "# Compacted Context",
+      "## User Intent",
+      "Keep the requested behavior.",
+      "## Files",
+      "None",
+      "## Errors",
+      "None",
+      "## Pending Tasks",
+      "None",
+      "## Current Work",
+      "The implementation is under test.",
+      "## Next Step",
+      "Run the focused test.",
+    ].join("\n");
+
+    expect(inspectCompactionSummary(summary)).toEqual({
+      missingHeadings: [],
+      status: "usable",
+      summary,
+    });
+  });
+
   it("accepts non-empty summaries and reports missing fixed headings", () => {
     expect(inspectCompactionSummary("## Task\nStill working.")).toEqual({
-      missingHeadings: ["Progress", "Evidence", "Open Questions", "Next Step"],
+      missingHeadings: ["User Intent", "Files", "Errors", "Pending Tasks", "Current Work", "Next Step"],
       status: "usable",
       summary: "## Task\nStill working.",
     });
