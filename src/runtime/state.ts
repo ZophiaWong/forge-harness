@@ -1,5 +1,8 @@
 import type { PermissionDecisionAction, PermissionRisk } from "../governance/types.js";
-import type { ContextCompactionTrigger, RequiredCompactionHeading } from "../context/compaction.js";
+import type {
+  ContextCompactionTrigger,
+  RecordedCompactionHeading,
+} from "../context/compaction.js";
 import type {
   TeamTaskFailureCode,
   TeamTaskGraphHealth,
@@ -84,7 +87,7 @@ export interface RuntimeContextCompactionState {
   beforeCharCount: number;
   compactedRoundCount: number;
   keptRecentRoundCount: number;
-  missingHeadings: RequiredCompactionHeading[];
+  missingHeadings: RecordedCompactionHeading[];
   reason: string;
   round: number;
   sourceItemCount: number;

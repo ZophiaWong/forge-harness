@@ -255,7 +255,7 @@ function observeResponseCreate(
 
 function isCompactionRequest(request: ResponseCreateRequest): boolean {
   return request.tools.length === 0
-    && request.instructions.includes("compacting an agent session history");
+    && request.instructions.includes("compacting the active context");
 }
 
 function hasPinnedTask(request: ResponseCreateRequest, pinnedTask: string): boolean {

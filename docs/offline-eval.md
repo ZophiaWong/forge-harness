@@ -66,11 +66,11 @@ An ordinary outcome failure is model behavior: the attempt remains valid and con
 
 ### `compaction-retention`
 
-**Pain point.** Automatic context compaction can discard either the pinned task or evidence collected before compaction, causing repeated work or a wrong final answer.
+**Pain point.** Automatic context compaction can discard either the pinned task or evidence collected before compaction, causing repeated work or a wrong final answer. A second compaction can also replace the first summary without carrying its facts forward.
 
 - **Fixture and pressure:** three long files contain distinct tokens. The task requires one ordered read per round, while `softCharBudget=300` forces compaction and only one recent round stays raw.
 - **Action policy:** the root may only read `alpha.txt`, `bravo.txt`, and `charlie.txt`.
-- **Evidence and grading:** outcome assertions require exactly the three ordered reads and the exact combined token line. Hard assertions require at least one successful compaction, no compaction failure, and the pinned task in every inspected post-compaction model request.
+- **Evidence and grading:** outcome assertions require exactly the three ordered reads and the exact combined token line. Hard assertions require at least one successful compaction, no compaction failure, and the pinned task in every inspected post-compaction model request. The Runtime unit coverage also checks that repeated compactions pass the current `compacted_context` into the next source while counting only raw rounds.
 - **Boundary:** this is one deliberately aggressive retention profile. It does not measure broad long-context reasoning or every compaction policy.
 
 ### `async-child-handoff`

@@ -1648,17 +1648,20 @@ describe("runMinimalLoop", () => {
         output_text: [
           "# Compacted Context",
           "",
-          "## Task",
+          "## User Intent",
           "Read long chapters.",
           "",
-          "## Progress",
+          "## Files",
           "Read c09.",
           "",
-          "## Evidence",
-          "round 1 output was summarized.",
-          "",
-          "## Open Questions",
+          "## Errors",
           "None.",
+          "",
+          "## Pending Tasks",
+          "None.",
+          "",
+          "## Current Work",
+          "round 1 output was summarized.",
           "",
           "## Next Step",
           "Continue with recent reads.",
@@ -1707,7 +1710,7 @@ describe("runMinimalLoop", () => {
         tools: [],
       }),
     );
-    expect(callsFor(responseCreate)[3]?.instructions).toContain("You are compacting an agent session history.");
+    expect(callsFor(responseCreate)[3]?.instructions).toContain("compacting the active context");
     expect(callsFor(responseCreate)[4]?.input).toContainEqual({
       content: expect.stringContaining("# Compacted Context"),
       role: "user",

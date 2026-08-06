@@ -3,11 +3,16 @@ import type { RuntimeState } from "../runtime/state.js";
 export type ContextCompactionTrigger = "auto" | "reactive" | "manual";
 
 export type RequiredCompactionHeading =
-  | "Task"
-  | "Progress"
-  | "Evidence"
-  | "Open Questions"
+  | "User Intent"
+  | "Files"
+  | "Errors"
+  | "Pending Tasks"
+  | "Current Work"
   | "Next Step";
+
+export type LegacyCompactionHeading = "Task" | "Progress" | "Evidence" | "Open Questions" | "Next Step";
+
+export type RecordedCompactionHeading = RequiredCompactionHeading | LegacyCompactionHeading;
 
 export interface CompactableInputItem {
   call_id?: string;
@@ -89,10 +94,11 @@ export const DEFAULT_COMPACTION_OPTIONS: ContextCompactionOptions = {
 };
 
 const REQUIRED_HEADINGS: RequiredCompactionHeading[] = [
-  "Task",
-  "Progress",
-  "Evidence",
-  "Open Questions",
+  "User Intent",
+  "Files",
+  "Errors",
+  "Pending Tasks",
+  "Current Work",
   "Next Step",
 ];
 
@@ -110,9 +116,9 @@ export function buildCompactionSource(options: BuildCompactionSourceOptions): Co
     "These rounds are not summarized because they stay raw in the next model input.",
     ...formatRecentHistoryIndex(options.recentHistory ?? []),
     "",
-    "# Older History To Compact",
-    "Recent rounds are intentionally not included here because they stay raw in the next model input.",
-    "Summarize only the older history below; do not claim that omitted recent rounds are missing evidence.",
+    "# Active Context To Re-evaluate",
+    "The source below contains the current compacted context and raw rounds that will be replaced by the new summary.",
+    "Re-evaluate all supplied context. Recent rounds are shown separately as an index because they stay raw in the next model input.",
   ];
 
   for (const segment of options.history) {
@@ -121,7 +127,9 @@ export function buildCompactionSource(options: BuildCompactionSourceOptions): Co
     for (const item of segment.items) {
       sourceItemCount += 1;
       const formatted = formatInputItemForSource(item);
-      const trimmed = trimSourceItem(formatted, options.sourceItemCharLimit);
+      const trimmed = item.type === "compacted_context"
+        ? { omittedCharCount: 0, text: formatted }
+        : trimSourceItem(formatted, options.sourceItemCharLimit);
       omittedCharCount += trimmed.omittedCharCount;
       lines.push(trimmed.text);
     }
@@ -181,7 +189,21 @@ export function createInputHistoryManager(options: InputHistoryManagerOptions): 
     },
     compactableHistory() {
       const compactableRoundCount = Math.max(0, segments.length - recentRoundCount());
-      return segments.slice(0, compactableRoundCount).map(cloneSegment);
+      const history = segments.slice(0, compactableRoundCount).map(cloneSegment);
+      if (compactedSummary && history.length > 0) {
+        history[0] = {
+          ...history[0],
+          items: [
+            {
+              ...compactedSummary,
+              role: undefined,
+              type: "compacted_context",
+            },
+            ...history[0].items,
+          ],
+        };
+      }
+      return history;
     },
     modelInput() {
       return [
@@ -268,6 +290,10 @@ function formatRuntimeStateAnchor(state: RuntimeState | undefined): string {
 }
 
 function formatInputItemForSource(item: CompactableInputItem): string {
+  if (item.type === "compacted_context") {
+    return ["item: compacted_context", item.content ?? ""].join("\n");
+  }
+
   if (item.role === "user") {
     return ["item: user", item.content ?? ""].join("\n");
   }

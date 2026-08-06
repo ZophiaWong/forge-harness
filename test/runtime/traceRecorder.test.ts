@@ -122,6 +122,45 @@ describe("JsonlTraceRecorder", () => {
     ]);
   });
 
+  it("parses the new compaction headings while keeping legacy headings readable", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-trace-"));
+    const tracePath = path.join(dir, "trace.jsonl");
+    const recorder = createJsonlTraceRecorder({
+      sessionId: "root-session",
+      tracePath,
+    });
+
+    await recorder.record({
+      afterCharCount: 100,
+      beforeCharCount: 200,
+      compactedRoundCount: 1,
+      keptRecentRoundCount: 1,
+      missingHeadings: ["User Intent", "Files", "Errors", "Pending Tasks", "Current Work", "Next Step"],
+      omittedSourceCharCount: 0,
+      reason: "soft budget exceeded",
+      round: 2,
+      sourceItemCount: 2,
+      sourceRoundCount: 1,
+      summary: "# Compacted Context",
+      summaryCharCount: 20,
+      trigger: "auto",
+      type: "context_compacted",
+    });
+
+    const event = parseRecordedTraceEvent(JSON.parse(await fs.readFile(tracePath, "utf8")));
+    expect(event).toMatchObject({
+      missingHeadings: [
+        "User Intent",
+        "Files",
+        "Errors",
+        "Pending Tasks",
+        "Current Work",
+        "Next Step",
+      ],
+      type: "context_compacted",
+    });
+  });
+
   it("serializes concurrent appends in record invocation order", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-trace-"));
     const tracePath = path.join(dir, "trace.jsonl");

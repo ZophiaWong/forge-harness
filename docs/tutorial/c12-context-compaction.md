@@ -4,7 +4,7 @@ c11 之后，模型的 instructions 已经不再写死在 loop 里。`PromptAsse
 
 但 `input` 还有一个旧问题。`runMinimalLoop` 会把 user task、model output、tool output 和 recovery message 一直追加到同一个 history 里。短任务看不出来；一旦模型连续读几个教程章节，下一轮 request 就会带着一长串旧工具结果。
 
-c12 加一个最小的 context compaction core。它不会压缩 system prompt、project memory 或 skill catalog；这些仍然由 c11 每轮重新注入。它只处理 conversation history：旧 rounds 被 LLM 总结成一份 handoff summary，最近两个 rounds 继续保留原文。
+c12 加一个最小的 context compaction core。它不会压缩 system prompt、project memory 或 skill catalog；这些仍然由 c11 每轮重新注入。它只处理 conversation history：可压缩的旧 rounds 被 LLM 总结成一份 handoff summary，最近两个 rounds 继续保留原文。下一次 compaction 还会把当前 summary 作为 active context 一起交给模型，避免连续压缩时丢掉更早的事实。
 
 ## 问题
 
@@ -60,28 +60,31 @@ old raw rounds
 
 compaction call 复用当前 run 的 model 和 `responseCreate`，但不传 tools。它不是隐藏的 agent turn，只负责总结已经提供给它的 history 和当前 `RuntimeState` snapshot。
 
-summary 使用固定标题：
+summary 使用固定的操作性交接 schema：
 
 ```md
 # Compacted Context
 
-## Task
+## User Intent
 ...
 
-## Progress
+## Files
 ...
 
-## Evidence
+## Errors
 ...
 
-## Open Questions
+## Pending Tasks
+...
+
+## Current Work
 ...
 
 ## Next Step
 ...
 ```
 
-harness 只硬性要求 summary 非空。如果缺少某个标题，会把 missing headings 写进 trace metadata，但不会再发一次 repair call。c12 的目标是先把 compaction path 跑通，不把章节变成 summary validator。
+harness 只硬性要求 summary 非空。如果缺少某个标题，会把 missing headings 写进 trace metadata，但不会再发一次 repair call。prompt 会要求每次从全部 supplied active context 重新检查六段；Runtime 不把 `todo tool` 是否被调用当成前提。c12 的目标是让 handoff 可继续工作，同时保留格式偏差的诊断证据。
 
 压缩后，下一轮 input 是：
 
@@ -91,7 +94,17 @@ compacted summary
 last 2 raw rounds
 ```
 
-`user task` 是 pinned item，不压缩。c11 的 instructions、project memory 和 skills 也不在 conversation history 里，所以不交给 summary 覆盖。
+`user task` 是 pinned item，不压缩。c11 的 instructions、project memory 和 skills 也不在 conversation history 里，所以不交给 summary 覆盖。再次 compaction 时，当前 compacted summary 会作为 `compacted_context` source item 与新进入压缩区的 raw rounds 一起被重新总结；它不会在正常 model input 中叠加成多份 summary。
+
+连续压缩的关系可以简化成：
+
+```text
+第一次：R1 + R2 -> S1，保留 R3
+第二次：S1 + R3 + R4 -> S2，保留 R5
+第三次：S2 + R5 + R6 -> S3，保留 R7
+```
+
+`sourceRoundCount` 只计算被替换的 raw rounds，S1/S2 不算额外 round。当前 summary 作为 source context 传递，而不是 prompt 中单独的 `previousSummary` 参数。
 
 如果某次工具结果突然很大，history 在 round 中途超过 hard budget，harness 会执行 `reactive` compaction。reactive compaction 只做一次。压完仍然超过 hard budget，就记录 `context_compaction_failed` 并停止。这比静默丢旧消息更容易复盘。
 
@@ -129,7 +142,7 @@ recentRoundsToKeep: 2
 sourceItemCharLimit: 4_000
 ```
 
-`sourceItemCharLimit` 用在 compaction source builder。旧 history 进入 LLM summary 前，会先被本地整理：过大的 item 截断，并记录 omitted chars。这里就是 c12 里的 `tool result compact` / `micro compact` 位置。
+`sourceItemCharLimit` 用在 compaction source builder。raw history 进入 LLM summary 前，会先被本地整理：过大的 item 截断，并记录 omitted chars。已经压缩过的 `compacted_context` 是接力状态，保持完整，不走 raw item 截断。这里就是 c12 里的 `tool result compact` / `micro compact` 位置。
 
 source 里还会带一个很小的 recent-history index。它只列最近 rounds 的 round number、tool name 和参数摘要，不放完整输出。这样 LLM 知道这些 rounds 会原样保留，不会把“没有出现在旧 history source 里”误判成“证据缺失”。
 
@@ -188,7 +201,7 @@ input: [{ role: "user", content: compactionSource }]
   "afterCharCount": 9200,
   "sourceRoundCount": 1,
   "keptRecentRoundCount": 2,
-  "summary": "# Compacted Context\n\n## Task\n..."
+  "summary": "# Compacted Context\n\n## User Intent\n..."
 }
 ```
 
@@ -284,6 +297,7 @@ observation: read completed
 - `trigger=auto` 说明这是主 request 前的正常维护。
 - `sourceRounds=1` 说明旧 round 被拿去总结。
 - `keptRounds=2` 说明最近两轮仍然保留原文。
+- 后续 compaction 的 source 中会出现 `item: compacted_context`，说明当前 handoff 被继续接力。
 
 再看 trace：
 
