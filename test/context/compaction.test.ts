@@ -289,6 +289,20 @@ describe("InputHistoryManager", () => {
     expect(thirdSource.text).toContain("alpha marker retained in S2");
     expect(thirdSource.text).toContain("round 5 output");
     expect(thirdSource.text).toContain("round 6 output");
+    history.applyCompaction({
+      missingHeadings: [],
+      sourceRoundCount: thirdSource.sourceRoundCount,
+      summary: summary("alpha marker retained in S3"),
+      trigger: "auto",
+    });
+    expect(history.modelInput()).toContainEqual({
+      content: expect.stringContaining("alpha marker retained in S3"),
+      role: "user",
+    });
+    expect(history.modelInput()).not.toContainEqual({
+      content: expect.stringContaining("alpha marker retained in S2"),
+      role: "user",
+    });
   });
 
   it("keeps the carried compacted context intact when raw items use a small source limit", () => {

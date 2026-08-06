@@ -705,15 +705,24 @@ describe("eval attempt runner", () => {
     const attemptRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-compaction-"));
     tempRoots.push(attemptRoot);
     let normalRound = 0;
+    const compactionSources: string[] = [];
+    const postCompactionInputs: string[] = [];
     const paths = ["alpha.txt", "bravo.txt", "charlie.txt"];
     const responseCreate: ResponseCreate = async (request) => {
       if (request.tools.length === 0) {
+        const source = request.input[0];
+        compactionSources.push(
+          source !== undefined && "content" in source && typeof source.content === "string"
+            ? source.content
+            : "",
+        );
+        const marker = `scripted-summary-S${compactionSources.length}`;
         return {
           output: [],
           output_text: [
             "# Compacted Context",
             "## User Intent",
-            "retain all tokens",
+            marker,
             "## Files",
             "read alpha and bravo",
             "## Errors",
@@ -726,6 +735,9 @@ describe("eval attempt runner", () => {
             "read charlie",
           ].join("\n"),
         };
+      }
+      if (compactionSources.length > 0) {
+        postCompactionInputs.push(JSON.stringify(request.input));
       }
       const current = normalRound;
       normalRound += 1;
@@ -761,7 +773,14 @@ describe("eval attempt runner", () => {
       id: "pinned-task-retained",
       status: "passed",
     }));
-    expect(result.sessions[0]?.events.some((event) => event.type === "context_compacted")).toBe(true);
+    expect(compactionSources).toHaveLength(2);
+    expect(compactionSources[1]).toContain("item: compacted_context");
+    expect(compactionSources[1]).toContain("scripted-summary-S1");
+    expect(postCompactionInputs.at(-1)).toContain("scripted-summary-S2");
+    expect(postCompactionInputs.at(-1)).not.toContain("scripted-summary-S1");
+    const compactionEvents = result.sessions[0]?.events.filter((event) => event.type === "context_compacted") ?? [];
+    expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents.map((event) => event.sourceRoundCount)).toEqual([1, 1]);
   });
 
   it("uses the production asynchronous child runner and collects its separate trace", async () => {

@@ -2,7 +2,6 @@ import type { PermissionDecisionAction, PermissionRisk } from "../governance/typ
 import type {
   ContextCompactionTrigger,
   RecordedCompactionHeading,
-  RequiredCompactionHeading,
 } from "../context/compaction.js";
 import type { PromptSectionName } from "../context/promptAssembly.js";
 import type { ModelCallTelemetry } from "../domain/model.js";
