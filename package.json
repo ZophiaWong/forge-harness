@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean:runs": "npm run --silent build && node dist/cli/cleanup.js",
+    "demo:portfolio": "npm run --silent build && node dist/portfolio/cli.js",
     "docs:check": "node scripts/check-doc-links.mjs",
     "eval": "npm run --silent build && node dist/eval/cli.js",
     "smoke:c17c-capstone": "vitest run test/smoke/c17cCapstone.test.ts",
