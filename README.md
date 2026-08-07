@@ -2,6 +2,8 @@
 
 [简体中文](README.zh-CN.md)
 
+[Recruiter portfolio](PORTFOLIO.md) · [Interview cue cards](docs/interview-cue-cards.md)
+
 Forge Harness is a runnable TypeScript coding-agent Runtime. A model's claim that a task is complete is a proposal, not proof. Permissions, execution evidence, isolated workspaces, and verifier commands determine whether the run may finish.
 
 The implementation stops at `c17c Coordination / Completion Protocol`. The repository provides source code for local inspection and execution, not a hosted service. The Chinese tutorial separately explains how the mechanisms evolved.

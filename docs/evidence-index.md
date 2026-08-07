@@ -8,6 +8,14 @@ claim -> implementation -> deterministic validation -> optional live run
 
 The implementation defines the boundary. Tests and smoke runs exercise it without relying on model judgment. Live snapshots show that the integrated CLI reached the same invariants in one model-driven run; they do not promise that every future model run will take the same path.
 
+## Recruiter walkthrough
+
+| Command | Evidence produced | Does not prove |
+| --- | --- | --- |
+| `npm run demo:portfolio` | Three independent no-model scenes: deny-before-dispatch, recovery-before-final, and receipt-before-ready. | One continuous live Session, future model adherence, or OS-level isolation. |
+
+The [bilingual portfolio](../PORTFOLIO.md) is a navigation layer. The [cue cards](interview-cue-cards.md) compress interview timing; this index remains the complete capability map.
+
 ## Repository-level checks
 
 | Command | Evidence produced | Does not prove |

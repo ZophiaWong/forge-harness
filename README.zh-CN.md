@@ -2,6 +2,8 @@
 
 [English](README.md)
 
+[招聘者入口](PORTFOLIO.zh-CN.md) · [面试 cue cards](docs/interview-cue-cards.zh-CN.md)
+
 Forge Harness 是一个可运行的 TypeScript Coding Agent Runtime。模型声称任务已经完成时，Runtime 将它视为 candidate answer，而不是完成证据。权限、执行证据、隔离工作区和验证命令共同决定本次运行能否结束。
 
 当前实现停在 `c17c Coordination / Completion Protocol`。仓库以源码形式提供，可供阅读和本地运行，不包含托管服务。中文教程单独解释这些机制如何逐章演进。
