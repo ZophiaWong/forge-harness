@@ -5,7 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { runMinimalLoop, type MinimalResponse, type ResponseCreate } from "../core/minimalLoop.js";
-import { createDefaultPermissionPolicy } from "../governance/defaultPolicy.js";
 import { createCompletionGate } from "../runtime/completionGate.js";
 import { createGitIntegrationService } from "../runtime/gitIntegration.js";
 import { createFileTeamTaskStore } from "../runtime/teamTaskStore.js";
