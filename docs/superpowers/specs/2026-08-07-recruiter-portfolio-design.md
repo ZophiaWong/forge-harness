@@ -2,7 +2,7 @@
 
 ## Goal
 
-Give a recruiter a truthful three-minute entry point into the c17c Runtime without adding a product feature or pretending that three deterministic scenes are a live model session.
+Give a recruiter a truthful three-minute entry point into the from-scratch TypeScript coding-agent Runtime, showing how independently runnable checkpoints grow from the model-tool loop to the c17c coordination boundary without adding a product feature or pretending that three deterministic scenes are a live model session.
 
 ## Deterministic demo contract
 
@@ -21,9 +21,8 @@ Any failed assertion exits non-zero. The scenes are independent demonstrations, 
 - `README.md` and `README.zh-CN.md` expose links near the first screen but do not duplicate the portfolio narrative.
 - The canonical detailed facts remain in `docs/engineering-case-study.md`, `docs/evidence-index.md`, and operational runbooks.
 
-The three public stories are permission-before-dispatch, context-vs-Trace, and offline-eval compaction regression. They cover the core engineering judgment; the Evidence Index remains the complete capability map.
+The public entry point presents the full Runtime first: its model-tool loop, five architecture responsibilities, and c17c integration path. Three representative engineering decisions then provide depth: permission-before-dispatch, context-vs-Trace, and offline-eval compaction regression. A separate c17c story connects TaskGraph, plan approval, Worktree editing, fingerprint verification, Git receipts, and CompletionGate. These stories are selective recruiter narratives; the Evidence Index remains the complete capability map.
 
 ## Platform and CI boundary
 
 The project supports Linux, macOS, and WSL2 with Node >=20.19, Git, and Bash. Native Windows shell and WSL1 are not supported because the Runtime intentionally executes Bash commands. Ubuntu CI runs the deterministic demo as a no-secret, no-model smoke check.
-

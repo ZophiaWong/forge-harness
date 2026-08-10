@@ -2,7 +2,7 @@
 
 ## Checkpoint 1 — design
 
-- Commit the demo contract, scene boundaries, documentation ownership, and Bash platform boundary.
+- Commit the demo contract, scene boundaries, documentation ownership, Bash platform boundary, and the Runtime-first recruiter information architecture.
 
 ## Checkpoint 2 — red tests
 
@@ -18,12 +18,11 @@
 ## Checkpoint 4 — CI and docs
 
 - Add the demo to the existing Ubuntu workflow.
-- Add bilingual Portfolio pages and cue cards with links to canonical evidence.
+- Add bilingual Portfolio pages and cue cards with links to canonical evidence. Lead with the from-scratch Runtime and five architecture responsibilities, then use three representative engineering decisions plus a c17c integration story.
 - Add only first-screen recruiter links to both READMEs.
 
 ## Guardrails
 
 - No model calls, `.env` reads, network, or new runtime capability.
 - The demo does not claim the three scenes are one live Session.
-- Detailed facts are not duplicated into cue cards; they remain in the case study/runbooks/Evidence Index.
-
+- Detailed facts are not duplicated into cue cards; they remain in the case study/runbooks/Evidence Index. Candidate/final language stays in the concrete verification and c17c sections rather than defining the whole project.
