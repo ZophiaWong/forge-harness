@@ -1,29 +1,36 @@
-# Forge Harness — 招聘者入口
+# Forge Harness：招聘者入口
 
-Forge Harness 是一个从零实现的 TypeScript coding-agent Runtime。核心判断是：模型说“done”只是 candidate，不是完成证明。
+## Forge Harness 构建了什么
 
-## 为什么不能直接相信 “done”
+Forge Harness 是一个从零构建的 TypeScript coding-agent Runtime。项目从可运行的 model-tool loop 起步，通过可独立运行的 checkpoint 逐步加入受治理的工具执行、上下文管理、持久化运行证据、可信扩展、Worktree 隔离委派与多 Agent 协作。
 
-一句流畅回答不能证明写入经过授权、改动发生在正确 workspace、verifier 已通过，或被委派的工作已集成。Forge 把这些判断变成显式状态，并保留可复核证据。
+教程路径保留了 22 个可运行 checkpoint。当前实现推进到 `c17c Coordination / Completion Protocol`。源码、测试、deterministic smoke、经过整理的 live evidence 和 offline eval report 共同说明各项机制的行为边界。
 
-## Runtime 拥有哪些决定权
+## Runtime 负责哪些机制
 
-- handler dispatch 前，permission policy 先决定 `allow`、`ask` 或 `deny`。
-- Prompt context 有界；append-only Trace 保存历史证据。
-- Worktree ownership、TaskGraph transition、plan approval、source fingerprint、verification、Git receipt 和 CompletionGate 都是 Runtime obligation。
-- root verifier 决定 candidate 能否成为 final answer。
+| 层 | Runtime 职责 |
+| --- | --- |
+| `L1 Loop & Execution` | 模型轮次、模型请求、tool call、tool result 和最终回答流程。 |
+| `L2 Governance & Action Boundary` | 权限判断、审批、路径边界和扩展信任。 |
+| `L3 Context & Knowledge` | Prompt assembly、memory、skills、observations、mailbox message 和 compaction。 |
+| `L4 State, Evidence & Reliability` | Session metadata、Trace events、RuntimeState、verification、receipts 和 eval reports。 |
+| `L5 Coordination & Scale` | Background work、child Sessions、Worktrees、TaskGraph、teammates 和 CompletionGate。 |
 
-完整映射见 [Evidence Index](docs/evidence-index.md)，架构边界见 [Architecture overview](docs/architecture-overview.md)。
+## 代表性工程决策
 
-## 三条 failure story
+下面是便于面试展开的选择性入口，不是完整 capability 清单。
 
-1. **Permission before dispatch。** 格式正确的 write 仍可能越权；Runtime 在 handler 运行前 deny，demo 用 dispatch counter 证明实现没有被调用。
-2. **Context 与 Trace 分离。** Compaction 让下一次决策保持有界，append-only Trace 保存有序事实。Compacted context 是决策视图，不是审计账本。
-3. **Offline-eval compaction regression。** 固定场景检测到 ordered-read 从 `3` 降到 `2`，Trace 隔离 repeated-compaction loss；candidate 按 identity 冻结，不为了绿色结果重抽样。见 [Offline-eval guide](docs/offline-eval.md) 和 [regression report](docs/assets/evidence/offline-eval-regression-report.md)。
+1. **Permission before dispatch。** 一个格式正确的 write 仍然要先经过明确的 `allow`、`ask` 或 `deny` 决策，handler 才能运行。Deterministic demo 检查被拒绝请求的 handler dispatch count 仍为零。
+2. **Context 与 Trace 分离。** 下一次模型决策使用有界 observation 和有损 compaction summary。append-only Trace 保存有序的 Runtime 事实。Prompt projection 不是历史账本。
+3. **Offline eval 发现 regression。** 固定 compaction 场景检测到 ordered reads 从 `3` 降到 `2`。Trace 证据把问题定位到 repeated-compaction loss。有效的红色 candidate 按 identity 冻结，没有为了绿色 verdict 重抽样。见 [offline eval guide](docs/offline-eval.md) 和 [regression report](docs/assets/evidence/offline-eval-regression-report.md)。
 
-三条是招聘叙事，不是完整 capability 清单。完整边界请看 Evidence Index。
+## c17c 集成结果
 
-## 三分钟 deterministic demo
+c17c 把多个层次围绕一个 edit task 串起来。teammate 先提交 plan，Leader 审批后，修改才会在独立 Worktree 中发生。Runtime 随后记录 source fingerprint，使用注册的 verification command 检查 source，创建 commit，并通过 Git receipt 完成集成。Candidate 提前到达时，`CompletionGate` 会返回缺失的 obligation；只有 team state 完整后，root verification 才会运行。
+
+公开 live snapshot 记录了一次实际运行，不代表模型未来一定重复相同的行为。详细状态转换见 [c17c evidence](docs/assets/evidence/c17c-team-completion.json) 和 [architecture overview](docs/architecture-overview.md)。
+
+## 确定性演示
 
 前提：Linux、macOS 或 WSL2 上的 Node.js `>=20.19`、Git 和 Bash。不声明 native Windows shell 或 WSL1 支持，因为 Runtime 执行 Bash command。
 
@@ -32,7 +39,7 @@ npm ci
 npm run demo:portfolio
 ```
 
-命令不调用模型、不读取 `.env`，只创建临时 Git repository/worktree，并输出三个稳定 receipt：
+命令不调用模型、不读取 `.env`，只使用临时 Git repository 和 Worktree，并独立运行三个 scene：
 
 ```text
 scene.action-boundary PASS deny-before-dispatch
@@ -40,11 +47,10 @@ scene.verification-recovery PASS recovery-before-final
 scene.coordination-completion PASS receipt-before-ready
 ```
 
-三个 scene 独立演示，不冒充一个 live Session。见 [demo source](src/portfolio/demo.ts) 和 [CI](.github/workflows/ci.yml)。
+三个 scene 是确定性的机制检查，不是同一个 live Session。见 [demo source](src/portfolio/demo.ts) 和 [CI job](.github/workflows/ci.yml)。
 
-## 明确没有实现的能力
+## 证据与边界
 
-当前 c17c Runtime 不声称具备 OS-level sandbox、crash-safe resume/reconciliation、分布式调度或共识、跨 run durable queue、deterministic model reasoning、统计显著性评估或 hosted Web UI。已批准 extension 仍在当前进程和 host permissions 下运行。
+[Evidence Index](docs/evidence-index.md) 把每项主张对应到源码、focused tests、deterministic smoke、可选 live evidence 和明确限制。[Engineering case study](docs/engineering-case-study.md) 按演进顺序说明问题和设计取舍。
 
-实现取舍见 [engineering case study](docs/engineering-case-study.md)，口述节奏见 [cue cards](docs/interview-cue-cards.zh-CN.md)。
-
+当前 c17c Runtime 不声称具备 OS-level sandbox、crash-safe resume 或 reconciliation、分布式调度、跨 run durable queue、deterministic model reasoning、统计显著性评估或 hosted Web UI。已批准的 extension 仍在当前进程和 host permissions 下运行。

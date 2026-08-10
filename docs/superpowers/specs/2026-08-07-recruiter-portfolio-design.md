@@ -17,7 +17,7 @@ Any failed assertion exits non-zero. The scenes are independent demonstrations, 
 ## Public information architecture
 
 - `PORTFOLIO.md` and `PORTFOLIO.zh-CN.md` answer the recruiter questions directly.
-- `docs/interview-cue-cards.md` and its Chinese counterpart contain only a 2–3 minute speaking rhythm, trade-offs, evidence links, and follow-up prompts.
+- `docs/interview-cue-cards.md` and its Chinese counterpart contain only a 2 to 3 minute speaking rhythm, trade-offs, evidence links, and follow-up prompts.
 - `README.md` and `README.zh-CN.md` expose links near the first screen but do not duplicate the portfolio narrative.
 - The canonical detailed facts remain in `docs/engineering-case-study.md`, `docs/evidence-index.md`, and operational runbooks.
 

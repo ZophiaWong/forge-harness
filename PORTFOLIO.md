@@ -1,29 +1,36 @@
-# Forge Harness — recruiter portfolio
+# Forge Harness: recruiter portfolio
 
-Forge Harness is a from-scratch TypeScript coding-agent Runtime. A model's “done” is a candidate, not proof.
+## What Forge Harness builds
 
-## Why “done” is not enough
+Forge Harness is a from-scratch TypeScript coding-agent Runtime. The project starts with a runnable model-tool loop and grows through independently runnable checkpoints that add governed tool execution, context management, durable execution evidence, trusted extensions, Worktree-isolated delegation, and multi-agent coordination.
 
-A fluent answer does not prove that a write was permitted, the right workspace changed, a verifier passed, or delegated work was integrated. Forge makes those decisions explicit and records inspectable evidence.
+The course path preserves 22 runnable checkpoints. The current implementation reaches `c17c Coordination / Completion Protocol`. Source, tests, deterministic smoke runs, curated live evidence, and offline eval reports document the behavior boundaries.
 
-## What the Runtime decides
+## Runtime responsibilities
 
-- Permission policy decides `allow`, `ask`, or `deny` before a tool handler is dispatched.
-- Prompt context is bounded; durable Trace remains the historical ledger.
-- Worktree ownership, TaskGraph transitions, plan approval, source fingerprints, verification, Git receipts, and CompletionGate state are Runtime obligations.
-- The root verifier decides whether a candidate can become a final answer.
+| Layer | Runtime responsibility |
+| --- | --- |
+| `L1 Loop & Execution` | Turns, model requests, tool calls, tool results, and final-answer flow. |
+| `L2 Governance & Action Boundary` | Permission decisions, approvals, path boundaries, and extension trust. |
+| `L3 Context & Knowledge` | Prompt assembly, memory, skills, observations, mailbox messages, and compaction. |
+| `L4 State, Evidence & Reliability` | Session metadata, Trace events, RuntimeState, verification, receipts, and eval reports. |
+| `L5 Coordination & Scale` | Background work, child Sessions, Worktrees, TaskGraph, teammates, and CompletionGate. |
 
-See the complete [Evidence Index](docs/evidence-index.md) and [Architecture overview](docs/architecture-overview.md).
+## Representative engineering decisions
 
-## Three failure stories
+These stories are selective entry points, not a complete capability list.
 
-1. **Permission before dispatch.** An in-scope-looking write can still be denied before its implementation runs; the deterministic demo proves the dispatch counter stays at zero.
-2. **Context versus Trace.** Compaction keeps the next decision bounded, while append-only Trace preserves ordered evidence. Compacted context is useful state, not an audit ledger.
-3. **Offline-eval compaction regression.** A fixed scenario caught ordered reads falling from `3` to `2`; Trace isolated repeated-compaction loss. The valid candidate stayed frozen instead of being resampled for a preferred verdict. See the [offline-eval guide](docs/offline-eval.md) and [public report](docs/assets/evidence/offline-eval-regression-report.md).
+1. **Permission before dispatch.** A valid-looking write still crosses an explicit `allow`, `ask`, or `deny` policy before its handler can run. The deterministic demo checks that a denied request leaves the handler dispatch count at zero.
+2. **Context versus Trace.** The next model decision uses bounded observations and a lossy compaction summary. The append-only Trace keeps ordered Runtime facts. A prompt projection is not the historical ledger.
+3. **Offline eval found a regression.** A fixed compaction scenario recorded ordered reads falling from `3` to `2`. Trace evidence isolated repeated-compaction loss. The valid red candidate stayed frozen instead of being resampled for a preferred verdict. See the [offline eval guide](docs/offline-eval.md) and [regression report](docs/assets/evidence/offline-eval-regression-report.md).
 
-These are recruiter stories, not a complete capability list. The Evidence Index covers MCP/plugin trust, child Sessions, teammates, TaskGraph, verification, cleanup, and their boundaries.
+## c17c integration result
 
-## Three-minute deterministic demo
+The c17c protocol connects the layers around one edit task. A teammate first submits a plan, the Leader approves it, and the edit happens in an isolated Worktree. The source is fingerprinted, verified with its registered command, committed, and integrated with a Git receipt. `CompletionGate` reports the missing obligation when a candidate arrives early and allows root verification only after the team state is complete.
+
+The public live snapshot records one observed run. It does not guarantee future model behavior. The [c17c evidence](docs/assets/evidence/c17c-team-completion.json) and [architecture overview](docs/architecture-overview.md) contain the detailed state transitions.
+
+## Deterministic walkthrough
 
 Prerequisites: Node.js `>=20.19`, Git, and Bash on Linux, macOS, or WSL2. Native Windows shell and WSL1 are not supported because the Runtime executes Bash commands.
 
@@ -32,7 +39,7 @@ npm ci
 npm run demo:portfolio
 ```
 
-The command makes no model call, reads no `.env`, uses temporary Git repositories/worktrees, and emits:
+The command makes no model call, reads no `.env`, and uses temporary Git repositories and Worktrees. It runs three independent scenes:
 
 ```text
 scene.action-boundary PASS deny-before-dispatch
@@ -40,11 +47,10 @@ scene.verification-recovery PASS recovery-before-final
 scene.coordination-completion PASS receipt-before-ready
 ```
 
-The scenes are independent, not one live Session. See [demo source](src/portfolio/demo.ts) and [CI](.github/workflows/ci.yml).
+The scenes are deterministic mechanism checks, not one live Session. See the [demo source](src/portfolio/demo.ts) and [CI job](.github/workflows/ci.yml).
 
-## What is not implemented
+## Evidence and boundaries
 
-This c17c Runtime does not claim OS-level sandboxing, crash-safe resume/reconciliation, distributed scheduling or consensus, durable cross-run queues, deterministic model reasoning, statistical eval significance, or a hosted Web UI. Approved extensions still run in-process with host permissions.
+The [Evidence Index](docs/evidence-index.md) maps each claim to source, focused tests, deterministic smoke runs, optional live evidence, and a stated limitation. The [engineering case study](docs/engineering-case-study.md) explains the failures and design choices in sequence.
 
-See the [engineering case study](docs/engineering-case-study.md) and [interview cue cards](docs/interview-cue-cards.md) for trade-offs and speaking prompts.
-
+The c17c Runtime does not claim OS-level sandboxing, crash-safe resume or reconciliation, distributed scheduling, durable cross-run queues, deterministic model reasoning, statistical eval significance, or a hosted Web UI. Approved extensions still run in-process with host permissions.
