@@ -21,6 +21,7 @@ export type PortfolioScene =
   | "coordination-completion";
 
 export interface PortfolioDemoOptions {
+  explain?: boolean;
   failScene?: PortfolioScene;
 }
 
@@ -32,8 +33,20 @@ export interface PortfolioDemoLine {
 
 export interface PortfolioDemoResult {
   cleaned: boolean;
+  explanations: string[];
   exitCode: 0 | 1;
   lines: PortfolioDemoLine[];
+}
+
+export interface PortfolioCliDependencies {
+  error(message: string): void;
+  log(message: string): void;
+  runDemo(options: PortfolioDemoOptions): Promise<PortfolioDemoResult>;
+}
+
+interface PortfolioSceneExecution {
+  facts: string[];
+  receipt: string;
 }
 
 /**
@@ -44,39 +57,116 @@ export async function runPortfolioDemo(
   options: PortfolioDemoOptions = {},
 ): Promise<PortfolioDemoResult> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "forge-portfolio-demo-"));
+  const explanations: string[] = [];
   const lines: PortfolioDemoLine[] = [];
   let cleaned = false;
   let exitCode: 0 | 1 = 1;
 
   try {
-    await runScene("action-boundary", options, lines, () => runActionBoundaryScene(root));
+    await runScene("action-boundary", options, lines, explanations, () => runActionBoundaryScene(root));
     if (lines.at(-1)?.status !== "FAIL") {
-      await runScene("verification-recovery", options, lines, () => runVerificationRecoveryScene(root));
+      await runScene(
+        "verification-recovery",
+        options,
+        lines,
+        explanations,
+        () => runVerificationRecoveryScene(root),
+      );
     }
     if (lines.at(-1)?.status !== "FAIL") {
-      await runScene("coordination-completion", options, lines, () => runCoordinationCompletionScene(root));
+      await runScene(
+        "coordination-completion",
+        options,
+        lines,
+        explanations,
+        () => runCoordinationCompletionScene(root),
+      );
     }
     exitCode = lines.length === 3 && lines.every((line) => line.status === "PASS") ? 0 : 1;
   } finally {
     await fs.rm(root, { force: true, recursive: true });
     cleaned = true;
   }
-  return { cleaned, exitCode, lines };
+  return { cleaned, explanations, exitCode, lines };
 }
 
-export async function main(): Promise<number> {
-  const result = await runPortfolioDemo();
+export async function main(
+  args: string[] = process.argv.slice(2),
+  dependencies: PortfolioCliDependencies = defaultCliDependencies(),
+): Promise<0 | 1 | 2> {
+  let explain = false;
+  try {
+    explain = parsePortfolioArgs(args);
+  } catch (error) {
+    dependencies.error(`Usage error: ${error instanceof Error ? error.message : String(error)}`);
+    dependencies.error(portfolioUsage());
+    return 2;
+  }
+  if (args[0] === "--help") {
+    dependencies.log(portfolioUsage());
+    return 0;
+  }
+
+  const result = await dependencies.runDemo({ explain });
   for (const line of result.lines) {
-    console.log(`${line.label} ${line.status} ${line.receipt}`);
+    dependencies.log(`${line.label} ${line.status} ${line.receipt}`);
+  }
+  if (explain) {
+    for (const explanation of result.explanations) {
+      dependencies.log(explanation);
+    }
   }
   return result.exitCode;
+}
+
+export function portfolioUsage(): string {
+  return [
+    "Usage: npm run demo:portfolio -- [--explain]",
+    "",
+    "Run the deterministic, no-model recruiter walkthrough.",
+    "  --explain  Add sanitized evidence annotations after the three receipts.",
+    "  --help     Show this help without creating a walkthrough fixture.",
+  ].join("\n");
+}
+
+function parsePortfolioArgs(args: string[]): boolean {
+  if (args.length === 1 && args[0] === "--help") {
+    return false;
+  }
+  if (args.includes("--help")) {
+    throw new Error("--help must be used alone");
+  }
+  let explain = false;
+  for (const arg of args) {
+    if (arg !== "--explain") {
+      throw new Error(`unknown option ${JSON.stringify(arg)}`);
+    }
+    if (explain) {
+      throw new Error("duplicate option --explain");
+    }
+    explain = true;
+  }
+  return explain;
+}
+
+function defaultCliDependencies(): PortfolioCliDependencies {
+  return {
+    error(message) {
+      console.error(message);
+    },
+    log(message) {
+      console.log(message);
+    },
+    runDemo: runPortfolioDemo,
+  };
 }
 
 async function runScene(
   scene: PortfolioScene,
   options: PortfolioDemoOptions,
   lines: PortfolioDemoLine[],
-  run: () => Promise<string>,
+  explanations: string[],
+  run: () => Promise<PortfolioSceneExecution>,
 ): Promise<void> {
   if (options.failScene === scene) {
     lines.push({ label: `scene.${scene}`, receipt: "scripted-failure", status: "FAIL" });
@@ -84,16 +174,21 @@ async function runScene(
   }
 
   try {
-    lines.push({ label: `scene.${scene}`, receipt: await run(), status: "PASS" });
+    const execution = await run();
+    lines.push({ label: `scene.${scene}`, receipt: execution.receipt, status: "PASS" });
+    if (options.explain) {
+      explanations.push(`explain.${scene} ${execution.facts.join(" ")}`);
+    }
   } catch {
     lines.push({ label: `scene.${scene}`, receipt: "assertion-failed", status: "FAIL" });
   }
 }
 
-async function runActionBoundaryScene(root: string): Promise<string> {
+async function runActionBoundaryScene(root: string): Promise<PortfolioSceneExecution> {
   const cwd = path.join(root, "boundary");
   await fs.mkdir(cwd, { recursive: true });
   let dispatchCount = 0;
+  const facts: string[] = [];
   const writeTool: RegisteredTool = {
     definition: {
       description: "portfolio write probe",
@@ -122,7 +217,13 @@ async function runActionBoundaryScene(root: string): Promise<string> {
   };
   const policy: PermissionPolicy = {
     decide() {
-      return { action: "deny", reason: "portfolio policy denies out-of-scope write", risk: "mutating" };
+      const decision = {
+        action: "deny" as const,
+        reason: "portfolio policy denies out-of-scope write",
+        risk: "mutating" as const,
+      };
+      facts.push(`policy=${decision.action === "deny" ? "denied" : decision.action}`);
+      return decision;
     },
   };
   let responseIndex = 0;
@@ -158,13 +259,14 @@ async function runActionBoundaryScene(root: string): Promise<string> {
   if (dispatchCount !== 0) {
     throw new Error("write handler dispatched before policy denial");
   }
-  return "deny-before-dispatch";
+  facts.push(`dispatches=${dispatchCount}`);
+  return { facts, receipt: "deny-before-dispatch" };
 }
 
-async function runVerificationRecoveryScene(root: string): Promise<string> {
+async function runVerificationRecoveryScene(root: string): Promise<PortfolioSceneExecution> {
   const cwd = path.join(root, "verification");
   await fs.mkdir(cwd, { recursive: true });
-  const events: string[] = [];
+  const facts: string[] = [];
   let responseIndex = 0;
   const responseCreate: ResponseCreate = async (): Promise<MinimalResponse> => {
     responseIndex += 1;
@@ -191,11 +293,13 @@ async function runVerificationRecoveryScene(root: string): Promise<string> {
     task: "Demonstrate verification recovery.",
     toolRuntime: emptyToolRuntime,
     transcript: {
-        finalAnswer(answer) {
-        events.push(`final:${answer}`);
+      finalAnswer(answer) {
+        if (answer === "candidate-after-recovery") {
+          facts.push("final=accepted");
+        }
       },
       recoveryAttempt() {
-        events.push("recovery");
+        facts.push("recovery=attempted");
       },
       roundStart() {
         // Stable demo output intentionally omits round numbers.
@@ -210,21 +314,25 @@ async function runVerificationRecoveryScene(root: string): Promise<string> {
     verifier: {
       async verify(context) {
         const result = await verifier.verify(context);
-        events.push(`verification:${result.status}`);
+        facts.push(`verification=${result.status}`);
         return result;
       },
     },
   });
-  const recoveryIndex = events.indexOf("recovery");
-  const finalIndex = events.findIndex((event) => event.startsWith("final:"));
+  const recoveryIndex = facts.indexOf("recovery=attempted");
+  const finalIndex = facts.indexOf("final=accepted");
   if (recoveryIndex < 0 || finalIndex < 0 || recoveryIndex > finalIndex) {
     throw new Error("final answer was accepted before recovery");
   }
-  return "recovery-before-final";
+  if (facts.join(" ") !== "verification=failed recovery=attempted verification=passed final=accepted") {
+    throw new Error("verification recovery facts were not observed in order");
+  }
+  return { facts, receipt: "recovery-before-final" };
 }
 
-async function runCoordinationCompletionScene(root: string): Promise<string> {
+async function runCoordinationCompletionScene(root: string): Promise<PortfolioSceneExecution> {
   const repo = path.join(root, "coordination");
+  const facts: string[] = [];
   await fs.mkdir(repo, { recursive: true });
   await git(["init", "-q"], repo);
   await fs.appendFile(path.join(repo, ".git", "info", "exclude"), ".forge/worktrees/\n", "utf8");
@@ -275,14 +383,20 @@ async function runCoordinationCompletionScene(root: string): Promise<string> {
     id: taskId,
     reason: "Plan is scoped to the editor worktree.",
   });
+  if ((await store.get(taskId)).task.plan?.status !== "approved") {
+    throw new Error("task plan was not approved before the editor write");
+  }
+  facts.push("task=approved");
 
   const earlyGate = createCompletionGate({ cwd: repo, taskStore: store });
   const early = await earlyGate.evaluate();
   if (early.status !== "incomplete") {
     throw new Error("completion gate allowed an early final");
   }
+  facts.push("gate=incomplete");
 
   await fs.writeFile(path.join(teammateWorkspace.path, "portfolio.txt"), "ready\n", "utf8");
+  facts.push("worktree=written");
   const gitIntegration = createGitIntegrationService({ targetCwd: repo });
   const source = {
     kind: "teammate" as const,
@@ -292,6 +406,10 @@ async function runCoordinationCompletionScene(root: string): Promise<string> {
     workspace: { branch: teammateWorkspace.branch, path: teammateWorkspace.path },
   };
   const snapshot = await gitIntegration.capture(source);
+  if (!snapshot.fingerprint) {
+    throw new Error("fingerprint was not captured from the editor worktree");
+  }
+  facts.push("fingerprint=captured");
   await store.addEvidence(teammate, taskId, {
     callId: "portfolio-editor-write",
     references: [{ kind: "artifact", value: "portfolio.txt" }],
@@ -308,6 +426,10 @@ async function runCoordinationCompletionScene(root: string): Promise<string> {
   });
   const taskAfterSubmit = (await store.get(taskId)).task;
   const verification = await gitIntegration.verify(taskAfterSubmit, "test -f portfolio.txt");
+  if (verification.exitCode !== 0 || verification.sourceDrifted) {
+    throw new Error("editor worktree verification did not pass");
+  }
+  facts.push("verification=passed");
   await store.recordVerification(leader, taskId, {
     command: "test -f portfolio.txt",
     exitCode: verification.exitCode,
@@ -316,6 +438,7 @@ async function runCoordinationCompletionScene(root: string): Promise<string> {
   });
   const receipt = await gitIntegration.integrate((await store.get(taskId)).task);
   await store.recordIntegration(leader, taskId, receipt);
+  facts.push("integration=recorded");
   const final = await createCompletionGate({ cwd: repo, taskStore: store }).evaluate();
   if (final.status !== "ready") {
     throw new Error("completion gate did not become ready after receipt");
@@ -323,8 +446,9 @@ async function runCoordinationCompletionScene(root: string): Promise<string> {
   if (!receipt.fingerprint || !(await store.get(taskId)).task.integrationReceipt) {
     throw new Error("integration receipt missing before ready gate");
   }
+  facts.push("gate=ready");
   await git(["worktree", "remove", "--force", teammateWorkspace.path], repo);
-  return "receipt-before-ready";
+  return { facts, receipt: "receipt-before-ready" };
 }
 
 const emptyToolRuntime: ToolRuntime = {
