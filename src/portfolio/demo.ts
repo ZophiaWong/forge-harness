@@ -139,7 +139,7 @@ function parsePortfolioArgs(args: string[]): boolean {
   let explain = false;
   for (const arg of args) {
     if (arg !== "--explain") {
-      throw new Error(`unknown option ${JSON.stringify(arg)}`);
+      throw new Error("unknown_option");
     }
     if (explain) {
       throw new Error("duplicate option --explain");

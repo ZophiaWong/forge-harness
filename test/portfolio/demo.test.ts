@@ -102,4 +102,33 @@ describe("deterministic portfolio demo", () => {
     expect(starts).toBe(0);
     expect(errors.join("\n")).toMatch(/duplicate|unknown/i);
   });
+
+  it("redacts unknown argument values before rejecting them without starting a walkthrough", async () => {
+    let starts = 0;
+    const errors: string[] = [];
+    const dependencies = {
+      error(message: string) {
+        errors.push(message);
+      },
+      log() {
+        // The invalid-argument path must not write normal output.
+      },
+      async runDemo() {
+        starts += 1;
+        return runPortfolioDemo();
+      },
+    };
+    const sensitiveArgs = ["--api-key=sk-secret", "/tmp/recruiter-secret"];
+
+    for (const arg of sensitiveArgs) {
+      await expect(main([arg], dependencies)).resolves.toBe(2);
+    }
+
+    expect(starts).toBe(0);
+    expect(errors).toContain("Usage error: unknown_option");
+    expect(errors.join("\n")).toContain("Usage: npm run demo:portfolio -- [--explain]");
+    for (const arg of sensitiveArgs) {
+      expect(errors.join("\n")).not.toContain(arg);
+    }
+  });
 });
