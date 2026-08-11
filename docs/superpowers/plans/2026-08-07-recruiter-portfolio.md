@@ -19,6 +19,7 @@
 
 - Add the demo to the existing Ubuntu workflow.
 - Add bilingual Portfolio pages and cue cards with links to canonical evidence. Lead with the from-scratch Runtime and five architecture responsibilities, then use three representative engineering decisions plus a c17c integration story.
+- Present deterministic `--explain` as the screen-share command and document the optional Live boundary on the Portfolio pages. Keep the README and cue cards concise rather than turning them into an interview script.
 - Add only first-screen recruiter links to both READMEs.
 
 ## Guardrails

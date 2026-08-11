@@ -28,6 +28,14 @@ The live path keeps the Runtime action boundary in force and succeeds only when 
 
 The deterministic command continues to accept only `--help` and `--explain`; `--help` is standalone. Any unknown argument, duplicate flag, or unsupported flag combination writes a concise usage error to stderr and exits `2` without creating a fixture or contacting a provider. The Live walkthrough is a separate operator command, not a flag or explain variant of the deterministic walkthrough.
 
+### Recruiter presentation boundary
+
+The bilingual Portfolio pages present `npm run demo:portfolio -- --explain` as the roughly three-minute screen-share command. It runs the same three independent no-model scenes as the default deterministic command. The `--explain` annotations are stable and sanitized.
+
+`npm run demo:portfolio:live` is an optional 5 to 8 minute extension. It needs an interactive TTY, Git, Bash, Node.js `>=20.19`, `OPENAI_API_KEY`, and `OPENAI_MODEL`. It uses a disposable fixture and manual approvals. Its real model output varies. CI does not run it, and its transcript is not reusable evidence. If Live is unavailable or fails in an interview, the operator returns to the deterministic walkthrough without debugging the Live run.
+
+The Portfolio pages keep the presentation brief. They do not include a video or a full interview script. They make no claim that post-fix compaction evidence is closed or independently validated.
+
 ### Fixture, output, and evidence boundaries
 
 Each valid walkthrough invocation owns a fresh temporary fixture under the system temporary directory after its arguments have been parsed. It may create its fixture Git repository and worktree there only, and must remove them in `finally` on success, assertion failure, provider failure, or interruption that reaches cleanup. `--help` and invalid-argument paths create no fixture. A walkthrough must not mutate the caller's checkout, source tree, existing worktrees, or credentials.

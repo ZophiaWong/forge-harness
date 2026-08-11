@@ -30,16 +30,18 @@ The c17c protocol connects the layers around one edit task. A teammate first sub
 
 The public live snapshot records one observed run. It does not guarantee future model behavior. The [c17c evidence](docs/assets/evidence/c17c-team-completion.json) and [architecture overview](docs/architecture-overview.md) contain the detailed state transitions.
 
-## Deterministic walkthrough
+## Interview demo modes
 
 Prerequisites: Node.js `>=20.19`, Git, and Bash on Linux, macOS, or WSL2. Native Windows shell and WSL1 are not supported because the Runtime executes Bash commands.
 
+For a roughly three-minute screen share, run:
+
 ```bash
 npm ci
-npm run demo:portfolio
+npm run demo:portfolio -- --explain
 ```
 
-The command makes no model call, reads no `.env`, and uses temporary Git repositories and Worktrees. It runs three independent scenes:
+This deterministic walkthrough makes no model call, reads no `.env`, and uses temporary Git repositories and Worktrees. It runs the same three independent scenes as the default command, with stable sanitized annotations that explain the Runtime boundary behind each receipt:
 
 ```text
 scene.action-boundary PASS deny-before-dispatch
@@ -47,7 +49,15 @@ scene.verification-recovery PASS recovery-before-final
 scene.coordination-completion PASS receipt-before-ready
 ```
 
-The scenes are deterministic mechanism checks, not one live Session. See the [demo source](src/portfolio/demo.ts) and [CI job](.github/workflows/ci.yml).
+The scenes are deterministic mechanism checks, not one live Session. CI runs this path. See the [demo source](src/portfolio/demo.ts) and [CI job](.github/workflows/ci.yml).
+
+An optional 5 to 8 minute extension is available when an interactive terminal, Git, Bash, Node.js `>=20.19`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are available:
+
+```bash
+npm run demo:portfolio:live
+```
+
+Live uses a disposable fixture and asks for manual approvals. Its real model output can vary between runs. It is not a CI check or reusable evidence. If it fails, return immediately to the deterministic walkthrough. Do not debug the Live run during an interview.
 
 ## Evidence and boundaries
 

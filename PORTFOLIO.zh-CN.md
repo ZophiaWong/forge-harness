@@ -30,16 +30,18 @@ c17c 把多个层次围绕一个 edit task 串起来。teammate 先提交 plan�
 
 公开 live snapshot 记录了一次实际运行，不代表模型未来一定重复相同的行为。详细状态转换见 [c17c evidence](docs/assets/evidence/c17c-team-completion.json) 和 [architecture overview](docs/architecture-overview.md)。
 
-## 确定性演示
+## 面试演示模式
 
 前提：Linux、macOS 或 WSL2 上的 Node.js `>=20.19`、Git 和 Bash。不声明 native Windows shell 或 WSL1 支持，因为 Runtime 执行 Bash command。
 
+约三分钟的屏幕演示使用：
+
 ```bash
 npm ci
-npm run demo:portfolio
+npm run demo:portfolio -- --explain
 ```
 
-命令不调用模型、不读取 `.env`，只使用临时 Git repository 和 Worktree，并独立运行三个 scene：
+这条确定性命令不调用模型、不读取 `.env`，只使用临时 Git repository 和 Worktree。它运行与默认命令相同的三个独立 scene，并为每条 receipt 补充稳定、经过脱敏的 Runtime 边界说明：
 
 ```text
 scene.action-boundary PASS deny-before-dispatch
@@ -47,7 +49,9 @@ scene.verification-recovery PASS recovery-before-final
 scene.coordination-completion PASS receipt-before-ready
 ```
 
-三个 scene 是确定性的机制检查，不是同一个 live Session。见 [demo source](src/portfolio/demo.ts) 和 [CI job](.github/workflows/ci.yml)。
+三个 scene 是确定性的机制检查，不是同一个 live Session。这也是 CI 使用的路径。见 [demo source](src/portfolio/demo.ts) 和 [CI job](.github/workflows/ci.yml)。
+
+如果具备 interactive TTY、Git、Bash、Node.js `>=20.19`、`OPENAI_API_KEY` 和 `OPENAI_MODEL`，可以把 `npm run demo:portfolio:live` 作为可选的 5 到 8 分钟延伸。它使用一次性的临时 fixture，并需要手动 approval。真实模型输出每次都可能不同，因此它不是 CI 检查，也不是可复用证据。Live 运行失败时，立刻回到确定性 walkthrough，不要在面试中排查。
 
 ## 证据与边界
 
