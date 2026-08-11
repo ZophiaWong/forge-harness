@@ -16,6 +16,7 @@ import {
 } from "../../src/portfolio/live.js";
 import { createCliSessionTrace } from "../../src/runtime/session.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
+import type { TraceRecorder } from "../../src/runtime/trace.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,9 +76,25 @@ describe("focused live portfolio walkthrough", () => {
       expect(packageJson.scripts).toEqual({ test: "node --test" });
       expect(await fs.readFile(path.join(fixture, "src", "slugify.mjs"), "utf8"))
         .toContain("export function slugify");
-      expect(await fs.readFile(path.join(fixture, "test", "slugify.test.mjs"), "utf8"))
-        .toContain('assert.equal(slugify("  Hello   Forge  "), "hello-forge")');
-      await expect(execFileAsync("npm", ["test"], { cwd: fixture })).rejects.toMatchObject({ code: 1 });
+      await expectFailedNpmTest(fixture);
+
+      await fs.writeFile(
+        path.join(fixture, "src", "slugify.mjs"),
+        'export function slugify(value) { return value.trim().replace(/\\s+/g, "-"); }\n',
+      );
+      await expectFailedNpmTest(fixture);
+
+      await fs.writeFile(
+        path.join(fixture, "src", "slugify.mjs"),
+        'export function slugify(value) { return value.trim().toLowerCase(); }\n',
+      );
+      await expectFailedNpmTest(fixture);
+
+      await fs.writeFile(
+        path.join(fixture, "src", "slugify.mjs"),
+        'export function slugify(value) { return value.trim().toLowerCase().replace(/\\s+/g, "-"); }\n',
+      );
+      await expect(execFileAsync("npm", ["test"], { cwd: fixture })).resolves.toMatchObject({});
     } finally {
       await fs.rm(fixture, { force: true, recursive: true });
     }
@@ -212,6 +229,126 @@ describe("focused live portfolio walkthrough", () => {
     }
   });
 
+  it.each([
+    { role: "root" as const, toolName: "delegate" },
+    { role: "child" as const, toolName: "edit" },
+    { role: "root" as const, toolName: "task_verify" },
+    { role: "root" as const, toolName: "task_integrate" },
+  ])("rejects missing manual approval evidence for $toolName", async ({ role, toolName }) => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const sessionDir = role === "root"
+        ? await findRootSessionDir(fixture)
+        : await findChildSessionDir(fixture);
+      await rewriteTrace(sessionDir, (events) => events.filter((event) => !(
+        event.type === "approval_result" && event.toolName === toolName
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/approval/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects auto-allowed evidence for a manually approved action", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => events.map((event) => (
+        event.type === "permission_decision" && event.toolName === "delegate"
+          ? { ...event, action: "allow" }
+          : event
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/approval/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects child source metadata outside the Runtime worktree convention", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const childSessionDir = await findChildSessionDir(fixture);
+      const childMetadataPath = path.join(childSessionDir, "session.json");
+      const childMetadata = JSON.parse(await fs.readFile(childMetadataPath, "utf8")) as {
+        workspace: { branch: string; path: string };
+      };
+      const wrongWorkspace = {
+        branch: "fabricated/child",
+        path: path.join(fixture, "outside-runtime-layout"),
+      };
+      Object.assign(childMetadata.workspace, wrongWorkspace);
+      await fs.writeFile(childMetadataPath, `${JSON.stringify(childMetadata, null, 2)}\n`);
+
+      const rootSessionDir = await findRootSessionDir(fixture);
+      const graphPath = path.join(rootSessionDir, "task-graph.json");
+      const graph = JSON.parse(await fs.readFile(graphPath, "utf8")) as {
+        tasks: Array<{
+          integrationReceipt: { source: { workspace: { branch: string; path: string } } };
+          submission: { source: { workspace: { branch: string; path: string } } };
+        }>;
+      };
+      Object.assign(graph.tasks[0]?.submission.source.workspace ?? {}, wrongWorkspace);
+      Object.assign(graph.tasks[0]?.integrationReceipt.source.workspace ?? {}, wrongWorkspace);
+      await fs.writeFile(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
+      await rewriteTrace(rootSessionDir, (events) => events.map((event) => (
+        (event.type === "child_session_finished" || event.type === "child_session_handoff")
+          ? {
+              ...event,
+              workspace: {
+                ...(event.workspace as Record<string, unknown>),
+                ...wrongWorkspace,
+              },
+            }
+          : event
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/child session/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("requires the last root verification before final to be passed npm test", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => {
+        const finalIndex = events.findIndex((event) => event.type === "final_answer");
+        const envelope = [...events].reverse().find(
+          (event) => event.type === "verification_result",
+        ) as Record<string, unknown>;
+        return [
+          ...events.slice(0, finalIndex),
+          {
+            ...envelope,
+            command: "npm test",
+            exitCode: 1,
+            name: "command",
+            round: 10,
+            status: "failed",
+            summary: "failed after prior pass",
+            type: "verification_result",
+          },
+          ...events.slice(finalIndex),
+        ];
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/completion evidence/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
   it("cleans up when the child fails", async () => {
     let fixture = "";
     const result = await runLivePortfolioDemo({
@@ -336,6 +473,46 @@ describe("focused live portfolio walkthrough", () => {
     expect(result).toEqual({ cleaned: false, reason: "cleanup_failed", status: "FAIL" });
     await fs.rm(fixture, { force: true, recursive: true });
   });
+
+  it("keeps repeated signal handling active until async cleanup finishes", async () => {
+    let fixture = "";
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+    let handlersRemoved = false;
+    let removedBeforeCleanup = false;
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      async createFixture() {
+        fixture = await createLivePortfolioFixture();
+        return fixture;
+      },
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => {
+          handlersRemoved = true;
+        };
+      },
+      async removeFixture(pathname) {
+        removedBeforeCleanup = handlersRemoved;
+        interrupt?.("SIGINT");
+        interrupt?.("SIGTERM");
+        await fs.rm(pathname, { force: true, recursive: true });
+      },
+      runFixtureTests: async () => 1,
+      scheduleForceKill: () => () => undefined,
+      spawnCli(_command, _args, options) {
+        return completedProcess(async () => {
+          await writePassingRootEvidence(options.cwd);
+          return { exitCode: 0, signal: null };
+        });
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "interrupted", status: "FAIL" });
+    expect(removedBeforeCleanup).toBe(false);
+    expect(handlersRemoved).toBe(true);
+    await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
 
 function configuredEnvironment(): NodeJS.ProcessEnv {
@@ -402,22 +579,14 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     "utf8",
   );
   const leader = { role: "leader" as const, sessionId: session.metadata.id };
-  const childWorkspace = {
-    baseBranch: "main",
-    baseCommit: "d".repeat(40),
-    branch: "forge/child/test",
-    mode: "git_worktree" as const,
-    path: path.join(cwd, "child"),
-  };
   const childSession = await createCliSessionTrace({
-    baseCwd: cwd,
     child: {
       parentCallId: "delegate-child",
       parentSessionId: session.metadata.id,
       profile: "edit",
       role: "child",
     },
-    cwd: childWorkspace.path,
+    cwd,
     maxToolRounds: 8,
     model: "test-model",
     task: "repair slugify",
@@ -426,8 +595,25 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
       rootSessionId: session.metadata.id,
       taskGraphPath: graph.taskGraphPath,
     },
-    workspace: childWorkspace,
   });
+  const childWorkspace = {
+    baseBranch: "main",
+    baseCommit: "d".repeat(40),
+    branch: `forge/run/${childSession.metadata.id}`,
+    mode: "git_worktree" as const,
+    path: path.join(cwd, ".forge", "worktrees", childSession.metadata.id),
+  };
+  childSession.metadata = {
+    ...childSession.metadata,
+    baseCwd: cwd,
+    cwd: childWorkspace.path,
+    workspace: childWorkspace,
+  };
+  await fs.writeFile(
+    childSession.paths.sessionMetadataPath,
+    `${JSON.stringify(childSession.metadata, null, 2)}\n`,
+    "utf8",
+  );
   const child = {
     delegatedTaskId: "task_001",
     profile: "edit" as const,
@@ -485,6 +671,24 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     sourceCommit: commit,
     targetBefore: "c".repeat(40),
   });
+  await childSession.recorder.record({
+    baseCwd: cwd,
+    cwd: childWorkspace.path,
+    maxToolRounds: 8,
+    model: "test-model",
+    task: "repair slugify",
+    type: "session_started",
+    workspace: childWorkspace,
+  });
+  await childSession.recorder.record({
+    baseBranch: childWorkspace.baseBranch,
+    baseCommit: childWorkspace.baseCommit,
+    baseCwd: cwd,
+    branch: childWorkspace.branch,
+    type: "workspace_created",
+    workspacePath: childWorkspace.path,
+  });
+  await recordApprovedAction(childSession.recorder, "child-write", "edit", 1);
   await childSession.recorder.record({ answer: "fixed", round: 2, type: "final_answer" });
   await childSession.recorder.record({ rounds: 2, status: "completed", type: "session_ended" });
   await session.recorder.record({
@@ -504,6 +708,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     type: "workspace_created",
     workspacePath: rootWorkspace.path,
   });
+  await recordApprovedAction(session.recorder, "delegate-child", "delegate", 2);
   await session.recorder.record({
     childSessionId: child.sessionId,
     parentCallId: "delegate-child",
@@ -537,6 +742,8 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     type: "child_session_handoff",
     workspace: childWorkspace,
   });
+  await recordApprovedAction(session.recorder, "verify-task", "task_verify", 7);
+  await recordApprovedAction(session.recorder, "integrate-task", "task_integrate", 8);
   await session.recorder.record({
     command: "npm test",
     exitCode: 0,
@@ -563,4 +770,61 @@ async function findRootSessionDir(fixture: string): Promise<string> {
     }
   }
   throw new Error("root session not found");
+}
+
+async function findChildSessionDir(fixture: string): Promise<string> {
+  const sessionsRoot = path.join(fixture, ".forge", "sessions");
+  const sessions = await fs.readdir(sessionsRoot);
+  for (const session of sessions) {
+    const sessionDir = path.join(sessionsRoot, session);
+    const metadata = JSON.parse(await fs.readFile(path.join(sessionDir, "session.json"), "utf8")) as {
+      child?: unknown;
+    };
+    if (metadata.child) {
+      return sessionDir;
+    }
+  }
+  throw new Error("child session not found");
+}
+
+async function rewriteTrace(
+  sessionDir: string,
+  mutate: (events: Array<Record<string, unknown>>) => Array<Record<string, unknown>>,
+): Promise<void> {
+  const tracePath = path.join(sessionDir, "trace.jsonl");
+  const events = (await fs.readFile(tracePath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const rewritten = mutate(events).map((event, index) => ({ ...event, sequence: index + 1 }));
+  await fs.writeFile(tracePath, `${rewritten.map((event) => JSON.stringify(event)).join("\n")}\n`);
+}
+
+async function recordApprovedAction(
+  recorder: TraceRecorder,
+  callId: string,
+  toolName: string,
+  round: number,
+): Promise<void> {
+  await recorder.record({
+    action: "ask",
+    callId,
+    reason: "manual approval required",
+    risk: "mutating",
+    round,
+    toolName,
+    type: "permission_decision",
+  });
+  await recorder.record({
+    approved: true,
+    callId,
+    round,
+    toolName,
+    type: "approval_result",
+  });
+}
+
+async function expectFailedNpmTest(fixture: string): Promise<void> {
+  await expect(execFileAsync("npm", ["test"], { cwd: fixture }))
+    .rejects.toMatchObject({ code: 1 });
 }

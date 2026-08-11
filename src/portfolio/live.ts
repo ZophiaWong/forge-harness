@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { config as loadDotEnv } from "dotenv";
 
 import { parseTeamTaskGraphFile } from "../domain/teamTask.js";
+import type { RecordedTraceEvent } from "../runtime/trace.js";
 import { parseRecordedTraceEvent } from "../runtime/traceSchema.js";
 
 const execFileAsync = promisify(execFile);
@@ -169,8 +170,6 @@ export async function runLivePortfolioDemo(
         ? { cleaned: false, reason: "setup_failed", status: "FAIL" }
         : { cleaned: false, reason: "child_failed", status: "FAIL" };
   } finally {
-    cancelForceKill();
-    removeSignalHandlers();
     if (fixture) {
       try {
         await dependencies.removeFixture(fixture);
@@ -181,6 +180,11 @@ export async function runLivePortfolioDemo(
     } else {
       result.cleaned = true;
     }
+    if (interrupted && result.reason !== "cleanup_failed") {
+      result = { cleaned: result.cleaned, reason: "interrupted", status: "FAIL" };
+    }
+    cancelForceKill();
+    removeSignalHandlers();
   }
 
   return result;
@@ -219,8 +223,16 @@ export async function createLivePortfolioFixture(): Promise<string> {
         "",
         'import { slugify } from "../src/slugify.mjs";',
         "",
-        'test("trims, lowercases, and collapses whitespace to hyphens", () => {',
-        '  assert.equal(slugify("  Hello   Forge  "), "hello-forge");',
+        'test("trims surrounding whitespace", () => {',
+        '  assert.equal(slugify("  forge  "), "forge");',
+        "});",
+        "",
+        'test("lowercases text", () => {',
+        '  assert.equal(slugify("Forge"), "forge");',
+        "});",
+        "",
+        'test("collapses whitespace to hyphens", () => {',
+        '  assert.equal(slugify("hello \\t world"), "hello-world");',
         "});",
         "",
       ].join("\n"),
@@ -325,23 +337,25 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   ) {
     throw new Error("root trace is missing worktree startup evidence");
   }
-  const verificationIndex = events.findIndex((event) => (
-    event.type === "verification_result"
-    && event.name === "command"
-    && event.status === "passed"
-    && event.command === "npm test"
-    && event.exitCode === 0
-  ));
   const finals = events.filter((event) => event.type === "final_answer");
   const completedEnds = events.filter((event) => (
     event.type === "session_ended" && event.status === "completed"
   ));
   const finalIndex = events.findIndex((event) => event === finals[0]);
   const completedIndex = events.findIndex((event) => event === completedEnds[0]);
+  const verificationsBeforeFinal = events
+    .map((event, index) => ({ event, index }))
+    .filter((entry) => entry.index < finalIndex && entry.event.type === "verification_result");
+  const terminalVerification = verificationsBeforeFinal.at(-1);
+  const verificationIndex = terminalVerification?.index ?? -1;
   if (
-    verificationIndex < 0
-    || finals.length !== 1
+    finals.length !== 1
     || completedEnds.length !== 1
+    || terminalVerification?.event.type !== "verification_result"
+    || terminalVerification.event.name !== "command"
+    || terminalVerification.event.status !== "passed"
+    || terminalVerification.event.command !== "npm test"
+    || terminalVerification.event.exitCode !== 0
     || finalIndex <= verificationIndex
     || completedIndex <= finalIndex
     || completedIndex !== events.length - 1
@@ -403,8 +417,19 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const childLink = childSession.metadata.child;
   const childTaskGraph = childSession.metadata.taskGraph;
   const childWorkspace = childSession.metadata.workspace;
+  const expectedChildWorkspacePath = path.join(
+    fixture,
+    ".forge",
+    "worktrees",
+    childSession.id,
+  );
+  const expectedChildBranch = `forge/run/${childSession.id}`;
   if (
-    !isRecord(childLink)
+    childSession.id !== path.basename(childSession.sessionDir)
+    || childSession.metadata.baseCwd !== fixture
+    || childSession.metadata.cwd !== expectedChildWorkspacePath
+    || childSession.metadata.tracePath !== path.join(childSession.sessionDir, "trace.jsonl")
+    || !isRecord(childLink)
     || childLink.parentSessionId !== root.id
     || childLink.profile !== "edit"
     || childLink.role !== "child"
@@ -414,6 +439,8 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || childTaskGraph.taskGraphPath !== path.join(root.sessionDir, "task-graph.json")
     || !isRecord(childWorkspace)
     || childWorkspace.mode !== "git_worktree"
+    || childWorkspace.branch !== expectedChildBranch
+    || childWorkspace.path !== expectedChildWorkspacePath
     || childWorkspace.branch !== submissionSource.workspace.branch
     || childWorkspace.path !== submissionSource.workspace.path
   ) {
@@ -427,6 +454,9 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const startIndex = events.findIndex((event) => event === starts[0]);
   const finishIndex = events.findIndex((event) => event === finishes[0]);
   const handoffIndex = events.findIndex((event) => event === handoffs[0]);
+  const delegateApprovalIndex = requireManualApproval(events, ["delegate"]);
+  const verifyApprovalIndex = requireManualApproval(events, ["task_verify"]);
+  const integrateApprovalIndex = requireManualApproval(events, ["task_integrate"]);
   if (
     starts.length !== 1
     || starts[0]?.childSessionId !== childSession.id
@@ -452,8 +482,11 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || !sameStrings(handoffs[0].changedFiles, expectedChangedFiles)
     || startIndex < 0
     || startIndex <= sessionStartIndex
+    || delegateApprovalIndex >= startIndex
     || finishIndex <= startIndex
     || handoffIndex <= finishIndex
+    || verifyApprovalIndex <= handoffIndex
+    || integrateApprovalIndex <= verifyApprovalIndex
     || verificationIndex <= handoffIndex
     || !isRecord(childLink)
     || childLink.parentCallId !== starts[0].parentCallId
@@ -476,7 +509,12 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const childCompletedIndex = childEvents.findIndex((event) => (
     event.type === "session_ended" && event.status === "completed"
   ));
-  if (childFinalIndex < 0 || childCompletedIndex <= childFinalIndex) {
+  const editApprovalIndex = requireManualApproval(childEvents, ["edit", "write"]);
+  if (
+    childFinalIndex < 0
+    || editApprovalIndex >= childFinalIndex
+    || childCompletedIndex <= childFinalIndex
+  ) {
     throw new Error("child session is missing terminal evidence");
   }
 }
@@ -544,8 +582,8 @@ async function runInitialFixtureTests(fixture: string): Promise<number> {
 function installProcessSignalHandlers(handler: (signal: NodeJS.Signals) => void): () => void {
   const onSigint = () => handler("SIGINT");
   const onSigterm = () => handler("SIGTERM");
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
   return () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
@@ -575,4 +613,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function sameStrings(actual: string[] | undefined, expected: string[]): boolean {
   return actual?.length === expected.length
     && actual.every((value, index) => value === expected[index]);
+}
+
+function requireManualApproval(events: RecordedTraceEvent[], toolNames: string[]): number {
+  const decisions: Array<{
+    event: Extract<RecordedTraceEvent, { type: "permission_decision" }>;
+    index: number;
+  }> = [];
+  for (const [index, event] of events.entries()) {
+    if (event.type === "permission_decision" && toolNames.includes(event.toolName)) {
+      decisions.push({ event, index });
+    }
+  }
+  if (decisions.length !== 1) {
+    throw new Error(`manual approval evidence missing for ${toolNames.join("/")}`);
+  }
+  const decision = decisions[0] as typeof decisions[number];
+  if (decision.event.action !== "ask") {
+    throw new Error(`manual approval was bypassed for ${decision.event.toolName}`);
+  }
+  const approvals: Array<{
+    event: Extract<RecordedTraceEvent, { type: "approval_result" }>;
+    index: number;
+  }> = [];
+  for (const [index, event] of events.entries()) {
+    if (
+      event.type === "approval_result"
+      && event.callId === decision.event.callId
+      && event.toolName === decision.event.toolName
+    ) {
+      approvals.push({ event, index });
+    }
+  }
+  if (
+    approvals.length !== 1
+    || approvals[0]?.event.approved !== true
+    || approvals[0].index <= decision.index
+  ) {
+    throw new Error(`manual approval result missing for ${decision.event.toolName}`);
+  }
+  return approvals[0].index;
 }
