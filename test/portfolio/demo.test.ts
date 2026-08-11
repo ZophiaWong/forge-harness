@@ -106,12 +106,13 @@ describe("deterministic portfolio demo", () => {
   it("redacts unknown argument values before rejecting them without starting a walkthrough", async () => {
     let starts = 0;
     const errors: string[] = [];
+    const output: string[] = [];
     const dependencies = {
       error(message: string) {
         errors.push(message);
       },
-      log() {
-        // The invalid-argument path must not write normal output.
+      log(message: string) {
+        output.push(message);
       },
       async runDemo() {
         starts += 1;
@@ -125,10 +126,12 @@ describe("deterministic portfolio demo", () => {
     }
 
     expect(starts).toBe(0);
+    expect(output).toEqual([]);
     expect(errors).toContain("Usage error: unknown_option");
     expect(errors.join("\n")).toContain("Usage: npm run demo:portfolio -- [--explain]");
-    for (const arg of sensitiveArgs) {
-      expect(errors.join("\n")).not.toContain(arg);
+    const combinedOutput = [...output, ...errors].join("\n");
+    for (const sensitiveValue of [...sensitiveArgs, "sk-secret", "/tmp"]) {
+      expect(combinedOutput).not.toContain(sensitiveValue);
     }
   });
 });
