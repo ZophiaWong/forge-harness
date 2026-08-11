@@ -186,6 +186,18 @@ describe("focused live portfolio walkthrough", () => {
     }
   });
 
+  it("accepts two manually approved child mutations", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
   it("rejects a TaskGraph child source without its matching child Session", async () => {
     const fixture = await createLivePortfolioFixture();
 
@@ -232,6 +244,7 @@ describe("focused live portfolio walkthrough", () => {
   it.each([
     { role: "root" as const, toolName: "delegate" },
     { role: "child" as const, toolName: "edit" },
+    { role: "child" as const, toolName: "write" },
     { role: "root" as const, toolName: "task_verify" },
     { role: "root" as const, toolName: "task_integrate" },
   ])("rejects missing manual approval evidence for $toolName", async ({ role, toolName }) => {
@@ -273,6 +286,7 @@ describe("focused live portfolio walkthrough", () => {
   it.each([
     { role: "root" as const, toolName: "delegate" },
     { role: "child" as const, toolName: "edit" },
+    { role: "child" as const, toolName: "write" },
     { role: "root" as const, toolName: "task_verify" },
     { role: "root" as const, toolName: "task_integrate" },
   ])("rejects an orphan approval pair without $toolName execution", async ({ role, toolName }) => {
@@ -749,8 +763,9 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     workspacePath: childWorkspace.path,
   });
   await recordApprovedAction(childSession.recorder, "child-write", "edit", 1);
-  await childSession.recorder.record({ answer: "fixed", round: 2, type: "final_answer" });
-  await childSession.recorder.record({ rounds: 2, status: "completed", type: "session_ended" });
+  await recordApprovedAction(childSession.recorder, "child-write-second", "write", 2);
+  await childSession.recorder.record({ answer: "fixed", round: 3, type: "final_answer" });
+  await childSession.recorder.record({ rounds: 3, status: "completed", type: "session_ended" });
   await session.recorder.record({
     baseCwd: cwd,
     cwd: rootWorkspace.path,

@@ -22,7 +22,7 @@ These stories are selective entry points, not a complete capability list.
 
 1. **Permission before dispatch.** A valid-looking write still crosses an explicit `allow`, `ask`, or `deny` policy before its handler can run. The deterministic demo checks that a denied request leaves the handler dispatch count at zero.
 2. **Context versus Trace.** The next model decision uses bounded observations and a lossy compaction summary. The append-only Trace keeps ordered Runtime facts. A prompt projection is not the historical ledger.
-3. **Offline eval found a regression.** A fixed compaction scenario recorded ordered reads falling from `3` to `2`. Trace evidence isolated repeated-compaction loss. The valid red candidate stayed frozen instead of being resampled for a preferred verdict. See the [offline eval guide](docs/offline-eval.md) and [regression report](docs/assets/evidence/offline-eval-regression-report.md).
+3. **Offline eval found a regression.** A fixed compaction scenario recorded ordered reads falling from `3` to `2`. The report retains the first valid comparable candidate under its experiment identity and does not resample for a preferred verdict. See the [offline eval guide](docs/offline-eval.md) and [regression report](docs/assets/evidence/offline-eval-regression-report.md).
 
 ## c17c integration result
 
@@ -41,7 +41,7 @@ npm ci
 npm run demo:portfolio -- --explain
 ```
 
-This deterministic walkthrough uses no model, does not read `.env`, and makes no network request. It uses temporary Git repositories and Worktrees. It runs the same three independent scenes as the default command, with stable sanitized annotations that explain the Runtime boundary behind each receipt:
+`npm ci` installs dependencies and may access the package registry over the network. After installation, the `npm run demo:portfolio -- --explain` command uses no model, does not read `.env`, and makes no network request. It uses temporary Git repositories and Worktrees. It runs the same three independent scenes as the default command, with stable sanitized annotations that explain the Runtime boundary behind each receipt:
 
 ```text
 scene.action-boundary PASS deny-before-dispatch

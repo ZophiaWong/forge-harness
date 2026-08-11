@@ -76,6 +76,46 @@ describe("deterministic portfolio demo", () => {
     ]);
   });
 
+  it("sanitizes a rejected walkthrough instead of exposing its exception", async () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const exitCode = await main([], {
+      error(message) {
+        errors.push(message);
+      },
+      log(message) {
+        output.push(message);
+      },
+      async runDemo() {
+        throw new Error("provider leaked /tmp/recruiter-secret sk-secret");
+      },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors).toEqual(["demo.portfolio FAIL run_failed"]);
+  });
+
+  it("maps cleanup rejections to the same stable failure reason", async () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const exitCode = await main(["--explain"], {
+      error(message) {
+        errors.push(message);
+      },
+      log(message) {
+        output.push(message);
+      },
+      async runDemo() {
+        throw new Error("cleanup failed for /tmp/forge-portfolio-demo-private");
+      },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors).toEqual(["demo.portfolio FAIL run_failed"]);
+  });
+
   it("prints help and rejects invalid or duplicate flags before a walkthrough starts", async () => {
     let starts = 0;
     const output: string[] = [];

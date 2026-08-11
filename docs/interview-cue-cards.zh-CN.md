@@ -48,7 +48,7 @@
 
 ## Offline eval 发现 regression
 
-节奏：五个固定场景组成 13-attempt contract。Compaction 场景的 ordered-read 从 `3/3` 降到 `2/3`，Trace 证据把问题定位到 repeated-compaction loss。Runtime 修复和 regression test 已记录，首个有效的红色 candidate 按 identity 冻结。
+节奏：五个固定场景组成 13-attempt contract。Compaction 场景的 ordered-read 从 `3/3` 降到 `2/3`。报告按 identity 保留首个有效且可比较的 candidate，不重新抽样。
 
 取舍：有效的红色结果本身就是证据。为了绿色结果重抽样会破坏可比性。
 

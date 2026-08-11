@@ -48,7 +48,7 @@ Follow-up: c17c does not provide crash-safe replay or resume. That boundary rema
 
 ## Offline eval found a regression
 
-Beat: Five fixed scenarios produce a 13-attempt contract. The compaction scenario loses one ordered-read pass, falling from `3/3` to `2/3`. Trace evidence isolates repeated-compaction loss. The Runtime fix and regression test are recorded, while the first valid red candidate remains frozen under its identity.
+Beat: Five fixed scenarios produce a 13-attempt contract. The compaction scenario loses one ordered-read pass, falling from `3/3` to `2/3`. The report retains the first valid comparable candidate under its identity without resampling.
 
 Trade-off: A valid red result is evidence. Resampling until green would destroy comparability.
 

@@ -514,10 +514,13 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const childCompletedIndex = childEvents.findIndex((event) => (
     event.type === "session_ended" && event.status === "completed"
   ));
-  const editApproval = requireManualApproval(childEvents, ["edit", "write"]);
+  const editApprovals = requireManualApprovals(childEvents, ["edit", "write"]);
+  const lastEditResultIndex = Math.max(
+    ...editApprovals.map((approval) => approval.resultIndex),
+  );
   if (
     childFinalIndex < 0
-    || editApproval.resultIndex >= childFinalIndex
+    || lastEditResultIndex >= childFinalIndex
     || childCompletedIndex <= childFinalIndex
   ) {
     throw new Error("child session is missing terminal evidence");
@@ -625,78 +628,113 @@ function requireManualApproval(
   toolNames: string[],
   expectedCallId?: string,
 ): { approvalIndex: number; callIndex: number; resultIndex: number } {
-  const decisions: Array<{
-    event: Extract<RecordedTraceEvent, { type: "permission_decision" }>;
-    index: number;
-  }> = [];
-  for (const [index, event] of events.entries()) {
-    if (event.type === "permission_decision" && toolNames.includes(event.toolName)) {
-      decisions.push({ event, index });
-    }
-  }
-  if (decisions.length !== 1) {
+  const approvals = requireManualApprovals(events, toolNames);
+  if (approvals.length !== 1) {
     throw new Error(`manual approval evidence missing for ${toolNames.join("/")}`);
   }
-  const decision = decisions[0] as typeof decisions[number];
-  if (expectedCallId !== undefined && decision.event.callId !== expectedCallId) {
+  const approval = approvals[0] as typeof approvals[number];
+  if (expectedCallId !== undefined && approval.callId !== expectedCallId) {
     throw new Error("manual approval execution does not match child handoff");
   }
-  if (decision.event.action !== "ask") {
-    throw new Error(`manual approval was bypassed for ${decision.event.toolName}`);
-  }
-  const approvals: Array<{
-    event: Extract<RecordedTraceEvent, { type: "approval_result" }>;
-    index: number;
-  }> = [];
-  for (const [index, event] of events.entries()) {
-    if (
-      event.type === "approval_result"
-      && event.callId === decision.event.callId
-      && event.toolName === decision.event.toolName
-    ) {
-      approvals.push({ event, index });
-    }
-  }
-  if (
-    approvals.length !== 1
-    || approvals[0]?.event.approved !== true
-    || approvals[0].index <= decision.index
-  ) {
-    throw new Error(`manual approval result missing for ${decision.event.toolName}`);
-  }
-  const approval = approvals[0] as typeof approvals[number];
-  const calls = events
-    .map((event, index) => ({ event, index }))
-    .filter((entry): entry is {
-      event: Extract<RecordedTraceEvent, { type: "tool_call" }>;
-      index: number;
-    } => (
-      entry.event.type === "tool_call"
-      && entry.event.callId === decision.event.callId
-      && entry.event.toolName === decision.event.toolName
-    ));
-  const results = events
-    .map((event, index) => ({ event, index }))
-    .filter((entry): entry is {
-      event: Extract<RecordedTraceEvent, { type: "tool_result" }>;
-      index: number;
-    } => (
-      entry.event.type === "tool_result"
-      && entry.event.callId === decision.event.callId
-      && entry.event.toolName === decision.event.toolName
-    ));
-  if (
-    calls.length !== 1
-    || results.length !== 1
-    || results[0]?.event.status !== "completed"
-    || calls[0].index >= decision.index
-    || results[0].index <= approval.index
-  ) {
-    throw new Error(`manual approval execution missing for ${decision.event.toolName}`);
-  }
   return {
-    approvalIndex: approval.index,
-    callIndex: calls[0].index,
-    resultIndex: results[0].index,
+    approvalIndex: approval.approvalIndex,
+    callIndex: approval.callIndex,
+    resultIndex: approval.resultIndex,
   };
+}
+
+function requireManualApprovals(
+  events: RecordedTraceEvent[],
+  toolNames: string[],
+): Array<{
+  approvalIndex: number;
+  callId: string;
+  callIndex: number;
+  resultIndex: number;
+  toolName: string;
+}> {
+  const matchingEvents = events
+    .map((event, index) => ({ event, index }))
+    .filter((entry): entry is {
+      event: Extract<RecordedTraceEvent, {
+        type: "approval_result" | "permission_decision" | "tool_call" | "tool_result";
+      }>;
+      index: number;
+    } => (
+      (entry.event.type === "tool_call"
+        || entry.event.type === "permission_decision"
+        || entry.event.type === "approval_result"
+        || entry.event.type === "tool_result")
+      && toolNames.includes(entry.event.toolName)
+    ));
+  const mutations = new Map<string, { callId: string; toolName: string }>();
+  for (const { event } of matchingEvents) {
+    mutations.set(`${event.toolName}\0${event.callId}`, {
+      callId: event.callId,
+      toolName: event.toolName,
+    });
+  }
+  if (mutations.size === 0) {
+    throw new Error(`manual approval evidence missing for ${toolNames.join("/")}`);
+  }
+
+  return [...mutations.values()].map(({ callId, toolName }) => {
+    const calls = matchingEvents.filter((entry) => (
+      entry.event.type === "tool_call"
+      && entry.event.callId === callId
+      && entry.event.toolName === toolName
+    ));
+    const decisions = matchingEvents.filter((entry) => (
+      entry.event.type === "permission_decision"
+      && entry.event.callId === callId
+      && entry.event.toolName === toolName
+    ));
+    const approvals = matchingEvents.filter((entry) => (
+      entry.event.type === "approval_result"
+      && entry.event.callId === callId
+      && entry.event.toolName === toolName
+    ));
+    const results = matchingEvents.filter((entry) => (
+      entry.event.type === "tool_result"
+      && entry.event.callId === callId
+      && entry.event.toolName === toolName
+    ));
+    const decision = decisions[0];
+    const approval = approvals[0];
+    if (
+      decisions.length !== 1
+      || decision?.event.type !== "permission_decision"
+      || decision.event.action !== "ask"
+    ) {
+      throw new Error(`manual approval was bypassed for ${toolName}`);
+    }
+    if (
+      approvals.length !== 1
+      || approval?.event.type !== "approval_result"
+      || approval.event.approved !== true
+      || approval.index <= decision.index
+    ) {
+      throw new Error(`manual approval result missing for ${toolName}`);
+    }
+    const call = calls[0];
+    const result = results[0];
+    if (
+      calls.length !== 1
+      || call?.event.type !== "tool_call"
+      || results.length !== 1
+      || result?.event.type !== "tool_result"
+      || result.event.status !== "completed"
+      || call.index >= decision.index
+      || result.index <= approval.index
+    ) {
+      throw new Error(`manual approval execution missing for ${toolName}`);
+    }
+    return {
+      approvalIndex: approval.index,
+      callId,
+      callIndex: call.index,
+      resultIndex: result.index,
+      toolName,
+    };
+  });
 }

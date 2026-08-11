@@ -22,7 +22,7 @@ Forge Harness 是一个从零构建的 TypeScript coding-agent Runtime。项目�
 
 1. **Permission before dispatch。** 一个格式正确的 write 仍然要先经过明确的 `allow`、`ask` 或 `deny` 决策，handler 才能运行。Deterministic demo 检查被拒绝请求的 handler dispatch count 仍为零。
 2. **Context 与 Trace 分离。** 下一次模型决策使用有界 observation 和有损 compaction summary。append-only Trace 保存有序的 Runtime 事实。Prompt projection 不是历史账本。
-3. **Offline eval 发现 regression。** 固定 compaction 场景检测到 ordered reads 从 `3` 降到 `2`。Trace 证据把问题定位到 repeated-compaction loss。有效的红色 candidate 按 identity 冻结，没有为了绿色 verdict 重抽样。见 [offline eval guide](docs/offline-eval.md) 和 [regression report](docs/assets/evidence/offline-eval-regression-report.md)。
+3. **Offline eval 发现 regression。** 固定 compaction 场景检测到 ordered reads 从 `3` 降到 `2`。报告按 experiment identity 保留首个有效且可比较的 candidate，不为了绿色 verdict 重抽样。见 [offline eval guide](docs/offline-eval.md) 和 [regression report](docs/assets/evidence/offline-eval-regression-report.md)。
 
 ## c17c 集成结果
 
@@ -41,7 +41,7 @@ npm ci
 npm run demo:portfolio -- --explain
 ```
 
-这条确定性命令不调用模型、不读取 `.env`、不访问网络，只使用临时 Git repository 和 Worktree。它运行与默认命令相同的三个独立 scene，并为每条 receipt 补充稳定、经过脱敏的 Runtime 边界说明：
+`npm ci` 安装依赖时可能通过网络访问 package registry。依赖安装完成后，`npm run demo:portfolio -- --explain` 不调用模型、不读取 `.env`、不访问网络，只使用临时 Git repository 和 Worktree。它运行与默认命令相同的三个独立 scene，并为每条 receipt 补充稳定、经过脱敏的 Runtime 边界说明：
 
 ```text
 scene.action-boundary PASS deny-before-dispatch

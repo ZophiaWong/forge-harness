@@ -107,7 +107,13 @@ export async function main(
     return 0;
   }
 
-  const result = await dependencies.runDemo({ explain });
+  let result: PortfolioDemoResult;
+  try {
+    result = await dependencies.runDemo({ explain });
+  } catch {
+    dependencies.error("demo.portfolio FAIL run_failed");
+    return 1;
+  }
   for (const line of result.lines) {
     dependencies.log(`${line.label} ${line.status} ${line.receipt}`);
   }
