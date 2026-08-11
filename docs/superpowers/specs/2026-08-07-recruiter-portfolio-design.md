@@ -30,9 +30,9 @@ The live path keeps the Runtime action boundary in force and succeeds only when 
 
 ### Fixture, output, and evidence boundaries
 
-Each invocation owns a fresh temporary fixture under the system temporary directory. It may create its fixture Git repository and worktree there only, and must remove them in `finally` on success, assertion failure, argument failure after setup, provider failure, or interruption that reaches cleanup. It must not mutate the caller's checkout, source tree, existing worktrees, or credentials.
+Each valid walkthrough invocation owns a fresh temporary fixture under the system temporary directory after its arguments have been parsed. It may create its fixture Git repository and worktree there only, and must remove them in `finally` on success, assertion failure, provider failure, or interruption that reaches cleanup. `--help` and invalid-argument paths create no fixture. A walkthrough must not mutate the caller's checkout, source tree, existing worktrees, or credentials.
 
-Both modes have a no-secret output policy. stdout and stderr may contain stable aliases, statuses, receipts, and sanitized reason codes only. They must never print environment values, API keys, authorization headers, raw provider errors, prompts, raw model text, absolute paths, unredacted Trace data, or temporary-fixture contents beyond the named evidence aliases.
+Both modes have a no-secret output policy. stdout and stderr may contain stable aliases, statuses, receipts, sanitized reason codes, help text, usage text, and `--explain` annotations. They must never print environment values, API keys, authorization headers, raw provider errors, prompts, raw model text, absolute paths, unredacted Trace data, or temporary-fixture contents beyond the named evidence aliases.
 
 The deterministic walkthrough validates its own assertions and cleanup. The Live LLM walkthrough validates only that its one temporary fixture reached the stated Runtime-owned evidence boundary: policy/approval decisions, deterministic verifier result, and any required completion or receipt facts. It does not validate model reasoning, repeatability, production readiness, security outside the Runtime boundary, or future provider behavior. Durable live evidence, if retained, is sanitized and is reviewed against that boundary before it can be cited outside the command output.
 
