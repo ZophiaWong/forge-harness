@@ -4,15 +4,37 @@
 
 Give a recruiter a truthful three-minute entry point into the from-scratch TypeScript coding-agent Runtime, showing how independently runnable checkpoints grow from the model-tool loop to the c17c coordination boundary without adding a product feature or pretending that three deterministic scenes are a live model session.
 
-## Deterministic demo contract
+## Interview-demo modes and CLI contract
 
-`demo:portfolio` uses no model, no `.env`, and no network. It creates temporary Git repositories/worktrees and always removes them in `finally`. The output is a stable sequence of aliases, statuses, and short receipts:
+`demo:portfolio` has two deliberately separate modes. The default is the existing deterministic recruiter walkthrough; the optional Live LLM walkthrough is a variable, operator-started observation. Neither mode is a product feature, and the Live LLM walkthrough does not recast the three deterministic scenes as one continuous Session.
+
+### Default deterministic walkthrough
+
+`npm run demo:portfolio` remains unchanged: it uses no model, no `.env`, and no network. It emits the stable sequence of scene aliases, statuses, and short receipts:
 
 1. `Action Boundary`: a write request is denied before dispatch; a dispatch counter proves the handler never ran.
 2. `Verification Recovery`: a scripted candidate enters the real verification loop, fails once, recovers, then reaches final only after verification passes.
 3. `Coordination Completion`: plan approval precedes an editor worktree write; an early `CompletionGate` is incomplete; fingerprint, verification, Git receipt, and a ready gate follow in order.
 
-Any failed assertion exits non-zero. The scenes are independent demonstrations, not one continuous Session.
+Any failed assertion exits non-zero. The scenes are independent demonstrations, not one continuous Session. CI continues to run this mode only.
+
+`npm run demo:portfolio -- --explain` runs the same deterministic scenes and the same assertions, then adds stable, sanitized annotations that connect each receipt to the Runtime boundary it demonstrates. `--explain` does not enable a provider, read `.env`, use the network, change the scene order, or change the default command's output.
+
+### Optional Live LLM walkthrough
+
+`npm run demo:portfolio -- --live` explicitly requests one focused Live LLM walkthrough. It may require the operator's locally configured provider credentials and network access; neither is consulted by the default or `--explain` modes. The model may choose different wording, calls, order, or round counts on different runs. Its walkthrough is therefore evidence of one observed integration run, not a deterministic check, a replay of the default scenes, or a claim about general model capability.
+
+The live path keeps the Runtime action boundary in force and succeeds only when its fixed fixture acceptance checks and deterministic verifier evidence are satisfied. A model response, a provider failure, or a skipped/missing credential is not evidence by itself. The CLI must report these outcomes with stable sanitized status/reason codes; it must not turn a failed or unavailable live observation into a passing deterministic claim.
+
+`--live --explain` is valid and adds the same kind of sanitized boundary annotations to the live receipt. `--help` prints the supported modes, required operator setup for `--live`, and their evidence limits, then exits `0` without creating a fixture or contacting a provider. Any unknown argument, duplicate flag, or unsupported flag combination writes a concise usage error to stderr and exits `2` without creating a fixture or contacting a provider. The accepted flags are `--help`, `--explain`, and `--live`; `--help` is standalone.
+
+### Fixture, output, and evidence boundaries
+
+Each invocation owns a fresh temporary fixture under the system temporary directory. It may create its fixture Git repository and worktree there only, and must remove them in `finally` on success, assertion failure, argument failure after setup, provider failure, or interruption that reaches cleanup. It must not mutate the caller's checkout, source tree, existing worktrees, or credentials.
+
+Both modes have a no-secret output policy. stdout and stderr may contain stable aliases, statuses, receipts, and sanitized reason codes only. They must never print environment values, API keys, authorization headers, raw provider errors, prompts, raw model text, absolute paths, unredacted Trace data, or temporary-fixture contents beyond the named evidence aliases.
+
+The deterministic walkthrough validates its own assertions and cleanup. The Live LLM walkthrough validates only that its one temporary fixture reached the stated Runtime-owned evidence boundary: policy/approval decisions, deterministic verifier result, and any required completion or receipt facts. It does not validate model reasoning, repeatability, production readiness, security outside the Runtime boundary, or future provider behavior. Durable live evidence, if retained, is sanitized and is reviewed against that boundary before it can be cited outside the command output.
 
 ## Public information architecture
 
