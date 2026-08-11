@@ -270,6 +270,66 @@ describe("focused live portfolio walkthrough", () => {
     }
   });
 
+  it.each([
+    { role: "root" as const, toolName: "delegate" },
+    { role: "child" as const, toolName: "edit" },
+    { role: "root" as const, toolName: "task_verify" },
+    { role: "root" as const, toolName: "task_integrate" },
+  ])("rejects an orphan approval pair without $toolName execution", async ({ role, toolName }) => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const sessionDir = role === "root"
+        ? await findRootSessionDir(fixture)
+        : await findChildSessionDir(fixture);
+      await rewriteTrace(sessionDir, (events) => events.filter((event) => !(
+        (event.type === "tool_call" || event.type === "tool_result")
+        && event.toolName === toolName
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/execution/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("binds the delegate execution call ID to the child parent call ID", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => events.map((event) => (
+        "toolName" in event && event.toolName === "delegate"
+          ? { ...event, callId: "different-delegate-call" }
+          : event
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/child handoff/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a failed tool execution after manual approval", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => events.map((event) => (
+        event.type === "tool_result" && event.toolName === "task_verify"
+          ? { ...event, status: "failed" }
+          : event
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/execution/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
   it("rejects child source metadata outside the Runtime worktree convention", async () => {
     const fixture = await createLivePortfolioFixture();
 
@@ -708,7 +768,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     type: "workspace_created",
     workspacePath: rootWorkspace.path,
   });
-  await recordApprovedAction(session.recorder, "delegate-child", "delegate", 2);
+  await recordApprovalRequest(session.recorder, "delegate-child", "delegate", 2);
   await session.recorder.record({
     childSessionId: child.sessionId,
     parentCallId: "delegate-child",
@@ -742,6 +802,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     type: "child_session_handoff",
     workspace: childWorkspace,
   });
+  await recordSuccessfulToolResult(session.recorder, "delegate-child", "delegate", 2);
   await recordApprovedAction(session.recorder, "verify-task", "task_verify", 7);
   await recordApprovedAction(session.recorder, "integrate-task", "task_integrate", 8);
   await session.recorder.record({
@@ -806,6 +867,23 @@ async function recordApprovedAction(
   toolName: string,
   round: number,
 ): Promise<void> {
+  await recordApprovalRequest(recorder, callId, toolName, round);
+  await recordSuccessfulToolResult(recorder, callId, toolName, round);
+}
+
+async function recordApprovalRequest(
+  recorder: TraceRecorder,
+  callId: string,
+  toolName: string,
+  round: number,
+): Promise<void> {
+  await recorder.record({
+    argumentsText: "{}",
+    callId,
+    round,
+    toolName,
+    type: "tool_call",
+  });
   await recorder.record({
     action: "ask",
     callId,
@@ -821,6 +899,22 @@ async function recordApprovedAction(
     round,
     toolName,
     type: "approval_result",
+  });
+}
+
+async function recordSuccessfulToolResult(
+  recorder: TraceRecorder,
+  callId: string,
+  toolName: string,
+  round: number,
+): Promise<void> {
+  await recorder.record({
+    callId,
+    projectedOutput: "completed",
+    round,
+    status: "completed",
+    toolName,
+    type: "tool_result",
   });
 }
 

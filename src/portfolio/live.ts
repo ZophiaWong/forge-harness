@@ -454,9 +454,13 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const startIndex = events.findIndex((event) => event === starts[0]);
   const finishIndex = events.findIndex((event) => event === finishes[0]);
   const handoffIndex = events.findIndex((event) => event === handoffs[0]);
-  const delegateApprovalIndex = requireManualApproval(events, ["delegate"]);
-  const verifyApprovalIndex = requireManualApproval(events, ["task_verify"]);
-  const integrateApprovalIndex = requireManualApproval(events, ["task_integrate"]);
+  const delegateApproval = requireManualApproval(
+    events,
+    ["delegate"],
+    starts[0]?.parentCallId,
+  );
+  const verifyApproval = requireManualApproval(events, ["task_verify"]);
+  const integrateApproval = requireManualApproval(events, ["task_integrate"]);
   if (
     starts.length !== 1
     || starts[0]?.childSessionId !== childSession.id
@@ -482,12 +486,13 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || !sameStrings(handoffs[0].changedFiles, expectedChangedFiles)
     || startIndex < 0
     || startIndex <= sessionStartIndex
-    || delegateApprovalIndex >= startIndex
+    || delegateApproval.approvalIndex >= startIndex
     || finishIndex <= startIndex
     || handoffIndex <= finishIndex
-    || verifyApprovalIndex <= handoffIndex
-    || integrateApprovalIndex <= verifyApprovalIndex
-    || verificationIndex <= handoffIndex
+    || delegateApproval.resultIndex <= handoffIndex
+    || verifyApproval.callIndex <= delegateApproval.resultIndex
+    || integrateApproval.callIndex <= verifyApproval.resultIndex
+    || verificationIndex <= integrateApproval.resultIndex
     || !isRecord(childLink)
     || childLink.parentCallId !== starts[0].parentCallId
     || events.some((event) => (
@@ -509,10 +514,10 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const childCompletedIndex = childEvents.findIndex((event) => (
     event.type === "session_ended" && event.status === "completed"
   ));
-  const editApprovalIndex = requireManualApproval(childEvents, ["edit", "write"]);
+  const editApproval = requireManualApproval(childEvents, ["edit", "write"]);
   if (
     childFinalIndex < 0
-    || editApprovalIndex >= childFinalIndex
+    || editApproval.resultIndex >= childFinalIndex
     || childCompletedIndex <= childFinalIndex
   ) {
     throw new Error("child session is missing terminal evidence");
@@ -615,7 +620,11 @@ function sameStrings(actual: string[] | undefined, expected: string[]): boolean 
     && actual.every((value, index) => value === expected[index]);
 }
 
-function requireManualApproval(events: RecordedTraceEvent[], toolNames: string[]): number {
+function requireManualApproval(
+  events: RecordedTraceEvent[],
+  toolNames: string[],
+  expectedCallId?: string,
+): { approvalIndex: number; callIndex: number; resultIndex: number } {
   const decisions: Array<{
     event: Extract<RecordedTraceEvent, { type: "permission_decision" }>;
     index: number;
@@ -629,6 +638,9 @@ function requireManualApproval(events: RecordedTraceEvent[], toolNames: string[]
     throw new Error(`manual approval evidence missing for ${toolNames.join("/")}`);
   }
   const decision = decisions[0] as typeof decisions[number];
+  if (expectedCallId !== undefined && decision.event.callId !== expectedCallId) {
+    throw new Error("manual approval execution does not match child handoff");
+  }
   if (decision.event.action !== "ask") {
     throw new Error(`manual approval was bypassed for ${decision.event.toolName}`);
   }
@@ -652,5 +664,39 @@ function requireManualApproval(events: RecordedTraceEvent[], toolNames: string[]
   ) {
     throw new Error(`manual approval result missing for ${decision.event.toolName}`);
   }
-  return approvals[0].index;
+  const approval = approvals[0] as typeof approvals[number];
+  const calls = events
+    .map((event, index) => ({ event, index }))
+    .filter((entry): entry is {
+      event: Extract<RecordedTraceEvent, { type: "tool_call" }>;
+      index: number;
+    } => (
+      entry.event.type === "tool_call"
+      && entry.event.callId === decision.event.callId
+      && entry.event.toolName === decision.event.toolName
+    ));
+  const results = events
+    .map((event, index) => ({ event, index }))
+    .filter((entry): entry is {
+      event: Extract<RecordedTraceEvent, { type: "tool_result" }>;
+      index: number;
+    } => (
+      entry.event.type === "tool_result"
+      && entry.event.callId === decision.event.callId
+      && entry.event.toolName === decision.event.toolName
+    ));
+  if (
+    calls.length !== 1
+    || results.length !== 1
+    || results[0]?.event.status !== "completed"
+    || calls[0].index >= decision.index
+    || results[0].index <= approval.index
+  ) {
+    throw new Error(`manual approval execution missing for ${decision.event.toolName}`);
+  }
+  return {
+    approvalIndex: approval.index,
+    callIndex: calls[0].index,
+    resultIndex: results[0].index,
+  };
 }
