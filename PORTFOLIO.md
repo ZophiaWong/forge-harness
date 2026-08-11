@@ -41,7 +41,7 @@ npm ci
 npm run demo:portfolio -- --explain
 ```
 
-This deterministic walkthrough makes no model call, reads no `.env`, and uses temporary Git repositories and Worktrees. It runs the same three independent scenes as the default command, with stable sanitized annotations that explain the Runtime boundary behind each receipt:
+This deterministic walkthrough uses no model, does not read `.env`, and makes no network request. It uses temporary Git repositories and Worktrees. It runs the same three independent scenes as the default command, with stable sanitized annotations that explain the Runtime boundary behind each receipt:
 
 ```text
 scene.action-boundary PASS deny-before-dispatch
@@ -49,7 +49,7 @@ scene.verification-recovery PASS recovery-before-final
 scene.coordination-completion PASS receipt-before-ready
 ```
 
-The scenes are deterministic mechanism checks, not one live Session. CI runs this path. See the [demo source](src/portfolio/demo.ts) and [CI job](.github/workflows/ci.yml).
+The scenes are deterministic mechanism checks, not one live Session. CI runs the default deterministic command, which exercises the same scenes as `--explain`. See the [demo source](src/portfolio/demo.ts) and [CI job](.github/workflows/ci.yml).
 
 An optional 5 to 8 minute extension is available when an interactive terminal, Git, Bash, Node.js `>=20.19`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are available:
 

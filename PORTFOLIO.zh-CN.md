@@ -41,7 +41,7 @@ npm ci
 npm run demo:portfolio -- --explain
 ```
 
-这条确定性命令不调用模型、不读取 `.env`，只使用临时 Git repository 和 Worktree。它运行与默认命令相同的三个独立 scene，并为每条 receipt 补充稳定、经过脱敏的 Runtime 边界说明：
+这条确定性命令不调用模型、不读取 `.env`、不访问网络，只使用临时 Git repository 和 Worktree。它运行与默认命令相同的三个独立 scene，并为每条 receipt 补充稳定、经过脱敏的 Runtime 边界说明：
 
 ```text
 scene.action-boundary PASS deny-before-dispatch
@@ -49,7 +49,7 @@ scene.verification-recovery PASS recovery-before-final
 scene.coordination-completion PASS receipt-before-ready
 ```
 
-三个 scene 是确定性的机制检查，不是同一个 live Session。这也是 CI 使用的路径。见 [demo source](src/portfolio/demo.ts) 和 [CI job](.github/workflows/ci.yml)。
+三个 scene 是确定性的机制检查，不是同一个 live Session。CI 运行默认的确定性命令，执行的 scene 与 `--explain` 相同。见 [demo source](src/portfolio/demo.ts) 和 [CI job](.github/workflows/ci.yml)。
 
 如果具备 interactive TTY、Git、Bash、Node.js `>=20.19`、`OPENAI_API_KEY` 和 `OPENAI_MODEL`，可以把 `npm run demo:portfolio:live` 作为可选的 5 到 8 分钟延伸。它使用一次性的临时 fixture，并需要手动 approval。真实模型输出每次都可能不同，因此它不是 CI 检查，也不是可复用证据。Live 运行失败时，立刻回到确定性 walkthrough，不要在面试中排查。
 
