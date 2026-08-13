@@ -14,7 +14,9 @@ import {
   type LivePortfolioDependencies,
   type LivePortfolioProcess,
 } from "../../src/portfolio/live.js";
+import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
 import { createCliSessionTrace } from "../../src/runtime/session.js";
+import { prepareWorktreeSession } from "../../src/runtime/sessionWorkspace.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
 import type { TraceRecorder } from "../../src/runtime/trace.js";
 
@@ -64,7 +66,7 @@ describe("focused live portfolio walkthrough", () => {
     expect(fixtureStarts).toBe(0);
   });
 
-  it("creates a dependency-free slugify fixture whose initial npm test fails", async () => {
+  it("creates a dependency-free retry fixture with two intentional policy failures", async () => {
     const fixture = await createLivePortfolioFixture();
 
     try {
@@ -74,27 +76,56 @@ describe("focused live portfolio walkthrough", () => {
       };
       expect(packageJson.dependencies).toBeUndefined();
       expect(packageJson.scripts).toEqual({ test: "node --test" });
-      expect(await fs.readFile(path.join(fixture, "src", "slugify.mjs"), "utf8"))
-        .toContain("export function slugify");
+      expect(await fs.readFile(path.join(fixture, ".gitignore"), "utf8")).toBe(".forge/\n");
+      expect(await fs.readFile(path.join(fixture, "src", "errors.mjs"), "utf8"))
+        .toContain("export class TransientError");
+      expect(await fs.readFile(path.join(fixture, "src", "retry.mjs"), "utf8"))
+        .toContain("export async function runWithRetry");
+      expect(await fs.readFile(path.join(fixture, "test", "retry.test.mjs"), "utf8"))
+        .toContain("maxAttempts is the total operation limit");
       await expectFailedNpmTest(fixture);
 
       await fs.writeFile(
-        path.join(fixture, "src", "slugify.mjs"),
-        'export function slugify(value) { return value.trim().replace(/\\s+/g, "-"); }\n',
-      );
-      await expectFailedNpmTest(fixture);
-
-      await fs.writeFile(
-        path.join(fixture, "src", "slugify.mjs"),
-        'export function slugify(value) { return value.trim().toLowerCase(); }\n',
-      );
-      await expectFailedNpmTest(fixture);
-
-      await fs.writeFile(
-        path.join(fixture, "src", "slugify.mjs"),
-        'export function slugify(value) { return value.trim().toLowerCase().replace(/\\s+/g, "-"); }\n',
+        path.join(fixture, "src", "retry.mjs"),
+        [
+          "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
+          "  for (let attempt = 1; ; attempt += 1) {",
+          "    try {",
+          "      return await operation();",
+          "    } catch (error) {",
+          "      if (!isRetryable(error) || attempt >= maxAttempts) {",
+          "        throw error;",
+          "      }",
+          "    }",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
       );
       await expect(execFileAsync("npm", ["test"], { cwd: fixture })).resolves.toMatchObject({});
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps Runtime Session files from blocking root Worktree setup", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const session = await createCliSessionTrace({
+        cwd: fixture,
+        maxToolRounds: 48,
+        model: "test-model",
+        task: LIVE_PORTFOLIO_PROMPT,
+      });
+      const workspace = await prepareWorktreeSession({
+        baseCwd: fixture,
+        lifecycleEmitter: createLifecycleEmitter({ recorder: session.recorder }),
+        sessionTrace: session,
+      });
+
+      expect(workspace.mode).toBe("git_worktree");
+      expect(workspace.path).toBe(path.join(fixture, ".forge", "worktrees", session.metadata.id));
     } finally {
       await fs.rm(fixture, { force: true, recursive: true });
     }
@@ -136,7 +167,13 @@ describe("focused live portfolio walkthrough", () => {
       "npm test",
     ]);
     expect(spawnCalls[0]?.args).toHaveLength(5);
-    expect(spawnCalls[0]?.args[4]).toMatch(/exactly one edit task.*synchronous edit child.*slugify/is);
+    expect(spawnCalls[0]?.args[4]).toBe([
+      "Fix the failing retry-policy tests without modifying tests, package.json, or the public API.",
+      "Keep implementation changes within src/** and keep the solution focused.",
+      "Track the work as one edit task with npm test as its verification command.",
+      "Use one synchronous isolated edit child for the implementation, then verify and integrate the result before finishing.",
+    ].join(" "));
+    expect(spawnCalls[0]?.args[4]).not.toMatch(/slugify|task_001|maxToolRounds|task_create|task_transition|task_verify|src\/retry\.mjs/i);
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -193,6 +230,40 @@ describe("focused live portfolio walkthrough", () => {
       await writePassingRootEvidence(fixture);
 
       await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts variable task wording, a later generated task ID, and multiple src changes without artifact evidence", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture, {
+        acceptance: ["Retry policy behavior matches the tests"],
+        changedFiles: ["src/retry.mjs", "src/retryPolicy.mjs"],
+        description: "Correct the bounded retry behavior.",
+        taskSequence: 2,
+        title: "Correct retry semantics",
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    ["a test edit", ["src/retry.mjs", "test/retry.test.mjs"]],
+    ["a package edit", ["src/retry.mjs", "package.json"]],
+    ["a path traversal", ["src/retry.mjs", "src/../test/retry.test.mjs"]],
+  ])("rejects %s outside the src-only patch boundary", async (_label, changedFiles) => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture, { changedFiles });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/outside src/i);
     } finally {
       await fs.rm(fixture, { force: true, recursive: true });
     }
@@ -622,7 +693,19 @@ function completedProcess(
   };
 }
 
-async function writePassingRootEvidence(cwd: string): Promise<void> {
+interface PassingRootEvidenceOptions {
+  acceptance?: string[];
+  changedFiles?: string[];
+  description?: string;
+  includeArtifactEvidence?: boolean;
+  taskSequence?: 1 | 2;
+  title?: string;
+}
+
+async function writePassingRootEvidence(
+  cwd: string,
+  options: PassingRootEvidenceOptions = {},
+): Promise<void> {
   const session = await createCliSessionTrace({
     cwd,
     maxToolRounds: 24,
@@ -653,6 +736,29 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     "utf8",
   );
   const leader = { role: "leader" as const, sessionId: session.metadata.id };
+  if (options.taskSequence === 2) {
+    const placeholder = await store.create(leader, {
+      acceptance: ["Placeholder is deleted before acquisition"],
+      description: "Reserve the first generated task ID.",
+      kind: "research",
+      title: "Discarded placeholder",
+    });
+    await store.delete(leader, placeholder.task.id);
+  }
+  const created = await store.create(leader, {
+    acceptance: options.acceptance ?? ["Retry policy tests pass"],
+    description: options.description ?? "Repair retry policy behavior.",
+    kind: "edit",
+    title: options.title ?? "Repair retry policy",
+    verificationCommand: "npm test",
+  });
+  const taskId = created.task.id;
+  await store.transition(leader, {
+    action: "assign",
+    assignee: { role: "leader" },
+    id: taskId,
+  });
+
   const childSession = await createCliSessionTrace({
     child: {
       parentCallId: "delegate-child",
@@ -663,9 +769,9 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     cwd,
     maxToolRounds: 8,
     model: "test-model",
-    task: "repair slugify",
+    task: "repair retry policy",
     taskGraph: {
-      delegatedTaskId: "task_001",
+      delegatedTaskId: taskId,
       rootSessionId: session.metadata.id,
       taskGraphPath: graph.taskGraphPath,
     },
@@ -689,7 +795,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     "utf8",
   );
   const child = {
-    delegatedTaskId: "task_001",
+    delegatedTaskId: taskId,
     profile: "edit" as const,
     role: "child" as const,
     sessionId: childSession.metadata.id,
@@ -702,42 +808,31 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
   };
   const fingerprint = "a".repeat(64);
   const commit = "b".repeat(40);
+  const changedFiles = options.changedFiles ?? ["src/retry.mjs"];
 
-  await store.create(leader, {
-    acceptance: [
-      "npm test passes and slugify trims, lowercases, and collapses whitespace to hyphens",
-    ],
-    description: "Repair slugify behavior",
-    kind: "edit",
-    title: "Repair slugify",
-    verificationCommand: "npm test",
-  });
-  await store.transition(leader, {
-    action: "assign",
-    assignee: { role: "leader" },
-    id: "task_001",
-  });
-  await store.addEvidence(child, "task_001", {
+  await store.addEvidence(child, taskId, {
     callId: "child-write",
-    references: [{ kind: "artifact", value: "src/slugify.mjs" }],
+    ...(options.includeArtifactEvidence
+      ? { references: [{ kind: "artifact" as const, value: changedFiles[0] as string }] }
+      : {}),
     round: 1,
-    summary: "Fixed slugify and observed the test pass.",
+    summary: "Recorded the retry implementation handoff.",
   });
   await store.transition(leader, {
     action: "submit_result",
-    changedFiles: ["src/slugify.mjs"],
+    changedFiles,
     fingerprint,
-    id: "task_001",
+    id: taskId,
     source,
     summary: "Registered child handoff.",
   });
-  await store.recordVerification(leader, "task_001", {
+  await store.recordVerification(leader, taskId, {
     command: "npm test",
     exitCode: 0,
     fingerprint,
     summary: "passed",
   });
-  await store.recordIntegration(leader, "task_001", {
+  await store.recordIntegration(leader, taskId, {
     fingerprint,
     integratedAt: new Date().toISOString(),
     integratedCommit: commit,
@@ -750,7 +845,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     cwd: childWorkspace.path,
     maxToolRounds: 8,
     model: "test-model",
-    task: "repair slugify",
+    task: "repair retry policy",
     type: "session_started",
     workspace: childWorkspace,
   });
@@ -790,7 +885,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     profile: "edit",
     round: 2,
     runInBackground: false,
-    task: "repair slugify",
+    task: "repair retry policy",
     tracePath: childSession.paths.tracePath,
     type: "child_session_started",
     workspace: childWorkspace,
@@ -807,7 +902,7 @@ async function writePassingRootEvidence(cwd: string): Promise<void> {
     workspace: childWorkspace,
   });
   await session.recorder.record({
-    changedFiles: ["src/slugify.mjs"],
+    changedFiles,
     childSessionId: child.sessionId,
     finalAnswer: "fixed",
     parentCallId: "delegate-child",
