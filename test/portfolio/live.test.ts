@@ -650,6 +650,25 @@ describe("focused live portfolio walkthrough", () => {
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("starts the ten-minute limit before creating the disposable fixture", async () => {
+    const order: string[] = [];
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      async createFixture() {
+        order.push("fixture");
+        throw new Error("stop after recording timer order");
+      },
+      scheduleRunTimeout() {
+        order.push("timeout");
+        return () => undefined;
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
+    expect(order).toEqual(["timeout", "fixture"]);
+  });
+
   it("cleans up when interrupted while the fixture is still being created", async () => {
     let fixture = "";
     let interrupt: ((signal: NodeJS.Signals) => void) | undefined;

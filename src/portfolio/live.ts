@@ -127,6 +127,9 @@ export async function runLivePortfolioDemo(
   const removeSignalHandlers = dependencies.installSignalHandlers((signal) => {
     stopChild("interrupted", signal);
   });
+  cancelRunTimeout = dependencies.scheduleRunTimeout(() => {
+    stopChild("timed_out", "SIGTERM");
+  });
 
   try {
     fixture = await dependencies.createFixture();
@@ -145,9 +148,6 @@ export async function runLivePortfolioDemo(
         dependencies.writeLine("[demo] ----- Forge Runtime transcript begins -----");
         let childResult: LivePortfolioProcessResult;
         try {
-          cancelRunTimeout = dependencies.scheduleRunTimeout(() => {
-            stopChild("timed_out", "SIGTERM");
-          });
           child = dependencies.spawnCli(
             process.execPath,
             [
