@@ -57,7 +57,11 @@ An optional 5 to 8 minute extension is available when an interactive terminal, G
 npm run demo:portfolio:live
 ```
 
-Live uses a disposable fixture and asks for manual approvals. Its real model output can vary between runs. It is not a CI check or reusable evidence. If it fails, return immediately to the deterministic walkthrough. Do not debug the Live run during an interview.
+The Live launcher generates a dependency-free retry-policy repository in the system temporary directory and confirms that its initial tests fail. The tests cover first-attempt success, recovery from transient failures, `maxAttempts` as the total operation limit, and immediate exit on a permanent failure. It then starts the existing Forge CLI with an isolated root Worktree and `npm test` as the root verifier. The original Runtime transcript and manual approvals remain visible in the terminal.
+
+The prompt fixes the walkthrough topology at one edit task and one synchronous edit child. That constraint keeps the interview within a predictable time window and gives the submission, verification, and Git receipt one clear source. The model still decides the task wording, files to inspect, source-only implementation, edit count, and protocol call sequence. The fixed topology is a demo boundary, not a Runtime limit.
+
+The launcher allows at most ten minutes, checks the persisted c17c evidence, and removes the temporary repository. This is one variable model observation, not a benchmark, CI check, or reusable evidence. If it fails, return immediately to the deterministic walkthrough instead of debugging it during the interview.
 
 ## Evidence and boundaries
 

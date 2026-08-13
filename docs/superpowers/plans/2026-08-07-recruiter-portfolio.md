@@ -24,6 +24,6 @@
 
 ## Guardrails
 
-- No model calls, `.env` reads, network, or new runtime capability.
+- The deterministic demo makes no model call, reads no `.env`, uses no network, and adds no Runtime capability. The optional Live launcher is documented separately and remains outside the Runtime.
 - The demo does not claim the three scenes are one live Session.
 - Detailed facts are not duplicated into cue cards; they remain in the case study/runbooks/Evidence Index. Candidate/final language stays in the concrete verification and c17c sections rather than defining the whole project.

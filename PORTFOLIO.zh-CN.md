@@ -51,7 +51,17 @@ scene.coordination-completion PASS receipt-before-ready
 
 三个 scene 是确定性的机制检查，不是同一个 live Session。CI 运行默认的确定性命令，执行的 scene 与 `--explain` 相同。见 [demo source](src/portfolio/demo.ts) 和 [CI job](.github/workflows/ci.yml)。
 
-如果具备 interactive TTY、Git、Bash、Node.js `>=20.19`、`OPENAI_API_KEY` 和 `OPENAI_MODEL`，可以把 `npm run demo:portfolio:live` 作为可选的 5 到 8 分钟延伸。它使用一次性的临时 fixture，并需要手动 approval。真实模型输出每次都可能不同，因此它不是 CI 检查，也不是可复用证据。Live 运行失败时，立刻回到确定性 walkthrough，不要在面试中排查。
+如果具备 interactive TTY、Git、Bash、Node.js `>=20.19`、`OPENAI_API_KEY` 和 `OPENAI_MODEL`，可以运行 5 到 8 分钟的可选演示：
+
+```bash
+npm run demo:portfolio:live
+```
+
+Live launcher 会在系统临时目录现场生成一个不依赖外部 package 的 retry-policy repository，并先确认初始测试失败。测试覆盖首次调用成功、transient failure 重试后成功、`maxAttempts` 表示总执行次数，以及 permanent failure 立即停止。随后，launcher 使用 root Worktree 和根级 `npm test` verifier 启动现有 Forge CLI。终端会原样显示 Runtime transcript 和人工审批。
+
+Prompt 把这次演示限制为一个 edit task 和一个同步 edit child。这样可以控制面试时长，并让 submission、verification 和 Git receipt 都有明确的 source。模型仍然自行决定 task 文案、阅读哪些文件、如何修改 `src/**`、编辑次数和 protocol call 顺序。固定拓扑只是演示边界，不代表 Runtime 只能处理一个任务。
+
+Launcher 最多运行 10 分钟，结束后检查持久化的 c17c 证据并删除临时 repository。这只是一次结果可变的模型运行观察，不是 benchmark、CI 检查或可复用证据。Live 失败时应立刻回到确定性 walkthrough，不在面试现场排查。
 
 ## 证据与边界
 
