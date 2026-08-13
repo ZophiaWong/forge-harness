@@ -195,6 +195,7 @@ export async function createLivePortfolioFixture(): Promise<string> {
   try {
     await fs.mkdir(path.join(fixture, "src"), { recursive: true });
     await fs.mkdir(path.join(fixture, "test"), { recursive: true });
+    await fs.writeFile(path.join(fixture, ".gitignore"), ".forge/\n", "utf8");
     await fs.writeFile(
       path.join(fixture, "package.json"),
       `${JSON.stringify({
@@ -241,7 +242,13 @@ export async function createLivePortfolioFixture(): Promise<string> {
     await runGit(fixture, ["init", "-q"]);
     await runGit(fixture, ["config", "user.name", "Forge Portfolio Live"]);
     await runGit(fixture, ["config", "user.email", "portfolio-live@example.invalid"]);
-    await runGit(fixture, ["add", "package.json", "src/slugify.mjs", "test/slugify.test.mjs"]);
+    await runGit(fixture, [
+      "add",
+      ".gitignore",
+      "package.json",
+      "src/slugify.mjs",
+      "test/slugify.test.mjs",
+    ]);
     await runGit(fixture, ["commit", "--no-gpg-sign", "-qm", "initial failing fixture"]);
     return fixture;
   } catch (error) {
