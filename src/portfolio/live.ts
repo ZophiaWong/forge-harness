@@ -13,13 +13,10 @@ import { parseRecordedTraceEvent } from "../runtime/traceSchema.js";
 const execFileAsync = promisify(execFile);
 
 export const LIVE_PORTFOLIO_PROMPT = [
-  "Run the focused c17c one-shot edit walkthrough with exactly one edit task and one synchronous edit child.",
-  "Create task_001 titled=\"Repair slugify\", kind=\"edit\", dependencies=[], acceptance=[\"npm test passes and slugify trims, lowercases, and collapses whitespace to hyphens\"], and verificationCommand=\"npm test\".",
-  "Assign task_001 to leader, then delegate one synchronous edit child with taskId=\"task_001\", maxToolRounds=8, and runInBackground=false.",
-  "Tell the child to inspect the failing node:test, fix only src/slugify.mjs, run npm test, append task evidence with an artifact reference to src/slugify.mjs, and return a concise final response.",
-  "Use the returned childSessionId in Leader task_transition submit_result without passing a workspace path.",
-  "Read task_get, call task_verify with command=\"npm test\", then call task_integrate.",
-  "Return final only after the completion gate and root verifier pass. Do not create another task, teammate, plugin, or MCP server.",
+  "Fix the failing retry-policy tests without modifying tests, package.json, or the public API.",
+  "Keep implementation changes within src/** and keep the solution focused.",
+  "Track the work as one edit task with npm test as its verification command.",
+  "Use one synchronous isolated edit child for the implementation, then verify and integrate the result before finishing.",
 ].join(" ");
 
 export interface LivePortfolioProcessResult {
@@ -49,11 +46,13 @@ export interface LivePortfolioDependencies {
   removeFixture(fixture: string): Promise<void>;
   runFixtureTests(fixture: string): Promise<number>;
   scheduleForceKill(handler: () => void): () => void;
+  scheduleRunTimeout(handler: () => void): () => void;
   spawnCli(
     command: string,
     args: string[],
     options: LivePortfolioSpawnOptions,
   ): LivePortfolioProcess;
+  writeLine(line: string): void;
 }
 
 export interface LivePortfolioResult {
@@ -69,6 +68,7 @@ export interface LivePortfolioResult {
     | "invalid_session_evidence"
     | "missing_environment"
     | "setup_failed"
+    | "timed_out"
     | "verified_session_evidence";
   status: "FAIL" | "PASS" | "UNAVAILABLE";
 }
@@ -83,75 +83,101 @@ export async function runLivePortfolioDemo(
   try {
     await dependencies.loadEnvironment(dependencies.forgeRoot, dependencies.environment);
   } catch {
-    return unavailable("missing_environment");
+    return reportLivePortfolioResult(dependencies, unavailable("missing_environment"));
   }
 
   if (!hasNonEmptyEnvironment(dependencies.environment, "OPENAI_API_KEY")
     || !hasNonEmptyEnvironment(dependencies.environment, "OPENAI_MODEL")) {
-    return unavailable("missing_environment");
+    return reportLivePortfolioResult(dependencies, unavailable("missing_environment"));
   }
   if (!dependencies.isInteractiveTerminal()) {
-    return unavailable("interactive_terminal_required");
+    return reportLivePortfolioResult(
+      dependencies,
+      unavailable("interactive_terminal_required"),
+    );
   }
   if (!await dependencies.commandAvailable("git")) {
-    return unavailable("git_required");
+    return reportLivePortfolioResult(dependencies, unavailable("git_required"));
   }
   if (!await dependencies.commandAvailable("bash")) {
-    return unavailable("bash_required");
+    return reportLivePortfolioResult(dependencies, unavailable("bash_required"));
   }
 
   let fixture: string | undefined;
   let child: LivePortfolioProcess | undefined;
   let creatingFixture = true;
-  let interrupted: NodeJS.Signals | undefined;
+  let stopReason: "interrupted" | "timed_out" | undefined;
   let cancelForceKill: () => void = () => undefined;
+  let cancelRunTimeout: () => void = () => undefined;
   let result: LivePortfolioResult = { cleaned: false, reason: "setup_failed", status: "FAIL" };
-  const removeSignalHandlers = dependencies.installSignalHandlers((signal) => {
-    interrupted = signal;
+  const stopChild = (
+    reason: "interrupted" | "timed_out",
+    signal: NodeJS.Signals,
+  ) => {
+    if (stopReason) {
+      return;
+    }
+    stopReason = reason;
     if (child) {
       child.kill(signal);
       cancelForceKill();
       cancelForceKill = dependencies.scheduleForceKill(() => child?.kill("SIGKILL"));
     }
+  };
+  const removeSignalHandlers = dependencies.installSignalHandlers((signal) => {
+    stopChild("interrupted", signal);
   });
 
   try {
     fixture = await dependencies.createFixture();
     creatingFixture = false;
-    if (interrupted) {
-      result = { cleaned: false, reason: "interrupted", status: "FAIL" };
+    dependencies.writeLine("[demo] Created a disposable retry fixture.");
+    if (stopReason) {
+      result = { cleaned: false, reason: stopReason, status: "FAIL" };
     } else {
       const initialTestExit = await dependencies.runFixtureTests(fixture);
       if (initialTestExit === 0) {
         result = { cleaned: false, reason: "fixture_not_failing", status: "FAIL" };
-      } else if (interrupted) {
-        result = { cleaned: false, reason: "interrupted", status: "FAIL" };
+      } else if (stopReason) {
+        result = { cleaned: false, reason: stopReason, status: "FAIL" };
       } else {
-        child = dependencies.spawnCli(
-          process.execPath,
-          [
-            path.resolve(dependencies.forgeRoot, "dist", "cli", "index.js"),
-            "--worktree",
-            "--verify",
-            "npm test",
-            LIVE_PORTFOLIO_PROMPT,
-          ],
-          {
-            cwd: fixture,
-            env: dependencies.environment,
-            shell: false,
-          },
-        );
-        const childResult = await child.completion;
-        if (interrupted || childResult.signal) {
+        dependencies.writeLine("[demo] Initial tests fail as expected.");
+        dependencies.writeLine("[demo] ----- Forge Runtime transcript begins -----");
+        let childResult: LivePortfolioProcessResult;
+        try {
+          cancelRunTimeout = dependencies.scheduleRunTimeout(() => {
+            stopChild("timed_out", "SIGTERM");
+          });
+          child = dependencies.spawnCli(
+            process.execPath,
+            [
+              path.resolve(dependencies.forgeRoot, "dist", "cli", "index.js"),
+              "--worktree",
+              "--verify",
+              "npm test",
+              LIVE_PORTFOLIO_PROMPT,
+            ],
+            {
+              cwd: fixture,
+              env: dependencies.environment,
+              shell: false,
+            },
+          );
+          childResult = await child.completion;
+        } finally {
+          dependencies.writeLine("[demo] ----- Forge Runtime transcript ends -----");
+        }
+        if (stopReason) {
+          result = { cleaned: false, reason: stopReason, status: "FAIL" };
+        } else if (childResult.signal) {
           result = { cleaned: false, reason: "interrupted", status: "FAIL" };
         } else if (childResult.exitCode !== 0) {
           result = { cleaned: false, reason: "child_failed", status: "FAIL" };
         } else {
           try {
             await validateLivePortfolioEvidence(fixture);
-            result = interrupted
-              ? { cleaned: false, reason: "interrupted", status: "FAIL" }
+            result = stopReason
+              ? { cleaned: false, reason: stopReason, status: "FAIL" }
               : {
                   cleaned: false,
                   reason: "verified_session_evidence",
@@ -164,8 +190,8 @@ export async function runLivePortfolioDemo(
       }
     }
   } catch {
-    result = interrupted
-      ? { cleaned: false, reason: "interrupted", status: "FAIL" }
+    result = stopReason
+      ? { cleaned: false, reason: stopReason, status: "FAIL" }
       : creatingFixture
         ? { cleaned: false, reason: "setup_failed", status: "FAIL" }
         : { cleaned: false, reason: "child_failed", status: "FAIL" };
@@ -180,14 +206,15 @@ export async function runLivePortfolioDemo(
     } else {
       result.cleaned = true;
     }
-    if (interrupted && result.reason !== "cleanup_failed") {
-      result = { cleaned: result.cleaned, reason: "interrupted", status: "FAIL" };
+    if (stopReason && result.reason !== "cleanup_failed") {
+      result = { cleaned: result.cleaned, reason: stopReason, status: "FAIL" };
     }
+    cancelRunTimeout();
     cancelForceKill();
     removeSignalHandlers();
   }
 
-  return result;
+  return reportLivePortfolioResult(dependencies, result);
 }
 
 export async function createLivePortfolioFixture(): Promise<string> {
@@ -199,7 +226,7 @@ export async function createLivePortfolioFixture(): Promise<string> {
     await fs.writeFile(
       path.join(fixture, "package.json"),
       `${JSON.stringify({
-        name: "forge-portfolio-live-fixture",
+        name: "forge-portfolio-retry-fixture",
         private: true,
         scripts: { test: "node --test" },
         type: "module",
@@ -207,33 +234,99 @@ export async function createLivePortfolioFixture(): Promise<string> {
       "utf8",
     );
     await fs.writeFile(
-      path.join(fixture, "src", "slugify.mjs"),
+      path.join(fixture, "src", "errors.mjs"),
       [
-        "export function slugify(value) {",
-        "  return value.toLowerCase().replace(/\\s+/g, \"-\");",
+        "export class TransientError extends Error {",
+        "  name = \"TransientError\";",
+        "}",
+        "",
+        "export class PermanentError extends Error {",
+        "  name = \"PermanentError\";",
+        "}",
+        "",
+        "export function isTransientError(error) {",
+        "  return error instanceof TransientError;",
         "}",
         "",
       ].join("\n"),
       "utf8",
     );
     await fs.writeFile(
-      path.join(fixture, "test", "slugify.test.mjs"),
+      path.join(fixture, "src", "retry.mjs"),
+      [
+        "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
+        "  let attempt = 0;",
+        "  while (attempt <= maxAttempts) {",
+        "    attempt += 1;",
+        "    try {",
+        "      return await operation();",
+        "    } catch (error) {",
+        "      if (attempt > maxAttempts) {",
+        "        throw error;",
+        "      }",
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixture, "test", "retry.test.mjs"),
       [
         'import assert from "node:assert/strict";',
         'import test from "node:test";',
         "",
-        'import { slugify } from "../src/slugify.mjs";',
+        'import { PermanentError, TransientError, isTransientError } from "../src/errors.mjs";',
+        'import { runWithRetry } from "../src/retry.mjs";',
         "",
-        'test("trims surrounding whitespace", () => {',
-        '  assert.equal(slugify("  forge  "), "forge");',
+        'test("returns a first-attempt success without another call", async () => {',
+        "  let attempts = 0;",
+        "  const result = await runWithRetry(async () => {",
+        "    attempts += 1;",
+        '    return "ok";',
+        "  }, { maxAttempts: 3, isRetryable: isTransientError });",
+        '  assert.equal(result, "ok");',
+        "  assert.equal(attempts, 1);",
         "});",
         "",
-        'test("lowercases text", () => {',
-        '  assert.equal(slugify("Forge"), "forge");',
+        'test("retries transient failures until the operation succeeds", async () => {',
+        "  let attempts = 0;",
+        "  const result = await runWithRetry(async () => {",
+        "    attempts += 1;",
+        "    if (attempts < 3) {",
+        '      throw new TransientError("try again");',
+        "    }",
+        '    return "recovered";',
+        "  }, { maxAttempts: 3, isRetryable: isTransientError });",
+        '  assert.equal(result, "recovered");',
+        "  assert.equal(attempts, 3);",
         "});",
         "",
-        'test("collapses whitespace to hyphens", () => {',
-        '  assert.equal(slugify("hello \\t world"), "hello-world");',
+        'test("maxAttempts is the total operation limit", async () => {',
+        "  let attempts = 0;",
+        '  const failure = new TransientError("still unavailable");',
+        "  await assert.rejects(",
+        "    runWithRetry(async () => {",
+        "      attempts += 1;",
+        "      throw failure;",
+        "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
+        "    (error) => error === failure,",
+        "  );",
+        "  assert.equal(attempts, 3);",
+        "});",
+        "",
+        'test("stops immediately for a permanent failure", async () => {',
+        "  let attempts = 0;",
+        '  const failure = new PermanentError("do not retry");',
+        "  await assert.rejects(",
+        "    runWithRetry(async () => {",
+        "      attempts += 1;",
+        "      throw failure;",
+        "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
+        "    (error) => error === failure,",
+        "  );",
+        "  assert.equal(attempts, 1);",
         "});",
         "",
       ].join("\n"),
@@ -246,8 +339,9 @@ export async function createLivePortfolioFixture(): Promise<string> {
       "add",
       ".gitignore",
       "package.json",
-      "src/slugify.mjs",
-      "test/slugify.test.mjs",
+      "src/errors.mjs",
+      "src/retry.mjs",
+      "test/retry.test.mjs",
     ]);
     await runGit(fixture, ["commit", "--no-gpg-sign", "-qm", "initial failing fixture"]);
     return fixture;
@@ -374,7 +468,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     await fs.readFile(expectedRootTaskGraphPath, "utf8"),
   );
   const graph = parseTeamTaskGraphFile(taskGraphValue);
-  if (graph.tasks.length !== 1 || graph.nextTaskSequence !== 2) {
+  if (graph.tasks.length !== 1) {
     throw new Error("expected exactly one task");
   }
   const task = graph.tasks[0];
@@ -382,15 +476,10 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   const receiptSource = task?.integrationReceipt?.source;
   if (
     !task
-    || task.id !== "task_001"
-    || task.title !== "Repair slugify"
     || task.kind !== "edit"
     || task.status !== "completed"
     || task.owner?.role !== "leader"
     || task.dependencies.length !== 0
-    || !sameStrings(task.acceptance, [
-      "npm test passes and slugify trims, lowercases, and collapses whitespace to hyphens",
-    ])
     || task.verificationCommand !== "npm test"
     || task.verdict?.status !== "passed"
     || submissionSource?.kind !== "child"
@@ -402,18 +491,9 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     throw new Error("task graph is missing child edit completion evidence");
   }
 
-  const expectedChangedFiles = ["src/slugify.mjs"];
-  if (
-    !sameStrings(task.submission?.changedFiles, expectedChangedFiles)
-    || !task.evidence.some((evidence) => (
-      evidence.reportedByRole === "child"
-      && evidence.reportedBySessionId === submissionSource.childSessionId
-      && evidence.references?.some((reference) => (
-        reference.kind === "artifact" && reference.value === "src/slugify.mjs"
-      ))
-    ))
-  ) {
-    throw new Error("child edit evidence does not anchor the slugify artifact");
+  const expectedChangedFiles = task.submission?.changedFiles;
+  if (!expectedChangedFiles || !isSourceOnlyPatch(expectedChangedFiles)) {
+    throw new Error("completed child patch contains a change outside src");
   }
 
   const childSessions = sessions.filter((session) => session.metadata.child !== undefined);
@@ -562,6 +642,11 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
       timeout.unref();
       return () => clearTimeout(timeout);
     },
+    scheduleRunTimeout(handler) {
+      const timeout = setTimeout(handler, 10 * 60_000);
+      timeout.unref();
+      return () => clearTimeout(timeout);
+    },
     spawnCli(command, args, options) {
       const child = spawn(command, args, {
         cwd: options.cwd,
@@ -579,6 +664,7 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
         },
       };
     },
+    writeLine: (line) => console.log(line),
   };
 }
 
@@ -609,6 +695,49 @@ function unavailable(reason: LivePortfolioResult["reason"]): LivePortfolioResult
   return { cleaned: true, reason, status: "UNAVAILABLE" };
 }
 
+function reportLivePortfolioResult(
+  dependencies: Pick<LivePortfolioDependencies, "writeLine">,
+  result: LivePortfolioResult,
+): LivePortfolioResult {
+  const message = livePortfolioResultMessage(result);
+  if (message) {
+    dependencies.writeLine(message);
+  }
+  if (result.status === "PASS") {
+    dependencies.writeLine("[demo] PASS");
+  }
+  return result;
+}
+
+function livePortfolioResultMessage(result: LivePortfolioResult): string {
+  switch (result.reason) {
+    case "verified_session_evidence":
+      return "[demo] Verified the isolated child edit, passing tests, Git receipt, and finalization.";
+    case "missing_environment":
+      return "[demo] Live walkthrough requires OPENAI_API_KEY and OPENAI_MODEL.";
+    case "interactive_terminal_required":
+      return "[demo] Live walkthrough requires an interactive terminal.";
+    case "git_required":
+      return "[demo] Live walkthrough requires Git.";
+    case "bash_required":
+      return "[demo] Live walkthrough requires Bash.";
+    case "fixture_not_failing":
+      return "[demo] The retry fixture did not start with failing tests.";
+    case "child_failed":
+      return "[demo] Forge run failed. See the Runtime transcript above.";
+    case "invalid_session_evidence":
+      return "[demo] The run finished, but the expected c17c evidence was incomplete.";
+    case "setup_failed":
+      return "[demo] The temporary retry fixture could not be prepared.";
+    case "interrupted":
+      return "[demo] The Forge run was interrupted.";
+    case "timed_out":
+      return "[demo] Forge run exceeded 10 minutes and was stopped.";
+    case "cleanup_failed":
+      return "[demo] The temporary demo directory could not be removed.";
+  }
+}
+
 function hasNonEmptyEnvironment(environment: NodeJS.ProcessEnv, name: string): boolean {
   return typeof environment[name] === "string" && environment[name]?.trim().length !== 0;
 }
@@ -623,6 +752,16 @@ function isExecExitError(error: unknown): error is Error & { code: number } {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSourceOnlyPatch(changedFiles: string[]): boolean {
+  return changedFiles.length > 0 && changedFiles.every((changedFile) => {
+    if (path.isAbsolute(changedFile) || changedFile.includes("\\")) {
+      return false;
+    }
+    const normalized = path.posix.normalize(changedFile);
+    return normalized === changedFile && normalized.startsWith("src/");
+  });
 }
 
 function sameStrings(actual: string[] | undefined, expected: string[]): boolean {

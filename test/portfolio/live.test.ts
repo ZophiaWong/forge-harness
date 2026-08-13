@@ -177,6 +177,38 @@ describe("focused live portfolio walkthrough", () => {
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("keeps wrapper guidance before and after the inherited Forge transcript", async () => {
+    const output: string[] = [];
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      async createFixture() {
+        return createLivePortfolioFixture();
+      },
+      runFixtureTests: async () => 1,
+      spawnCli(_command, _args, options) {
+        output.push("[runtime] original Forge transcript");
+        return completedProcess(async () => {
+          await writePassingRootEvidence(options.cwd);
+          return { exitCode: 0, signal: null };
+        });
+      },
+      writeLine(line) {
+        output.push(line);
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "verified_session_evidence", status: "PASS" });
+    expect(output).toEqual([
+      "[demo] Created a disposable retry fixture.",
+      "[demo] Initial tests fail as expected.",
+      "[demo] ----- Forge Runtime transcript begins -----",
+      "[runtime] original Forge transcript",
+      "[demo] ----- Forge Runtime transcript ends -----",
+      "[demo] Verified the isolated child edit, passing tests, Git receipt, and finalization.",
+      "[demo] PASS",
+    ]);
+  });
+
   it("rejects a zero child exit when root Session evidence is absent and still cleans up", async () => {
     let fixture = "";
     const result = await runLivePortfolioDemo({
@@ -568,6 +600,56 @@ describe("focused live portfolio walkthrough", () => {
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("stops a Live run after ten minutes without inventing a Runtime failure code", async () => {
+    let fixture = "";
+    let settle: ((result: { exitCode: null; signal: NodeJS.Signals }) => void) | undefined;
+    let triggerTimeout: (() => void) | undefined;
+    const killedWith: NodeJS.Signals[] = [];
+    const output: string[] = [];
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      async createFixture() {
+        fixture = await createLivePortfolioFixture();
+        return fixture;
+      },
+      runFixtureTests: async () => 1,
+      scheduleForceKill(handler) {
+        handler();
+        return () => undefined;
+      },
+      scheduleRunTimeout(handler) {
+        triggerTimeout = handler;
+        return () => undefined;
+      },
+      spawnCli() {
+        const completion = new Promise<{ exitCode: null; signal: NodeJS.Signals }>((resolve) => {
+          settle = resolve;
+          setTimeout(() => resolve({ exitCode: null, signal: "SIGTERM" }), 20);
+        });
+        queueMicrotask(() => triggerTimeout?.());
+        return {
+          completion,
+          kill(signal) {
+            killedWith.push(signal);
+            if (signal === "SIGKILL") {
+              settle?.({ exitCode: null, signal });
+            }
+          },
+        };
+      },
+      writeLine(line) {
+        output.push(line);
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "timed_out", status: "FAIL" });
+    expect(killedWith).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(output.at(-1)).toBe("[demo] Forge run exceeded 10 minutes and was stopped.");
+    expect(output.join("\n")).not.toMatch(/timed_out|stage=|reason=/);
+    await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("cleans up when interrupted while the fixture is still being created", async () => {
     let fixture = "";
     let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
@@ -676,9 +758,11 @@ function preflightDependencies(environment: NodeJS.ProcessEnv): LivePortfolioDep
     removeFixture: async (fixture) => fs.rm(fixture, { force: true, recursive: true }),
     runFixtureTests: async () => 1,
     scheduleForceKill: () => () => undefined,
+    scheduleRunTimeout: () => () => undefined,
     spawnCli: () => {
       throw new Error("unexpected child spawn");
     },
+    writeLine: () => undefined,
   };
 }
 
