@@ -459,7 +459,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || terminalVerification.event.exitCode !== 0
     || finalIndex <= verificationIndex
     || completedIndex <= finalIndex
-    || completedIndex !== events.length - 1
+    || !hasValidPostCoreTail(events, completedIndex)
   ) {
     throw new Error("root trace is missing completion evidence");
   }
@@ -612,6 +612,34 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   ) {
     throw new Error("child session is missing terminal evidence");
   }
+}
+
+function hasValidPostCoreTail(events: RecordedTraceEvent[], completedIndex: number): boolean {
+  const postCore = events.slice(completedIndex + 1);
+  let index = 0;
+
+  while (isHookResultFor(postCore[index], "session_ended")) {
+    index += 1;
+  }
+
+  const cleanup = postCore[index];
+  if (cleanup?.type !== "team_cleanup" || cleanup.mode !== "graceful") {
+    return false;
+  }
+  index += 1;
+
+  while (isHookResultFor(postCore[index], "team_cleanup")) {
+    index += 1;
+  }
+
+  return index === postCore.length;
+}
+
+function isHookResultFor(
+  event: RecordedTraceEvent | undefined,
+  sourceEventType: "session_ended" | "team_cleanup",
+): boolean {
+  return event?.type === "hook_result" && event.sourceEventType === sourceEventType;
 }
 
 function defaultLivePortfolioDependencies(): LivePortfolioDependencies {

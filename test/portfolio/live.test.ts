@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import type { TeamTaskResultSource } from "../../src/domain/teamTask.js";
+import { runMinimalLoop } from "../../src/core/minimalLoop.js";
 import {
   createLivePortfolioFixture,
   LIVE_PORTFOLIO_PROMPT,
@@ -14,7 +15,11 @@ import {
   type LivePortfolioDependencies,
   type LivePortfolioProcess,
 } from "../../src/portfolio/live.js";
-import { createLifecycleEmitter } from "../../src/extensions/lifecycle.js";
+import {
+  createLifecycleEmitter,
+  type LifecycleHook,
+} from "../../src/extensions/lifecycle.js";
+import { createTeammateManager } from "../../src/extensions/teammates.js";
 import { createCliSessionTrace } from "../../src/runtime/session.js";
 import { prepareWorktreeSession } from "../../src/runtime/sessionWorkspace.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
@@ -250,6 +255,171 @@ describe("focused live portfolio walkthrough", () => {
       await fs.writeFile(tracePath, `${reordered.map((event) => JSON.stringify(event)).join("\n")}\n`);
 
       await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/completion evidence/);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts graceful CLI cleanup after a completed root Session", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts hook results emitted by completed Session and cleanup events", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture, { postCoreHooks: true });
+
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    {
+      expectedTail: [
+        { status: "completed", type: "session_ended" },
+        { mode: "graceful", type: "team_cleanup" },
+      ],
+      hooks: false,
+      label: "without hooks",
+    },
+    {
+      expectedTail: [
+        { status: "completed", type: "session_ended" },
+        { sourceEventType: "session_ended", type: "hook_result" },
+        { mode: "graceful", type: "team_cleanup" },
+        { sourceEventType: "team_cleanup", type: "hook_result" },
+      ],
+      hooks: true,
+      label: "with hooks",
+    },
+  ])("records the real CLI component teardown tail $label", async ({ expectedTail, hooks }) => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const session = await createCliSessionTrace({
+        cwd: fixture,
+        maxToolRounds: 1,
+        model: "test-model",
+        task: "characterize the root CLI teardown",
+      });
+      const lifecycleHooks: LifecycleHook[] = hooks
+        ? [{
+            events: ["session_ended", "team_cleanup"],
+            handle() {
+              // The real lifecycle emitter records the hook result.
+            },
+            name: "portfolio-tail",
+          }]
+        : [];
+      const lifecycleEmitter = createLifecycleEmitter({
+        hooks: lifecycleHooks,
+        recorder: session.recorder,
+      });
+      const teammateManager = createTeammateManager({
+        baseCwd: fixture,
+        lifecycleEmitter,
+        rootSessionId: session.metadata.id,
+        teamRoot: path.join(session.paths.sessionDir, "team"),
+      });
+      await teammateManager.initialize();
+
+      await runMinimalLoop({
+        apiKey: "",
+        baseURL: "",
+        contextCompaction: false,
+        cwd: fixture,
+        lifecycleEmitter,
+        maxToolRounds: 1,
+        model: "test-model",
+        promptAssets: { skills: [] },
+        responseCreate: async () => ({ output: [], output_text: "done" }),
+        task: "characterize the root CLI teardown",
+        teammates: teammateManager,
+      });
+      await teammateManager.close();
+
+      const events = await readTraceEvents(session.paths.tracePath);
+      expect(events.slice(-expectedTail.length)).toEqual(
+        expectedTail.map((expected) => expect.objectContaining(expected)),
+      );
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    ["a model response", {
+      functionCallCount: 0,
+      outputText: "late model output",
+      round: 10,
+      type: "model_response",
+    }],
+    ["a tool call", {
+      argumentsText: "{}",
+      callId: "late-tool",
+      round: 10,
+      toolName: "read",
+      type: "tool_call",
+    }],
+    ["a verification", {
+      command: "npm test",
+      exitCode: 0,
+      name: "command",
+      round: 10,
+      status: "passed",
+      summary: "late verification",
+      type: "verification_result",
+    }],
+    ["a task mutation", {
+      operation: "update",
+      revision: 9,
+      taskId: "task_001",
+      type: "task_graph_mutated",
+    }],
+  ])("rejects %s after the completed root Session", async (_label, payload) => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      await appendRootTraceEvents(fixture, [payload]);
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/completion evidence/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    ["missing cleanup", (events: Array<Record<string, unknown>>) => (
+      events.filter((event) => event.type !== "team_cleanup")
+    )],
+    ["a second cleanup", (events: Array<Record<string, unknown>>) => [
+      ...events,
+      traceEnvelope(events, { mode: "graceful", stopped: [], type: "team_cleanup" }),
+    ]],
+    ["terminate cleanup", (events: Array<Record<string, unknown>>) => events.map((event) => (
+      event.type === "team_cleanup" ? { ...event, mode: "terminate" } : event
+    ))],
+  ])("rejects $0 in the post-core tail", async (_label, mutate) => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, mutate);
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/completion evidence/i);
     } finally {
       await fs.rm(fixture, { force: true, recursive: true });
     }
@@ -801,6 +971,7 @@ interface PassingRootEvidenceOptions {
   changedFiles?: string[];
   description?: string;
   includeArtifactEvidence?: boolean;
+  postCoreHooks?: boolean;
   taskSequence?: 1 | 2;
   title?: string;
 }
@@ -1029,6 +1200,23 @@ async function writePassingRootEvidence(
   });
   await session.recorder.record({ answer: "done", round: 9, type: "final_answer" });
   await session.recorder.record({ rounds: 9, status: "completed", type: "session_ended" });
+  if (options.postCoreHooks) {
+    await session.recorder.record({
+      hookName: "portfolio-session-hook",
+      sourceEventType: "session_ended",
+      status: "completed",
+      type: "hook_result",
+    });
+  }
+  await session.recorder.record({ mode: "graceful", stopped: [], type: "team_cleanup" });
+  if (options.postCoreHooks) {
+    await session.recorder.record({
+      hookName: "portfolio-cleanup-hook",
+      sourceEventType: "team_cleanup",
+      status: "completed",
+      type: "hook_result",
+    });
+  }
 }
 
 async function findRootSessionDir(fixture: string): Promise<string> {
@@ -1072,6 +1260,45 @@ async function rewriteTrace(
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   const rewritten = mutate(events).map((event, index) => ({ ...event, sequence: index + 1 }));
   await fs.writeFile(tracePath, `${rewritten.map((event) => JSON.stringify(event)).join("\n")}\n`);
+}
+
+async function readTraceEvents(tracePath: string): Promise<Array<Record<string, unknown>>> {
+  return (await fs.readFile(tracePath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function traceEnvelope(
+  events: Array<Record<string, unknown>>,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const terminal = events.at(-1);
+  if (!terminal) {
+    throw new Error("root trace is empty");
+  }
+  return {
+    ...payload,
+    sessionId: terminal.sessionId,
+    timestamp: terminal.timestamp,
+  };
+}
+
+async function appendRootTraceEvents(
+  fixture: string,
+  payloads: Array<Record<string, unknown>>,
+): Promise<void> {
+  const rootSessionDir = await findRootSessionDir(fixture);
+  await rewriteTrace(rootSessionDir, (events) => {
+    const terminal = events.at(-1);
+    if (!terminal) {
+      throw new Error("root trace is empty");
+    }
+    return [
+      ...events,
+      ...payloads.map((payload) => traceEnvelope(events, payload)),
+    ];
+  });
 }
 
 async function recordApprovedAction(
