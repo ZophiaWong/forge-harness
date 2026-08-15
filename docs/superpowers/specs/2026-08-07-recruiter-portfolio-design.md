@@ -24,7 +24,7 @@ Any failed assertion exits non-zero. The scenes are independent demonstrations, 
 
 `npm run demo:portfolio:live` explicitly requests one focused Live LLM walkthrough. It may require the operator's locally configured provider credentials and network access; neither is consulted by the default or `--explain` modes. The model may choose different wording, calls, order, or round counts on different runs. Its walkthrough is therefore evidence of one observed integration run, not a deterministic check, a replay of the default scenes, or a claim about general model capability.
 
-The Live command is a thin interview launcher around the existing Forge CLI. It creates a disposable Git fixture, confirms that the fixture starts with failing tests, starts Forge with `--worktree --verify "npm test"`, checks the persisted c17c evidence after the CLI exits, and removes the fixture. The launcher stays outside the Runtime and writes no Trace or events. It has no diagnostic mode or public failure-code system.
+The Live command is a thin interview launcher around the existing Forge CLI. It creates a disposable Git fixture, confirms that the fixture starts with failing tests, starts Forge with `--worktree --verify "npm test"`, checks the persisted c17c evidence after the CLI exits, and cleans up the fixture on the normal success and failure paths. The launcher stays outside the Runtime and writes no Trace or events. It has no diagnostic mode or public failure-code system.
 
 The fixture is generated under the system temporary directory for each run. It contains `.gitignore`, `package.json`, `src/errors.mjs`, `src/retry.mjs`, and `test/retry.test.mjs`. The committed `.gitignore` excludes `.forge/`, so the Session files created before root Worktree setup do not make the fixture repository dirty. The retry tests cover first-attempt success, recovery from a transient error, `maxAttempts` as a total-attempt limit, and immediate failure for a permanent error. The fixture has no external dependencies and does not copy Forge plugin or MCP configuration.
 
@@ -32,7 +32,7 @@ The model receives a focused coding task rather than a tool-call script. It must
 
 The one-shot edit child keeps its current tool profile. It reads the contract and edits source files, but it does not receive Bash access for the demo. The Leader runs `task_verify` against the registered child source, `task_integrate` records the Git receipt, and the root verifier runs `npm test` after integration.
 
-The Live run has a ten-minute wall-clock limit. On timeout, the launcher requests termination, escalates after two seconds if the CLI is still running, and then cleans the fixture. A model response, provider failure, missing credential, timeout, or incomplete evidence cannot become a passing deterministic claim.
+The launcher starts a ten-minute watchdog before fixture setup. If the Forge child is running when the deadline expires, the launcher requests termination and escalates after two seconds if the process has not exited. Setup and evidence-validation work do not yet share end-to-end cancellation, and exceptional fixture ownership remains a follow-up in [Issue #16](https://github.com/ZophiaWong/forge-harness/issues/16). A model response, provider failure, missing credential, timeout, or incomplete evidence cannot become a passing deterministic claim.
 
 The deterministic command continues to accept only `--help` and `--explain`; `--help` is standalone. Any unknown argument, duplicate flag, or unsupported flag combination writes a concise usage error to stderr and exits `2` without creating a fixture or contacting a provider. The Live walkthrough is a separate operator command, not a flag or explain variant of the deterministic walkthrough.
 
@@ -46,7 +46,7 @@ The Portfolio pages keep the presentation brief. They do not include a video or 
 
 ### Fixture, output, and evidence boundaries
 
-Each valid walkthrough invocation owns a fresh temporary fixture under the system temporary directory after its arguments have been parsed. It may create its fixture Git repository and worktree there only, and must remove them in `finally` on success, assertion failure, provider failure, or interruption that reaches cleanup. `--help` and invalid-argument paths create no fixture. A walkthrough must not mutate the caller's checkout, source tree, existing worktrees, or credentials.
+Each valid walkthrough invocation uses a fresh temporary fixture under the system temporary directory after its arguments have been parsed. It may create its fixture Git repository and worktree there only. The runner removes that fixture when control reaches its normal cleanup path; [Issue #16](https://github.com/ZophiaWong/forge-harness/issues/16) tracks ownership and reporting when initialization and cleanup fail together. `--help` and invalid-argument paths create no fixture. A walkthrough must not mutate the caller's checkout, source tree, existing worktrees, or credentials.
 
 The deterministic mode keeps the strict no-secret output policy: stdout and stderr may contain only stable aliases, statuses, receipts, help text, usage text, and `--explain` annotations. They must never print environment values, API keys, authorization headers, raw provider errors, prompts, raw model text, absolute paths, unredacted Trace data, or temporary-fixture contents beyond the named evidence aliases.
 
@@ -56,11 +56,15 @@ The deterministic walkthrough validates its own assertions and cleanup. The Live
 
 - the fixture contains exactly one completed edit task and one matching synchronous edit child;
 - the child is the submitted and integrated source;
-- at least one file changed, and every changed path is under `src/**`;
+- the child submission reports at least one changed file, and every child-submitted path is under `src/**`;
 - delegate, child mutation, task verification, and task integration were manually approved;
 - the verification command and root verifier both passed `npm test`;
 - the fingerprint remained current; and
 - the Git receipt, final answer, and completed Session appear in the required order.
+
+For a completed root run, the validator treats `session_ended` as the terminal core event rather than the absolute final Trace record. It accepts zero or more `hook_result` records sourced from `session_ended`, followed by exactly one graceful `team_cleanup`, followed by zero or more `hook_result` records sourced from that cleanup. It rejects every other post-core event. This is a Live-validator rule, not a general redefinition of Session lifecycle; [Issue #14](https://github.com/ZophiaWong/forge-harness/issues/14) owns that design question.
+
+The current path check validates the child submission recorded in the TaskGraph. It does not yet reconcile the complete final root Worktree with the integration receipt. [Issue #15](https://github.com/ZophiaWong/forge-harness/issues/15) tracks that repository-level check. Until then, the launcher must not claim that it has validated every final root change.
 
 Artifact evidence is optional because the source binding, fingerprint, verification, and receipt already establish the edit chain.
 
