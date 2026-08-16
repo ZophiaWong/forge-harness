@@ -1,10 +1,10 @@
 # Engineering case study
 
-Forge Harness began with a small question: what must a coding-agent runtime own if a model response is treated as a proposal rather than proof of completion?
+Forge Harness began as a runnable model-tool loop. Each checkpoint adds the smallest mechanism required by a failure exposed at the previous boundary: unconstrained tool execution, growing feedback, ephemeral state, unverified completion, shared-workspace edits, and ambiguous team handoff.
 
-The answer grew into a c17c TypeScript Runtime with explicit action policy, bounded context, durable evidence, verification, isolated delegation, trusted extensions, a shared TaskGraph, and a completion protocol. The implementation is intentionally local and narrow. It is not a hosted agent platform, and the current boundary stops before crash recovery or distributed coordination.
+The current result is a local c17c TypeScript Runtime with explicit action policy, bounded context, durable evidence, verification, isolated delegation, trusted extensions, a shared TaskGraph, and a completion protocol. It is source for inspection and execution, not a hosted agent platform. The current boundary stops before crash recovery and distributed coordination.
 
-## Starting failure: a fluent answer can hide an incomplete run
+## From connectivity to Runtime responsibilities
 
 A minimal loop can send a prompt, execute a function call, and print the next model response. That proves connectivity, not correctness. Several facts are still unresolved:
 
@@ -16,7 +16,7 @@ A minimal loop can send a prompt, execute a function call, and print the next mo
 - Has every team task been reviewed, verified, and integrated?
 - Are background workers and mailboxes actually settled?
 
-Forge moved these questions out of prompt convention and into Runtime-owned state transitions.
+Those questions moved out of prompt convention and into Runtime-owned state transitions as the checkpoints accumulated.
 
 ## Decision 1: put authorization before tool dispatch
 

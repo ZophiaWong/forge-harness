@@ -36,3 +36,6 @@ jobs:
 
       - name: Build CLI and Runtime
         run: npm run build
+
+      - name: Run deterministic recruiter portfolio demo
+        run: npm run demo:portfolio
