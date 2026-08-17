@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   TeamTaskIntegrationReceipt,
@@ -675,6 +675,95 @@ describe("focused live portfolio walkthrough", () => {
         .resolves.toMatchObject({});
       await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
     } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("stops after filesystem enumeration when evidence validation is cancelled", async () => {
+    const fixture = await createInitializedFixture();
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const throwIfAborted = signal.throwIfAborted.bind(signal);
+    let cancellationChecks = 0;
+    Object.defineProperty(signal, "throwIfAborted", {
+      value() {
+        cancellationChecks += 1;
+        if (cancellationChecks === 2) {
+          controller.abort();
+        }
+        throwIfAborted();
+      },
+    });
+
+    try {
+      await writePassingRootEvidence(fixture);
+
+      await expect(validateLivePortfolioEvidence(fixture, signal))
+        .rejects.toMatchObject({ name: "AbortError" });
+      expect(cancellationChecks).toBe(2);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("aborts a running Git reconciliation and skips later Git checks", async () => {
+    const fixture = await createInitializedFixture();
+    const originalPath = process.env.PATH;
+    const originalRealGit = process.env.FORGE_LIVE_REAL_GIT;
+    const wrapperDir = path.join(fixture, "git-wrapper");
+    const markerPath = path.join(fixture, "git-status-started");
+    const logPath = path.join(fixture, "git-commands.log");
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const realGit = (await execFileAsync("which", ["git"], { encoding: "utf8" })).stdout.trim();
+      await fs.mkdir(wrapperDir);
+      await fs.writeFile(
+        path.join(wrapperDir, "git"),
+        [
+          "#!/usr/bin/env node",
+          "import { spawnSync } from 'node:child_process';",
+          "import { appendFileSync, writeFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          `appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');`,
+          "if (args[0] === 'status') {",
+          `  writeFileSync(${JSON.stringify(markerPath)}, 'started\\n');`,
+          "  setInterval(() => undefined, 1_000);",
+          "  setTimeout(() => process.exit(0), 500);",
+          "} else {",
+          "  const result = spawnSync(process.env.FORGE_LIVE_REAL_GIT, args, { stdio: 'inherit' });",
+          "  process.exit(result.status ?? 1);",
+          "}",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${wrapperDir}${path.delimiter}${originalPath ?? ""}`;
+      process.env.FORGE_LIVE_REAL_GIT = realGit;
+      const controller = new AbortController();
+      const validation = validateLivePortfolioEvidence(fixture, controller.signal);
+      await vi.waitFor(async () => {
+        await expect(fs.access(markerPath)).resolves.toBeUndefined();
+      });
+
+      controller.abort();
+
+      await expect(validation).rejects.toMatchObject({ name: "AbortError" });
+      const commands = await fs.readFile(logPath, "utf8");
+      expect(commands).toContain("rev-parse --show-toplevel");
+      expect(commands).toContain("status --porcelain=v1 -z --untracked-files=all");
+      expect(commands).not.toContain("rev-parse HEAD");
+      expect(commands).not.toContain("diff --name-only");
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+      if (originalRealGit === undefined) {
+        delete process.env.FORGE_LIVE_REAL_GIT;
+      } else {
+        process.env.FORGE_LIVE_REAL_GIT = originalRealGit;
+      }
       await fs.rm(fixture, { force: true, recursive: true });
     }
   });

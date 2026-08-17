@@ -386,9 +386,14 @@ export async function initializeLivePortfolioFixture(
   );
 }
 
-export async function validateLivePortfolioEvidence(fixture: string): Promise<void> {
+export async function validateLivePortfolioEvidence(
+  fixture: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   const sessionsRoot = path.join(fixture, ".forge", "sessions");
   const sessionEntries = await fs.readdir(sessionsRoot, { withFileTypes: true });
+  signal?.throwIfAborted();
   const sessions: Array<{
     id: string;
     metadata: Record<string, unknown>;
@@ -400,7 +405,10 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
       continue;
     }
     const sessionDir = path.join(sessionsRoot, entry.name);
-    const value: unknown = JSON.parse(await fs.readFile(path.join(sessionDir, "session.json"), "utf8"));
+    const value: unknown = JSON.parse(await readEvidenceFile(
+      path.join(sessionDir, "session.json"),
+      signal,
+    ));
     if (!isRecord(value) || typeof value.id !== "string") {
       throw new Error("invalid session metadata");
     }
@@ -446,7 +454,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     throw new Error("root session is missing worktree metadata");
   }
 
-  const traceText = await fs.readFile(expectedRootTracePath, "utf8");
+  const traceText = await readEvidenceFile(expectedRootTracePath, signal);
   const traceLines = traceText.split("\n").filter((line) => line.length > 0);
   const events = traceLines.map((line, index) => {
     const event = parseRecordedTraceEvent(JSON.parse(line));
@@ -502,7 +510,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   }
 
   const taskGraphValue: unknown = JSON.parse(
-    await fs.readFile(expectedRootTaskGraphPath, "utf8"),
+    await readEvidenceFile(expectedRootTaskGraphPath, signal),
   );
   const graph = parseTeamTaskGraphFile(taskGraphValue);
   if (graph.tasks.length !== 1) {
@@ -542,7 +550,8 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     rootWorkspacePath: expectedRootWorkspacePath,
     targetBefore: integrationReceipt.targetBefore,
     traceBaseCommit: workspaceEvents[0]?.baseCommit,
-  });
+  }, signal);
+  signal?.throwIfAborted();
 
   const childSessions = sessions.filter((session) => session.metadata.child !== undefined);
   if (childSessions.length !== 1 || childSessions[0]?.id !== submissionSource.childSessionId) {
@@ -637,7 +646,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     throw new Error("root trace does not contain one synchronous child handoff");
   }
 
-  const childTraceText = await fs.readFile(expectedChildTracePath, "utf8");
+  const childTraceText = await readEvidenceFile(expectedChildTracePath, signal);
   const childEvents = childTraceText.split("\n").filter((line) => line.length > 0).map((line, index) => {
     const event = parseRecordedTraceEvent(JSON.parse(line));
     if (event.sessionId !== childSession.id || event.sequence !== index + 1) {
@@ -660,6 +669,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   ) {
     throw new Error("child session is missing terminal evidence");
   }
+  signal?.throwIfAborted();
 }
 
 interface FinalRootGitStateExpectation {
@@ -673,7 +683,9 @@ interface FinalRootGitStateExpectation {
 
 async function reconcileFinalRootGitState(
   expectation: FinalRootGitStateExpectation,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   if (
     expectation.traceBaseCommit !== expectation.rootWorkspaceBaseCommit
     || expectation.targetBefore !== expectation.rootWorkspaceBaseCommit
@@ -690,6 +702,7 @@ async function reconcileFinalRootGitState(
   const actualRoot = (await gitOutput(
     expectation.rootWorkspacePath,
     ["rev-parse", "--show-toplevel"],
+    signal,
   )).trim();
   if (path.resolve(actualRoot) !== path.resolve(expectation.rootWorkspacePath)) {
     throw new Error("root Git top-level does not match the expected Worktree");
@@ -698,6 +711,7 @@ async function reconcileFinalRootGitState(
   const status = await gitOutput(
     expectation.rootWorkspacePath,
     ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    signal,
   );
   if (status.length > 0) {
     throw new Error("root Worktree must be clean before PASS");
@@ -706,6 +720,7 @@ async function reconcileFinalRootGitState(
   const head = (await gitOutput(
     expectation.rootWorkspacePath,
     ["rev-parse", "HEAD"],
+    signal,
   )).trim();
   if (head !== expectation.integratedCommit) {
     throw new Error("root HEAD does not match the integration receipt");
@@ -721,10 +736,18 @@ async function reconcileFinalRootGitState(
       `${expectation.targetBefore}..HEAD`,
       "--",
     ],
+    signal,
   )).split("\0").filter(Boolean);
   if (!sameStringSets(changedFiles, expectation.expectedChangedFiles)) {
     throw new Error("root base-to-HEAD path set does not match the child submission");
   }
+}
+
+async function readEvidenceFile(filePath: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  const contents = await fs.readFile(filePath, { encoding: "utf8", signal });
+  signal?.throwIfAborted();
+  return contents;
 }
 
 function hasValidPostCoreTail(events: RecordedTraceEvent[], completedIndex: number): boolean {
@@ -992,8 +1015,8 @@ async function runGit(cwd: string, args: string[], signal?: AbortSignal): Promis
   await execFileAsync("git", args, { cwd, signal });
 }
 
-async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  return (await execFileAsync("git", args, { cwd, encoding: "utf8" })).stdout;
+async function gitOutput(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
+  return (await execFileAsync("git", args, { cwd, encoding: "utf8", signal })).stdout;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
