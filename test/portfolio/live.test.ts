@@ -137,6 +137,18 @@ describe("focused live portfolio walkthrough", () => {
       await expect(runInitialFixtureTests(fixture, new AbortController().signal))
         .rejects.toThrow(/initial test output/i);
 
+      packageJson.scripts.test = [
+        "node -e \"",
+        "console.log('TAP version 13\\nBail out! setup crashed\\n",
+        "ok 1 - first passing test\\nok 2 - second passing test\\n",
+        "not ok 3 - maxAttempts is the total operation limit\\n",
+        "not ok 4 - stops immediately for a permanent failure\\n",
+        "1..4\\n# tests 4\\n# pass 2\\n# fail 2'); process.exit(1)\"",
+      ].join("");
+      await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .rejects.toThrow(/initial test output/i);
+
       packageJson.scripts.test = "node -e \"process.exit(2)\"";
       await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
       await expect(runInitialFixtureTests(fixture, new AbortController().signal))

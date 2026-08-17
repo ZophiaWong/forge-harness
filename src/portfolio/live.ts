@@ -803,6 +803,9 @@ export async function runInitialFixtureTests(
     throw new Error(`initial test command had unexpected exit ${String(completion.exitCode)}`);
   }
   const output = completion.output;
+  if (/^Bail out!(?:\s|$)/im.test(output)) {
+    throw new Error("initial test output was not valid TAP");
+  }
   const totals = {
     fail: tapSummaryCount(output, "fail"),
     pass: tapSummaryCount(output, "pass"),
