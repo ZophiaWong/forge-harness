@@ -53,6 +53,7 @@ export interface LivePortfolioDependencies {
     args: string[],
     options: LivePortfolioSpawnOptions,
   ): LivePortfolioProcess;
+  validateEvidence(fixture: string, signal: AbortSignal): Promise<void>;
   writeLine(line: string): void;
 }
 
@@ -106,13 +107,24 @@ export async function runLivePortfolioDemo(
 
   let fixture: string | undefined;
   let child: LivePortfolioProcess | undefined;
-  let creatingFixture = true;
+  let childCompleted = false;
   let stopReason: "interrupted" | "timed_out" | undefined;
+  let stopSignal: NodeJS.Signals | undefined;
+  let childTerminationStarted = false;
   let cancelForceKill: () => void = () => undefined;
   let cancelRunTimeout: () => void = () => undefined;
   let result: LivePortfolioResult = { cleaned: false, reason: "setup_failed", status: "FAIL" };
-  const fixtureSignal = new AbortController().signal;
-  const stopChild = (
+  const controller = new AbortController();
+  const terminateChild = (signal: NodeJS.Signals) => {
+    if (!child || childTerminationStarted) {
+      return;
+    }
+    childTerminationStarted = true;
+    child.kill(signal);
+    cancelForceKill();
+    cancelForceKill = dependencies.scheduleForceKill(() => child?.kill("SIGKILL"));
+  };
+  const stopRun = (
     reason: "interrupted" | "timed_out",
     signal: NodeJS.Signals,
   ) => {
@@ -120,28 +132,28 @@ export async function runLivePortfolioDemo(
       return;
     }
     stopReason = reason;
-    if (child) {
-      child.kill(signal);
-      cancelForceKill();
-      cancelForceKill = dependencies.scheduleForceKill(() => child?.kill("SIGKILL"));
-    }
+    stopSignal = signal;
+    controller.abort();
+    terminateChild(signal);
   };
   const removeSignalHandlers = dependencies.installSignalHandlers((signal) => {
-    stopChild("interrupted", signal);
+    stopRun("interrupted", signal);
   });
   cancelRunTimeout = dependencies.scheduleRunTimeout(() => {
-    stopChild("timed_out", "SIGTERM");
+    stopRun("timed_out", "SIGTERM");
   });
 
   try {
     fixture = await dependencies.allocateFixture();
-    await dependencies.initializeFixture(fixture, fixtureSignal);
+    controller.signal.throwIfAborted();
+    await dependencies.initializeFixture(fixture, controller.signal);
+    controller.signal.throwIfAborted();
     dependencies.writeLine("[demo] Created a disposable retry fixture.");
     if (stopReason) {
       result = { cleaned: false, reason: stopReason, status: "FAIL" };
     } else {
-      const initialTestResult = await dependencies.runFixtureTests(fixture, fixtureSignal);
-      creatingFixture = false;
+      const initialTestResult = await dependencies.runFixtureTests(fixture, controller.signal);
+      controller.signal.throwIfAborted();
       if (initialTestResult === "passed") {
         result = { cleaned: false, reason: "fixture_not_failing", status: "FAIL" };
       } else if (stopReason) {
@@ -166,10 +178,21 @@ export async function runLivePortfolioDemo(
               shell: false,
             },
           );
-          childResult = await child.completion;
+          if (stopSignal) {
+            terminateChild(stopSignal);
+          }
+          try {
+            childResult = await child.completion;
+            childCompleted = true;
+          } finally {
+            cancelForceKill();
+            cancelForceKill = () => undefined;
+            child = undefined;
+          }
         } finally {
           dependencies.writeLine("[demo] ----- Forge Runtime transcript ends -----");
         }
+        controller.signal.throwIfAborted();
         if (stopReason) {
           result = { cleaned: false, reason: stopReason, status: "FAIL" };
         } else if (childResult.signal) {
@@ -178,7 +201,8 @@ export async function runLivePortfolioDemo(
           result = { cleaned: false, reason: "child_failed", status: "FAIL" };
         } else {
           try {
-            await validateLivePortfolioEvidence(fixture);
+            await dependencies.validateEvidence(fixture, controller.signal);
+            controller.signal.throwIfAborted();
             result = stopReason
               ? { cleaned: false, reason: stopReason, status: "FAIL" }
               : {
@@ -187,7 +211,9 @@ export async function runLivePortfolioDemo(
                   status: "PASS",
                 };
           } catch {
-            result = { cleaned: false, reason: "invalid_session_evidence", status: "FAIL" };
+            result = stopReason
+              ? { cleaned: false, reason: stopReason, status: "FAIL" }
+              : { cleaned: false, reason: "invalid_session_evidence", status: "FAIL" };
           }
         }
       }
@@ -195,10 +221,11 @@ export async function runLivePortfolioDemo(
   } catch {
     result = stopReason
       ? { cleaned: false, reason: stopReason, status: "FAIL" }
-      : creatingFixture
-        ? { cleaned: false, reason: "setup_failed", status: "FAIL" }
-        : { cleaned: false, reason: "child_failed", status: "FAIL" };
+      : childCompleted
+        ? { cleaned: false, reason: "child_failed", status: "FAIL" }
+        : { cleaned: false, reason: "setup_failed", status: "FAIL" };
   } finally {
+    cancelRunTimeout();
     if (fixture) {
       try {
         await dependencies.removeFixture(fixture);
@@ -212,7 +239,6 @@ export async function runLivePortfolioDemo(
     if (stopReason && result.reason !== "cleanup_failed") {
       result = { cleaned: result.cleaned, reason: stopReason, status: "FAIL" };
     }
-    cancelRunTimeout();
     cancelForceKill();
     removeSignalHandlers();
   }
@@ -784,6 +810,7 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
         },
       };
     },
+    validateEvidence: validateLivePortfolioEvidence,
     writeLine: (line) => console.log(line),
   };
 }
@@ -951,11 +978,11 @@ function livePortfolioResultMessage(result: LivePortfolioResult): string {
     case "invalid_session_evidence":
       return "[demo] The run finished, but the expected c17c evidence or final root Git state was invalid.";
     case "setup_failed":
-      return "[demo] The temporary retry fixture could not be prepared.";
+      return "[demo] The Live walkthrough could not be started.";
     case "interrupted":
       return "[demo] The Forge run was interrupted.";
     case "timed_out":
-      return "[demo] Forge run exceeded 10 minutes and was stopped.";
+      return "[demo] Live walkthrough exceeded 10 minutes and was stopped.";
     case "cleanup_failed":
       return "[demo] The temporary demo directory could not be removed.";
   }

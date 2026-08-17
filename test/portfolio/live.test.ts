@@ -19,6 +19,7 @@ import {
   validateLivePortfolioEvidence,
   type LivePortfolioDependencies,
   type LivePortfolioProcess,
+  type LivePortfolioProcessResult,
 } from "../../src/portfolio/live.js";
 import {
   createLifecycleEmitter,
@@ -365,6 +366,62 @@ describe("focused live portfolio walkthrough", () => {
       "[demo] The run finished, but the expected c17c evidence or final root Git state was invalid.",
     );
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("aborts injected evidence validation and ignores its late resolution", async () => {
+    let triggerTimeout: (() => void) | undefined;
+    let validationCalls = 0;
+    let validationSignal: AbortSignal | undefined;
+    const output: string[] = [];
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-validation",
+      initializeFixture: async () => undefined,
+      removeFixture: async () => undefined,
+      scheduleRunTimeout(handler) {
+        triggerTimeout = handler;
+        return () => undefined;
+      },
+      spawnCli: () => completedProcess(async () => ({ exitCode: 0, signal: null })),
+      async validateEvidence(_fixture, signal) {
+        validationCalls += 1;
+        validationSignal = signal;
+        triggerTimeout?.();
+      },
+      writeLine(line) {
+        output.push(line);
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "timed_out", status: "FAIL" });
+    expect(validationCalls).toBe(1);
+    expect(validationSignal?.aborted).toBe(true);
+    expect(output.at(-1)).toBe("[demo] Live walkthrough exceeded 10 minutes and was stopped.");
+    expect(output.join("\n")).not.toMatch(/live-validation|stage=|reason=/);
+  });
+
+  it("keeps interruption precedence when injected evidence validation rejects late", async () => {
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-validation-rejection",
+      initializeFixture: async () => undefined,
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
+      },
+      removeFixture: async () => undefined,
+      spawnCli: () => completedProcess(async () => ({ exitCode: 0, signal: null })),
+      async validateEvidence(_fixture, signal) {
+        interrupt?.("SIGTERM");
+        expect(signal.aborted).toBe(true);
+        throw new Error("late validation rejection");
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "interrupted", status: "FAIL" });
   });
 
   it("rejects a root Trace whose final answer precedes passed verification", async () => {
@@ -1022,6 +1079,83 @@ describe("focused live portfolio walkthrough", () => {
     expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
   });
 
+  it("keeps timeout precedence when pending initial tests reject late", async () => {
+    const initialTests = deferred<"expected_failure">();
+    const initialTestsStarted = deferred<void>();
+    let triggerTimeout: (() => void) | undefined;
+    let sharedSignal: AbortSignal | undefined;
+    let childStarts = 0;
+
+    const resultPromise = runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-initial-tests",
+      initializeFixture: async () => undefined,
+      removeFixture: async () => undefined,
+      runFixtureTests(_fixture, signal) {
+        sharedSignal = signal;
+        initialTestsStarted.resolve(undefined);
+        return initialTests.promise;
+      },
+      scheduleRunTimeout(handler) {
+        triggerTimeout = handler;
+        return () => undefined;
+      },
+      spawnCli() {
+        childStarts += 1;
+        throw new Error("child must not start");
+      },
+    });
+
+    await initialTestsStarted.promise;
+    triggerTimeout?.();
+    expect(sharedSignal?.aborted).toBe(true);
+    initialTests.reject(new Error("late initial test rejection"));
+
+    await expect(resultPromise).resolves.toEqual({
+      cleaned: true,
+      reason: "timed_out",
+      status: "FAIL",
+    });
+    expect(childStarts).toBe(0);
+  });
+
+  it("classifies child spawn errors as generic launcher setup failures", async () => {
+    const output: string[] = [];
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/private-live-spawn",
+      initializeFixture: async () => undefined,
+      removeFixture: async () => undefined,
+      spawnCli() {
+        throw new Error("spawn ENOENT for /test/private-live-spawn");
+      },
+      writeLine(line) {
+        output.push(line);
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
+    expect(output.at(-1)).toBe("[demo] The Live walkthrough could not be started.");
+    expect(output.join("\n")).not.toMatch(/ENOENT|private-live-spawn|stage=|reason=/);
+  });
+
+  it("classifies a rejected child completion as a spawn setup failure", async () => {
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-child-error",
+      initializeFixture: async () => undefined,
+      removeFixture: async () => undefined,
+      spawnCli: () => ({
+        completion: Promise.reject(new Error("spawn error event")),
+        kill() {
+          // The child never reached an executable state.
+        },
+      }),
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
+  });
+
   it("forwards an interrupt to the child and cleans up the fixture", async () => {
     let fixture = "";
     let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
@@ -1069,8 +1203,80 @@ describe("focused live portfolio walkthrough", () => {
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("forwards a re-entrant spawn interrupt after the child becomes available", async () => {
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+    const killedWith: NodeJS.Signals[] = [];
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-spawn",
+      initializeFixture: async () => undefined,
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
+      },
+      removeFixture: async () => undefined,
+      scheduleForceKill(handler) {
+        handler();
+        return () => undefined;
+      },
+      spawnCli() {
+        interrupt?.("SIGTERM");
+        return {
+          completion: Promise.resolve({ exitCode: 0, signal: null }),
+          kill(signal) {
+            killedWith.push(signal);
+          },
+        };
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "interrupted", status: "FAIL" });
+    expect(killedWith).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("cancels the armed force kill as soon as the child settles", async () => {
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+    let forceKillCancellations = 0;
+    let forceKillCancelledBeforeCleanup = false;
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-force-kill",
+      initializeFixture: async () => undefined,
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
+      },
+      async removeFixture() {
+        forceKillCancelledBeforeCleanup = forceKillCancellations === 1;
+      },
+      scheduleForceKill() {
+        return () => {
+          forceKillCancellations += 1;
+        };
+      },
+      spawnCli() {
+        const completion = deferred<LivePortfolioProcessResult>();
+        queueMicrotask(() => interrupt?.("SIGINT"));
+        queueMicrotask(() => completion.resolve({ exitCode: null, signal: "SIGINT" }));
+        return {
+          completion: completion.promise,
+          kill() {
+            // Settlement is controlled independently to expose timer cleanup ordering.
+          },
+        };
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "interrupted", status: "FAIL" });
+    expect(forceKillCancelledBeforeCleanup).toBe(true);
+    expect(forceKillCancellations).toBe(1);
+  });
+
   it("stops a Live run after ten minutes without inventing a Runtime failure code", async () => {
     let fixture = "";
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
     let settle: ((result: { exitCode: null; signal: NodeJS.Signals }) => void) | undefined;
     let triggerTimeout: (() => void) | undefined;
     const killedWith: NodeJS.Signals[] = [];
@@ -1081,6 +1287,10 @@ describe("focused live portfolio walkthrough", () => {
       async allocateFixture() {
         fixture = await allocateLivePortfolioFixture();
         return fixture;
+      },
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
       },
       runFixtureTests: async () => "expected_failure",
       scheduleForceKill(handler) {
@@ -1096,7 +1306,11 @@ describe("focused live portfolio walkthrough", () => {
           settle = resolve;
           setTimeout(() => resolve({ exitCode: null, signal: "SIGTERM" }), 20);
         });
-        queueMicrotask(() => triggerTimeout?.());
+        queueMicrotask(() => {
+          triggerTimeout?.();
+          triggerTimeout?.();
+          interrupt?.("SIGINT");
+        });
         return {
           completion,
           kill(signal) {
@@ -1114,7 +1328,7 @@ describe("focused live portfolio walkthrough", () => {
 
     expect(result).toEqual({ cleaned: true, reason: "timed_out", status: "FAIL" });
     expect(killedWith).toEqual(["SIGTERM", "SIGKILL"]);
-    expect(output.at(-1)).toBe("[demo] Forge run exceeded 10 minutes and was stopped.");
+    expect(output.at(-1)).toBe("[demo] Live walkthrough exceeded 10 minutes and was stopped.");
     expect(output.join("\n")).not.toMatch(/timed_out|stage=|reason=/);
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -1136,6 +1350,133 @@ describe("focused live portfolio walkthrough", () => {
 
     expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
     expect(order).toEqual(["timeout", "fixture"]);
+  });
+
+  it("stops after a pending allocation resolves and removes its fixture exactly once", async () => {
+    const allocation = deferred<string>();
+    const allocationStarted = deferred<void>();
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+    let initializationStarts = 0;
+    const removed: string[] = [];
+
+    const resultPromise = runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture() {
+        allocationStarted.resolve(undefined);
+        return allocation.promise;
+      },
+      async initializeFixture() {
+        initializationStarts += 1;
+      },
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
+      },
+      async removeFixture(fixture) {
+        removed.push(fixture);
+      },
+    });
+
+    await allocationStarted.promise;
+    interrupt?.("SIGTERM");
+    allocation.resolve("/test/live-allocation");
+
+    await expect(resultPromise).resolves.toEqual({
+      cleaned: true,
+      reason: "interrupted",
+      status: "FAIL",
+    });
+    expect(initializationStarts).toBe(0);
+    expect(removed).toEqual(["/test/live-allocation"]);
+  });
+
+  it("keeps the first timeout reason when allocation resolves after later signals", async () => {
+    const allocation = deferred<string>();
+    const allocationStarted = deferred<void>();
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+    let triggerTimeout: (() => void) | undefined;
+    let initializationStarts = 0;
+    const removed: string[] = [];
+
+    const resultPromise = runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture() {
+        allocationStarted.resolve(undefined);
+        return allocation.promise;
+      },
+      async initializeFixture() {
+        initializationStarts += 1;
+      },
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
+      },
+      async removeFixture(fixture) {
+        removed.push(fixture);
+      },
+      scheduleRunTimeout(handler) {
+        triggerTimeout = handler;
+        return () => undefined;
+      },
+    });
+
+    await allocationStarted.promise;
+    triggerTimeout?.();
+    interrupt?.("SIGINT");
+    interrupt?.("SIGTERM");
+    allocation.resolve("/test/live-timeout-allocation");
+
+    await expect(resultPromise).resolves.toEqual({
+      cleaned: true,
+      reason: "timed_out",
+      status: "FAIL",
+    });
+    expect(initializationStarts).toBe(0);
+    expect(removed).toEqual(["/test/live-timeout-allocation"]);
+  });
+
+  it("aborts pending initialization and ignores its late resolution", async () => {
+    const initialization = deferred<void>();
+    const initializationStarted = deferred<void>();
+    let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
+    let sharedSignal: AbortSignal | undefined;
+    let fixtureTests = 0;
+    const output: string[] = [];
+
+    const resultPromise = runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-initialization",
+      initializeFixture(_fixture, signal) {
+        sharedSignal = signal;
+        initializationStarted.resolve(undefined);
+        return initialization.promise;
+      },
+      installSignalHandlers(handler) {
+        interrupt = handler;
+        return () => undefined;
+      },
+      removeFixture: async () => undefined,
+      async runFixtureTests() {
+        fixtureTests += 1;
+        return "expected_failure";
+      },
+      writeLine(line) {
+        output.push(line);
+      },
+    });
+
+    await initializationStarted.promise;
+    interrupt?.("SIGINT");
+    expect(sharedSignal?.aborted).toBe(true);
+    initialization.resolve(undefined);
+
+    await expect(resultPromise).resolves.toEqual({
+      cleaned: true,
+      reason: "interrupted",
+      status: "FAIL",
+    });
+    expect(fixtureTests).toBe(0);
+    expect(output).not.toContain("[demo] Created a disposable retry fixture.");
   });
 
   it("cleans up when interrupted while the fixture is still being created", async () => {
@@ -1187,6 +1528,84 @@ describe("focused live portfolio walkthrough", () => {
 
     expect(result).toEqual({ cleaned: false, reason: "cleanup_failed", status: "FAIL" });
     await fs.rm(fixture, { force: true, recursive: true });
+  });
+
+  it("lets one cleanup failure override an initialization failure", async () => {
+    let cleanupCalls = 0;
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-cleanup-precedence",
+      async initializeFixture() {
+        throw new Error("injected initialization failure");
+      },
+      async removeFixture() {
+        cleanupCalls += 1;
+        throw new Error("injected cleanup failure");
+      },
+    });
+
+    expect(result).toEqual({ cleaned: false, reason: "cleanup_failed", status: "FAIL" });
+    expect(cleanupCalls).toBe(1);
+  });
+
+  it("lets cleanup failure override the first cancellation reason", async () => {
+    let triggerTimeout: (() => void) | undefined;
+    let cleanupCalls = 0;
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      async allocateFixture() {
+        triggerTimeout?.();
+        return "/test/live-cancel-cleanup-precedence";
+      },
+      async initializeFixture() {
+        throw new Error("initialization must not begin");
+      },
+      async removeFixture() {
+        cleanupCalls += 1;
+        throw new Error("injected cleanup failure");
+      },
+      scheduleRunTimeout(handler) {
+        triggerTimeout = handler;
+        return () => undefined;
+      },
+    });
+
+    expect(result).toEqual({ cleaned: false, reason: "cleanup_failed", status: "FAIL" });
+    expect(cleanupCalls).toBe(1);
+  });
+
+  it("cancels the run timer before non-cancelled fixture cleanup", async () => {
+    let timerCancelled = false;
+    let handlersRemoved = false;
+    let cleanupSawTimerCancelled = false;
+    let cleanupSawHandlersInstalled = false;
+
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-cleanup-order",
+      initializeFixture: async () => undefined,
+      installSignalHandlers() {
+        return () => {
+          handlersRemoved = true;
+        };
+      },
+      async removeFixture() {
+        cleanupSawTimerCancelled = timerCancelled;
+        cleanupSawHandlersInstalled = !handlersRemoved;
+      },
+      scheduleRunTimeout() {
+        return () => {
+          timerCancelled = true;
+        };
+      },
+      spawnCli: () => completedProcess(async () => ({ exitCode: 1, signal: null })),
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "child_failed", status: "FAIL" });
+    expect(cleanupSawTimerCancelled).toBe(true);
+    expect(cleanupSawHandlersInstalled).toBe(true);
+    expect(handlersRemoved).toBe(true);
   });
 
   it("keeps repeated signal handling active until async cleanup finishes", async () => {
@@ -1262,6 +1681,7 @@ function preflightDependencies(environment: NodeJS.ProcessEnv): LivePortfolioDep
     spawnCli: () => {
       throw new Error("unexpected child spawn");
     },
+    validateEvidence: validateLivePortfolioEvidence,
     writeLine: () => undefined,
   };
 }
@@ -1274,6 +1694,23 @@ function completedProcess(
     kill() {
       // A completed fake process has nothing to interrupt.
     },
+  };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  reject(error: unknown): void;
+  resolve(value: T): void;
+} {
+  let rejectPromise!: (error: unknown) => void;
+  let resolvePromise!: (value: T) => void;
+  return {
+    promise: new Promise<T>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    }),
+    reject: rejectPromise,
+    resolve: resolvePromise,
   };
 }
 
