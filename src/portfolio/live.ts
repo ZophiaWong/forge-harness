@@ -403,6 +403,8 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || rootTaskGraph.taskGraphPath !== expectedRootTaskGraphPath
     || !isRecord(rootWorkspace)
     || rootWorkspace.mode !== "git_worktree"
+    || typeof rootWorkspace.baseCommit !== "string"
+    || rootWorkspace.baseCommit.length === 0
     || rootWorkspace.branch !== expectedRootBranch
     || rootWorkspace.path !== expectedRootWorkspacePath
   ) {
@@ -473,7 +475,8 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   }
   const task = graph.tasks[0];
   const submissionSource = task?.submission?.source;
-  const receiptSource = task?.integrationReceipt?.source;
+  const integrationReceipt = task?.integrationReceipt;
+  const receiptSource = integrationReceipt?.source;
   if (
     !task
     || task.kind !== "edit"
@@ -484,6 +487,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || task.verdict?.status !== "passed"
     || submissionSource?.kind !== "child"
     || submissionSource.profile !== "edit"
+    || !integrationReceipt
     || receiptSource?.kind !== "child"
     || receiptSource.profile !== "edit"
     || receiptSource.childSessionId !== submissionSource.childSessionId
@@ -495,6 +499,15 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   if (!expectedChangedFiles || !isSourceOnlyPatch(expectedChangedFiles)) {
     throw new Error("completed child patch contains a change outside src");
   }
+
+  await reconcileFinalRootGitState({
+    expectedChangedFiles,
+    integratedCommit: integrationReceipt.integratedCommit,
+    rootWorkspaceBaseCommit: rootWorkspace.baseCommit,
+    rootWorkspacePath: expectedRootWorkspacePath,
+    targetBefore: integrationReceipt.targetBefore,
+    traceBaseCommit: workspaceEvents[0]?.baseCommit,
+  });
 
   const childSessions = sessions.filter((session) => session.metadata.child !== undefined);
   if (childSessions.length !== 1 || childSessions[0]?.id !== submissionSource.childSessionId) {
@@ -611,6 +624,71 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     || childCompletedIndex <= childFinalIndex
   ) {
     throw new Error("child session is missing terminal evidence");
+  }
+}
+
+interface FinalRootGitStateExpectation {
+  expectedChangedFiles: string[];
+  integratedCommit: string;
+  rootWorkspaceBaseCommit: string;
+  rootWorkspacePath: string;
+  targetBefore: string;
+  traceBaseCommit?: string;
+}
+
+async function reconcileFinalRootGitState(
+  expectation: FinalRootGitStateExpectation,
+): Promise<void> {
+  if (
+    expectation.traceBaseCommit !== expectation.rootWorkspaceBaseCommit
+    || expectation.targetBefore !== expectation.rootWorkspaceBaseCommit
+  ) {
+    throw new Error("root Worktree base does not match the integration receipt");
+  }
+  if (
+    !isFullGitObjectId(expectation.targetBefore)
+    || !isFullGitObjectId(expectation.integratedCommit)
+  ) {
+    throw new Error("root Git receipt must use full commit IDs");
+  }
+
+  const actualRoot = (await gitOutput(
+    expectation.rootWorkspacePath,
+    ["rev-parse", "--show-toplevel"],
+  )).trim();
+  if (path.resolve(actualRoot) !== path.resolve(expectation.rootWorkspacePath)) {
+    throw new Error("root Git top-level does not match the expected Worktree");
+  }
+
+  const status = await gitOutput(
+    expectation.rootWorkspacePath,
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+  );
+  if (status.length > 0) {
+    throw new Error("root Worktree must be clean before PASS");
+  }
+
+  const head = (await gitOutput(
+    expectation.rootWorkspacePath,
+    ["rev-parse", "HEAD"],
+  )).trim();
+  if (head !== expectation.integratedCommit) {
+    throw new Error("root HEAD does not match the integration receipt");
+  }
+
+  const changedFiles = (await gitOutput(
+    expectation.rootWorkspacePath,
+    [
+      "diff",
+      "--name-only",
+      "-z",
+      "--end-of-options",
+      `${expectation.targetBefore}..HEAD`,
+      "--",
+    ],
+  )).split("\0").filter(Boolean);
+  if (!sameStringSets(changedFiles, expectation.expectedChangedFiles)) {
+    throw new Error("root base-to-HEAD path set does not match the child submission");
   }
 }
 
@@ -740,7 +818,7 @@ function reportLivePortfolioResult(
 function livePortfolioResultMessage(result: LivePortfolioResult): string {
   switch (result.reason) {
     case "verified_session_evidence":
-      return "[demo] Verified the isolated child edit, passing tests, Git receipt, and finalization.";
+      return "[demo] Verified the isolated child edit, passing tests, Git receipt, final root Git state, and finalization.";
     case "missing_environment":
       return "[demo] Live walkthrough requires OPENAI_API_KEY and OPENAI_MODEL.";
     case "interactive_terminal_required":
@@ -754,7 +832,7 @@ function livePortfolioResultMessage(result: LivePortfolioResult): string {
     case "child_failed":
       return "[demo] Forge run failed. See the Runtime transcript above.";
     case "invalid_session_evidence":
-      return "[demo] The run finished, but the expected c17c evidence was incomplete.";
+      return "[demo] The run finished, but the expected c17c evidence or final root Git state was invalid.";
     case "setup_failed":
       return "[demo] The temporary retry fixture could not be prepared.";
     case "interrupted":
@@ -772,6 +850,10 @@ function hasNonEmptyEnvironment(environment: NodeJS.ProcessEnv, name: string): b
 
 async function runGit(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  return (await execFileAsync("git", args, { cwd, encoding: "utf8" })).stdout;
 }
 
 function isExecExitError(error: unknown): error is Error & { code: number } {
@@ -795,6 +877,16 @@ function isSourceOnlyPatch(changedFiles: string[]): boolean {
 function sameStrings(actual: string[] | undefined, expected: string[]): boolean {
   return actual?.length === expected.length
     && actual.every((value, index) => value === expected[index]);
+}
+
+function sameStringSets(actual: string[], expected: string[]): boolean {
+  const normalizedActual = [...new Set(actual)].sort((left, right) => left.localeCompare(right));
+  const normalizedExpected = [...new Set(expected)].sort((left, right) => left.localeCompare(right));
+  return sameStrings(normalizedActual, normalizedExpected);
+}
+
+function isFullGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
 }
 
 function requireManualApproval(

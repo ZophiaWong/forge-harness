@@ -5,7 +5,10 @@ import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
-import type { TeamTaskResultSource } from "../../src/domain/teamTask.js";
+import type {
+  TeamTaskIntegrationReceipt,
+  TeamTaskResultSource,
+} from "../../src/domain/teamTask.js";
 import { runMinimalLoop } from "../../src/core/minimalLoop.js";
 import {
   createLivePortfolioFixture,
@@ -20,6 +23,7 @@ import {
   type LifecycleHook,
 } from "../../src/extensions/lifecycle.js";
 import { createTeammateManager } from "../../src/extensions/teammates.js";
+import { createGitIntegrationService } from "../../src/runtime/gitIntegration.js";
 import { createCliSessionTrace } from "../../src/runtime/session.js";
 import { prepareWorktreeSession } from "../../src/runtime/sessionWorkspace.js";
 import { createFileTeamTaskStore } from "../../src/runtime/teamTaskStore.js";
@@ -209,13 +213,14 @@ describe("focused live portfolio walkthrough", () => {
       "[demo] ----- Forge Runtime transcript begins -----",
       "[runtime] original Forge transcript",
       "[demo] ----- Forge Runtime transcript ends -----",
-      "[demo] Verified the isolated child edit, passing tests, Git receipt, and finalization.",
+      "[demo] Verified the isolated child edit, passing tests, Git receipt, final root Git state, and finalization.",
       "[demo] PASS",
     ]);
   });
 
   it("rejects a zero child exit when root Session evidence is absent and still cleans up", async () => {
     let fixture = "";
+    const output: string[] = [];
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
       async createFixture() {
@@ -224,9 +229,15 @@ describe("focused live portfolio walkthrough", () => {
       },
       runFixtureTests: async () => 1,
       spawnCli: () => completedProcess(async () => ({ exitCode: 0, signal: null })),
+      writeLine(line) {
+        output.push(line);
+      },
     });
 
     expect(result).toEqual({ cleaned: true, reason: "invalid_session_evidence", status: "FAIL" });
+    expect(output.at(-1)).toBe(
+      "[demo] The run finished, but the expected c17c evidence or final root Git state was invalid.",
+    );
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -466,6 +477,157 @@ describe("focused live portfolio walkthrough", () => {
       await writePassingRootEvidence(fixture, { changedFiles });
 
       await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/outside src/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts one clean source-only integration that passes in the final root Worktree", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture);
+
+      await expect(execFileAsync("npm", ["test"], { cwd: evidence.rootWorkspacePath }))
+        .resolves.toMatchObject({});
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an uncommitted out-of-scope edit in the final root Worktree", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture);
+      await fs.appendFile(path.join(evidence.rootWorkspacePath, "package.json"), "\n", "utf8");
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/root worktree.*clean/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an additional root commit after the recorded integration", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture);
+      await fs.writeFile(
+        path.join(evidence.rootWorkspacePath, "root-note.txt"),
+        "created after integration\n",
+        "utf8",
+      );
+      await runGit(evidence.rootWorkspacePath, ["add", "root-note.txt"]);
+      await runGit(evidence.rootWorkspacePath, [
+        "commit",
+        "--no-gpg-sign",
+        "-qm",
+        "post-integration root edit",
+      ]);
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/root HEAD.*receipt/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an integration receipt that does not match the actual root HEAD", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture);
+      await rewriteRootTaskGraph(fixture, (graph) => {
+        const task = requireMutablePortfolioTask(graph);
+        task.integrationReceipt.integratedCommit = evidence.receipt.targetBefore;
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/root HEAD.*receipt/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a final base-to-HEAD path set that differs from the child submission", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture, {
+        actualChangedFiles: ["src/retry.mjs", "src/retryPolicy.mjs"],
+      });
+      await rewriteRootTaskGraph(fixture, (graph) => {
+        const task = requireMutablePortfolioTask(graph);
+        task.submission.changedFiles = ["src/retry.mjs"];
+      });
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => events.map((event) => (
+        event.type === "child_session_handoff"
+          ? { ...event, changedFiles: ["src/retry.mjs"] }
+          : event
+      )));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/root.*path set/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an integration targetBefore that is not the root Worktree base", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture);
+      await rewriteRootTaskGraph(fixture, (graph) => {
+        const task = requireMutablePortfolioTask(graph);
+        task.integrationReceipt.targetBefore = evidence.receipt.integratedCommit;
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/root.*base/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects option-shaped root commit evidence without Git side effects", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const outputPath = path.join(fixture, "git-diff-option-output..HEAD");
+      const optionShapedBase = `--output=${path.join(fixture, "git-diff-option-output")}`;
+      const rootSessionDir = await findRootSessionDir(fixture);
+      const metadataPath = path.join(rootSessionDir, "session.json");
+      const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8")) as {
+        workspace: { baseCommit: string };
+      };
+      metadata.workspace.baseCommit = optionShapedBase;
+      await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+      await rewriteTrace(rootSessionDir, (events) => events.map((event) => (
+        event.type === "workspace_created"
+          ? { ...event, baseCommit: optionShapedBase }
+          : event
+      )));
+      await rewriteRootTaskGraph(fixture, (graph) => {
+        const task = requireMutablePortfolioTask(graph);
+        task.integrationReceipt.targetBefore = optionShapedBase;
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toBeInstanceOf(Error);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a root workspace path that is not an actual Git top-level", async () => {
+    const fixture = await createLivePortfolioFixture();
+
+    try {
+      const evidence = await writePassingRootEvidence(fixture);
+      await fs.unlink(path.join(evidence.rootWorkspacePath, ".git"));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/root Git top-level/i);
     } finally {
       await fs.rm(fixture, { force: true, recursive: true });
     }
@@ -968,6 +1130,7 @@ function completedProcess(
 
 interface PassingRootEvidenceOptions {
   acceptance?: string[];
+  actualChangedFiles?: string[];
   changedFiles?: string[];
   description?: string;
   includeArtifactEvidence?: boolean;
@@ -976,10 +1139,15 @@ interface PassingRootEvidenceOptions {
   title?: string;
 }
 
+interface PassingRootEvidence {
+  receipt: TeamTaskIntegrationReceipt;
+  rootWorkspacePath: string;
+}
+
 async function writePassingRootEvidence(
   cwd: string,
   options: PassingRootEvidenceOptions = {},
-): Promise<void> {
+): Promise<PassingRootEvidence> {
   const session = await createCliSessionTrace({
     cwd,
     maxToolRounds: 24,
@@ -991,24 +1159,11 @@ async function writePassingRootEvidence(
     throw new Error("root session did not create a task graph");
   }
   const store = createFileTeamTaskStore({ graphPath: graph.taskGraphPath });
-  const rootWorkspace = {
-    baseBranch: "main",
-    baseCommit: "e".repeat(40),
-    branch: `forge/run/${session.metadata.id}`,
-    mode: "git_worktree" as const,
-    path: path.join(cwd, ".forge", "worktrees", session.metadata.id),
-  };
-  session.metadata = {
-    ...session.metadata,
+  const rootWorkspace = await prepareWorktreeSession({
     baseCwd: cwd,
-    cwd: rootWorkspace.path,
-    workspace: rootWorkspace,
-  };
-  await fs.writeFile(
-    session.paths.sessionMetadataPath,
-    `${JSON.stringify(session.metadata, null, 2)}\n`,
-    "utf8",
-  );
+    lifecycleEmitter: createLifecycleEmitter({ recorder: session.recorder }),
+    sessionTrace: session,
+  });
   const leader = { role: "leader" as const, sessionId: session.metadata.id };
   if (options.taskSequence === 2) {
     const placeholder = await store.create(leader, {
@@ -1050,24 +1205,11 @@ async function writePassingRootEvidence(
       taskGraphPath: graph.taskGraphPath,
     },
   });
-  const childWorkspace = {
-    baseBranch: "main",
-    baseCommit: "d".repeat(40),
-    branch: `forge/run/${childSession.metadata.id}`,
-    mode: "git_worktree" as const,
-    path: path.join(cwd, ".forge", "worktrees", childSession.metadata.id),
-  };
-  childSession.metadata = {
-    ...childSession.metadata,
+  const childWorkspace = await prepareWorktreeSession({
     baseCwd: cwd,
-    cwd: childWorkspace.path,
-    workspace: childWorkspace,
-  };
-  await fs.writeFile(
-    childSession.paths.sessionMetadataPath,
-    `${JSON.stringify(childSession.metadata, null, 2)}\n`,
-    "utf8",
-  );
+    lifecycleEmitter: createLifecycleEmitter({ recorder: childSession.recorder }),
+    sessionTrace: childSession,
+  });
   const child = {
     delegatedTaskId: taskId,
     profile: "edit" as const,
@@ -1080,9 +1222,13 @@ async function writePassingRootEvidence(
     profile: "edit",
     workspace: { branch: childWorkspace.branch, path: childWorkspace.path },
   };
-  const fingerprint = "a".repeat(64);
-  const commit = "b".repeat(40);
-  const changedFiles = options.changedFiles ?? ["src/retry.mjs"];
+  await writePassingChildChanges(
+    childWorkspace.path,
+    options.actualChangedFiles ?? options.changedFiles ?? ["src/retry.mjs"],
+  );
+  const integration = createGitIntegrationService({ targetCwd: rootWorkspace.path });
+  const snapshot = await integration.capture(source);
+  const changedFiles = options.changedFiles ?? snapshot.changedFiles;
 
   await store.addEvidence(child, taskId, {
     callId: "child-write",
@@ -1095,7 +1241,7 @@ async function writePassingRootEvidence(
   await store.transition(leader, {
     action: "submit_result",
     changedFiles,
-    fingerprint,
+    fingerprint: snapshot.fingerprint,
     id: taskId,
     source,
     summary: "Registered child handoff.",
@@ -1103,17 +1249,11 @@ async function writePassingRootEvidence(
   await store.recordVerification(leader, taskId, {
     command: "npm test",
     exitCode: 0,
-    fingerprint,
+    fingerprint: snapshot.fingerprint,
     summary: "passed",
   });
-  await store.recordIntegration(leader, taskId, {
-    fingerprint,
-    integratedAt: new Date().toISOString(),
-    integratedCommit: commit,
-    source,
-    sourceCommit: commit,
-    targetBefore: "c".repeat(40),
-  });
+  const receipt = await integration.integrate((await store.get(taskId)).task);
+  await store.recordIntegration(leader, taskId, receipt);
   await childSession.recorder.record({
     baseCwd: cwd,
     cwd: childWorkspace.path,
@@ -1217,6 +1357,44 @@ async function writePassingRootEvidence(
       type: "hook_result",
     });
   }
+  return {
+    receipt,
+    rootWorkspacePath: rootWorkspace.path,
+  };
+}
+
+async function writePassingChildChanges(cwd: string, requestedFiles: string[]): Promise<void> {
+  await fs.writeFile(
+    path.join(cwd, "src", "retry.mjs"),
+    [
+      "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
+      "  for (let attempt = 1; ; attempt += 1) {",
+      "    try {",
+      "      return await operation();",
+      "    } catch (error) {",
+      "      if (!isRetryable(error) || attempt >= maxAttempts) {",
+      "        throw error;",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  if (requestedFiles.includes("src/retryPolicy.mjs")) {
+    await fs.writeFile(
+      path.join(cwd, "src", "retryPolicy.mjs"),
+      "export const retryPolicy = \"bounded\";\n",
+      "utf8",
+    );
+  }
+  if (requestedFiles.includes("test/retry.test.mjs")) {
+    await fs.appendFile(path.join(cwd, "test", "retry.test.mjs"), "\n", "utf8");
+  }
+  if (requestedFiles.includes("package.json")) {
+    await fs.appendFile(path.join(cwd, "package.json"), "\n", "utf8");
+  }
 }
 
 async function findRootSessionDir(fixture: string): Promise<string> {
@@ -1249,6 +1427,36 @@ async function findChildSessionDir(fixture: string): Promise<string> {
   throw new Error("child session not found");
 }
 
+interface MutablePortfolioTaskGraph {
+  tasks: Array<{
+    integrationReceipt: TeamTaskIntegrationReceipt;
+    submission: { changedFiles: string[] };
+  }>;
+}
+
+function requireMutablePortfolioTask(
+  graph: MutablePortfolioTaskGraph,
+): MutablePortfolioTaskGraph["tasks"][number] {
+  const task = graph.tasks[0];
+  if (!task) {
+    throw new Error("portfolio task not found");
+  }
+  return task;
+}
+
+async function rewriteRootTaskGraph(
+  fixture: string,
+  mutate: (graph: MutablePortfolioTaskGraph) => void,
+): Promise<void> {
+  const rootSessionDir = await findRootSessionDir(fixture);
+  const graphPath = path.join(rootSessionDir, "task-graph.json");
+  const graph = JSON.parse(
+    await fs.readFile(graphPath, "utf8"),
+  ) as MutablePortfolioTaskGraph;
+  mutate(graph);
+  await fs.writeFile(graphPath, `${JSON.stringify(graph, null, 2)}\n`, "utf8");
+}
+
 async function rewriteTrace(
   sessionDir: string,
   mutate: (events: Array<Record<string, unknown>>) => Array<Record<string, unknown>>,
@@ -1260,6 +1468,10 @@ async function rewriteTrace(
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   const rewritten = mutate(events).map((event, index) => ({ ...event, sequence: index + 1 }));
   await fs.writeFile(tracePath, `${rewritten.map((event) => JSON.stringify(event)).join("\n")}\n`);
+}
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  return (await execFileAsync("git", args, { cwd, encoding: "utf8" })).stdout.trim();
 }
 
 async function readTraceEvents(tracePath: string): Promise<Array<Record<string, unknown>>> {
