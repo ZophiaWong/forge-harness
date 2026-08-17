@@ -11,8 +11,10 @@ import type {
 } from "../../src/domain/teamTask.js";
 import { runMinimalLoop } from "../../src/core/minimalLoop.js";
 import {
-  createLivePortfolioFixture,
+  allocateLivePortfolioFixture,
+  initializeLivePortfolioFixture,
   LIVE_PORTFOLIO_PROMPT,
+  runInitialFixtureTests,
   runLivePortfolioDemo,
   validateLivePortfolioEvidence,
   type LivePortfolioDependencies,
@@ -32,13 +34,125 @@ import type { TraceRecorder } from "../../src/runtime/trace.js";
 const execFileAsync = promisify(execFile);
 
 describe("focused live portfolio walkthrough", () => {
+  it("allocates the fixture path before initialization owns any contents", async () => {
+    const fixture = await allocateLivePortfolioFixture();
+
+    try {
+      expect(await fs.readdir(fixture)).toEqual([]);
+
+      await initializeLivePortfolioFixture(fixture, new AbortController().signal);
+
+      expect(await fs.readFile(path.join(fixture, ".gitignore"), "utf8")).toBe(".forge/\n");
+      await expect(execFileAsync("git", ["rev-parse", "--verify", "HEAD"], { cwd: fixture }))
+        .resolves.toMatchObject({});
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("leaves an allocated fixture for its outer owner when initialization fails", async () => {
+    const fixture = await allocateLivePortfolioFixture();
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      await expect(initializeLivePortfolioFixture(fixture, controller.signal))
+        .rejects.toMatchObject({ name: "AbortError" });
+      await expect(fs.access(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts only the controlled two-failure initial retry state", async () => {
+    const fixture = await allocateLivePortfolioFixture();
+
+    try {
+      await initializeLivePortfolioFixture(fixture, new AbortController().signal);
+
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .resolves.toBe("expected_failure");
+
+      const testPath = path.join(fixture, "test", "retry.test.mjs");
+      const tests = await fs.readFile(testPath, "utf8");
+      await fs.writeFile(
+        testPath,
+        tests.replace(
+          "maxAttempts is the total operation limit",
+          "uses a different failing policy name",
+        ),
+        "utf8",
+      );
+
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .rejects.toThrow(/initial test result/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("distinguishes a repaired fixture from malformed or unexpected test failures", async () => {
+    const fixture = await allocateLivePortfolioFixture();
+
+    try {
+      await initializeLivePortfolioFixture(fixture, new AbortController().signal);
+      await fs.writeFile(
+        path.join(fixture, "src", "retry.mjs"),
+        [
+          "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
+          "  for (let attempt = 1; ; attempt += 1) {",
+          "    try {",
+          "      return await operation();",
+          "    } catch (error) {",
+          "      if (!isRetryable(error) || attempt >= maxAttempts) {",
+          "        throw error;",
+          "      }",
+          "    }",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .resolves.toBe("passed");
+
+      const packagePath = path.join(fixture, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packagePath, "utf8")) as {
+        scripts: { test: string };
+      };
+      packageJson.scripts.test = "node -e \"console.log('not TAP'); process.exit(1)\"";
+      await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .rejects.toThrow(/initial test output/i);
+
+      packageJson.scripts.test = [
+        "node -e \"",
+        "console.log('not ok 1 - maxAttempts is the total operation limit\\n",
+        "not ok 2 - stops immediately for a permanent failure\\n",
+        "# tests 4\\n# pass 2\\n# fail 2'); process.exit(1)\"",
+      ].join("");
+      await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .rejects.toThrow(/initial test output/i);
+
+      packageJson.scripts.test = "node -e \"process.exit(2)\"";
+      await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+        .rejects.toThrow(/unexpected exit/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
   it("loads the Forge environment before preflight and refuses missing explicit model settings", async () => {
     const calls: string[] = [];
     const environment: NodeJS.ProcessEnv = {};
 
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(environment),
-      async createFixture() {
+      async allocateFixture() {
         calls.push("fixture");
         throw new Error("fixture must not be created");
       },
@@ -64,7 +178,7 @@ describe("focused live portfolio walkthrough", () => {
       async commandAvailable(command) {
         return available[command as keyof typeof available];
       },
-      async createFixture() {
+      async allocateFixture() {
         fixtureStarts += 1;
         throw new Error("fixture must not be created");
       },
@@ -76,7 +190,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("creates a dependency-free retry fixture with two intentional policy failures", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const packageJson = JSON.parse(await fs.readFile(path.join(fixture, "package.json"), "utf8")) as {
@@ -84,7 +198,7 @@ describe("focused live portfolio walkthrough", () => {
         scripts?: Record<string, string>;
       };
       expect(packageJson.dependencies).toBeUndefined();
-      expect(packageJson.scripts).toEqual({ test: "node --test" });
+      expect(packageJson.scripts).toEqual({ test: "node test/retry.test.mjs" });
       expect(await fs.readFile(path.join(fixture, ".gitignore"), "utf8")).toBe(".forge/\n");
       expect(await fs.readFile(path.join(fixture, "src", "errors.mjs"), "utf8"))
         .toContain("export class TransientError");
@@ -118,7 +232,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("keeps Runtime Session files from blocking root Worktree setup", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const session = await createCliSessionTrace({
@@ -145,13 +259,13 @@ describe("focused live portfolio walkthrough", () => {
     const spawnCalls: Array<{ args: string[]; command: string; cwd: string; shell?: boolean }> = [];
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
       async runFixtureTests(cwd) {
         await expect(execFileAsync("npm", ["test"], { cwd })).rejects.toMatchObject({ code: 1 });
-        return 1;
+        return "expected_failure";
       },
       spawnCli(command, args, options) {
         spawnCalls.push({ args, command, cwd: options.cwd, shell: options.shell });
@@ -190,10 +304,10 @@ describe("focused live portfolio walkthrough", () => {
     const output: string[] = [];
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        return createLivePortfolioFixture();
+      async allocateFixture() {
+        return allocateLivePortfolioFixture();
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       spawnCli(_command, _args, options) {
         output.push("[runtime] original Forge transcript");
         return completedProcess(async () => {
@@ -223,11 +337,11 @@ describe("focused live portfolio walkthrough", () => {
     const output: string[] = [];
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       spawnCli: () => completedProcess(async () => ({ exitCode: 0, signal: null })),
       writeLine(line) {
         output.push(line);
@@ -242,7 +356,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects a root Trace whose final answer precedes passed verification", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -272,7 +386,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("accepts graceful CLI cleanup after a completed root Session", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -284,7 +398,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("accepts hook results emitted by completed Session and cleanup events", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture, { postCoreHooks: true });
@@ -315,7 +429,7 @@ describe("focused live portfolio walkthrough", () => {
       label: "with hooks",
     },
   ])("records the real CLI component teardown tail $label", async ({ expectedTail, hooks }) => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const session = await createCliSessionTrace({
@@ -399,7 +513,7 @@ describe("focused live portfolio walkthrough", () => {
       type: "task_graph_mutated",
     }],
   ])("rejects %s after the completed root Session", async (_label, payload) => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -423,7 +537,7 @@ describe("focused live portfolio walkthrough", () => {
       event.type === "team_cleanup" ? { ...event, mode: "terminate" } : event
     ))],
   ])("rejects $0 in the post-core tail", async (_label, mutate) => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -437,7 +551,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("accepts two manually approved child mutations", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -449,7 +563,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("accepts variable task wording, a later generated task ID, and multiple src changes without artifact evidence", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture, {
@@ -471,7 +585,7 @@ describe("focused live portfolio walkthrough", () => {
     ["a package edit", ["src/retry.mjs", "package.json"]],
     ["a path traversal", ["src/retry.mjs", "src/../test/retry.test.mjs"]],
   ])("rejects %s outside the src-only patch boundary", async (_label, changedFiles) => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture, { changedFiles });
@@ -483,7 +597,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("accepts one clean source-only integration that passes in the final root Worktree", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture);
@@ -497,7 +611,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects an uncommitted out-of-scope edit in the final root Worktree", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture);
@@ -510,7 +624,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects an additional root commit after the recorded integration", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture);
@@ -534,7 +648,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects an integration receipt that does not match the actual root HEAD", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture);
@@ -550,7 +664,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects a final base-to-HEAD path set that differs from the child submission", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture, {
@@ -574,7 +688,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects an integration targetBefore that is not the root Worktree base", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture);
@@ -590,7 +704,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects option-shaped root commit evidence without Git side effects", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -621,7 +735,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects a root workspace path that is not an actual Git top-level", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       const evidence = await writePassingRootEvidence(fixture);
@@ -634,7 +748,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects a TaskGraph child source without its matching child Session", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -656,7 +770,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects root evidence that does not prove --worktree setup", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -683,7 +797,7 @@ describe("focused live portfolio walkthrough", () => {
     { role: "root" as const, toolName: "task_verify" },
     { role: "root" as const, toolName: "task_integrate" },
   ])("rejects missing manual approval evidence for $toolName", async ({ role, toolName }) => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -701,7 +815,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects auto-allowed evidence for a manually approved action", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -725,7 +839,7 @@ describe("focused live portfolio walkthrough", () => {
     { role: "root" as const, toolName: "task_verify" },
     { role: "root" as const, toolName: "task_integrate" },
   ])("rejects an orphan approval pair without $toolName execution", async ({ role, toolName }) => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -744,7 +858,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("binds the delegate execution call ID to the child parent call ID", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -762,7 +876,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects a failed tool execution after manual approval", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -780,7 +894,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("rejects child source metadata outside the Runtime worktree convention", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -826,7 +940,7 @@ describe("focused live portfolio walkthrough", () => {
   });
 
   it("requires the last root verification before final to be passed npm test", async () => {
-    const fixture = await createLivePortfolioFixture();
+    const fixture = await createInitializedFixture();
 
     try {
       await writePassingRootEvidence(fixture);
@@ -862,11 +976,11 @@ describe("focused live portfolio walkthrough", () => {
     let fixture = "";
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       spawnCli: () => completedProcess(async () => ({ exitCode: 1, signal: null })),
     });
 
@@ -874,11 +988,22 @@ describe("focused live portfolio walkthrough", () => {
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("classifies fixture creation errors as setup failures", async () => {
+  it("classifies fixture initialization errors as setup failures", async () => {
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
+      async initializeFixture() {
         throw new Error("injected git setup failure");
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
+  });
+
+  it("classifies initial test contract errors as setup failures", async () => {
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      async runFixtureTests() {
+        throw new Error("injected malformed initial TAP");
       },
     });
 
@@ -893,8 +1018,8 @@ describe("focused live portfolio walkthrough", () => {
 
     const resultPromise = runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
       installSignalHandlers(handler) {
@@ -905,7 +1030,7 @@ describe("focused live portfolio walkthrough", () => {
         handler();
         return () => undefined;
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       spawnCli() {
         const completion = new Promise<{ exitCode: null; signal: NodeJS.Signals }>((resolve) => {
           settle = resolve;
@@ -941,11 +1066,11 @@ describe("focused live portfolio walkthrough", () => {
 
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       scheduleForceKill(handler) {
         handler();
         return () => undefined;
@@ -987,7 +1112,7 @@ describe("focused live portfolio walkthrough", () => {
 
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
+      async allocateFixture() {
         order.push("fixture");
         throw new Error("stop after recording timer order");
       },
@@ -1008,8 +1133,8 @@ describe("focused live portfolio walkthrough", () => {
 
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         interrupt?.("SIGTERM");
         return fixture;
       },
@@ -1019,7 +1144,7 @@ describe("focused live portfolio walkthrough", () => {
       },
       async runFixtureTests() {
         fixtureTests += 1;
-        return 1;
+        return "expected_failure";
       },
     });
 
@@ -1032,14 +1157,14 @@ describe("focused live portfolio walkthrough", () => {
     let fixture = "";
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
       async removeFixture() {
         throw new Error("injected cleanup failure");
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       spawnCli(_command, _args, options) {
         return completedProcess(async () => {
           await writePassingRootEvidence(options.cwd);
@@ -1060,8 +1185,8 @@ describe("focused live portfolio walkthrough", () => {
 
     const result = await runLivePortfolioDemo({
       ...preflightDependencies(configuredEnvironment()),
-      async createFixture() {
-        fixture = await createLivePortfolioFixture();
+      async allocateFixture() {
+        fixture = await allocateLivePortfolioFixture();
         return fixture;
       },
       installSignalHandlers(handler) {
@@ -1076,7 +1201,7 @@ describe("focused live portfolio walkthrough", () => {
         interrupt?.("SIGTERM");
         await fs.rm(pathname, { force: true, recursive: true });
       },
-      runFixtureTests: async () => 1,
+      runFixtureTests: async () => "expected_failure",
       scheduleForceKill: () => () => undefined,
       spawnCli(_command, _args, options) {
         return completedProcess(async () => {
@@ -1093,21 +1218,33 @@ describe("focused live portfolio walkthrough", () => {
   });
 });
 
+async function createInitializedFixture(): Promise<string> {
+  const fixture = await allocateLivePortfolioFixture();
+  try {
+    await initializeLivePortfolioFixture(fixture, new AbortController().signal);
+    return fixture;
+  } catch (error) {
+    await fs.rm(fixture, { force: true, recursive: true });
+    throw error;
+  }
+}
+
 function configuredEnvironment(): NodeJS.ProcessEnv {
   return { OPENAI_API_KEY: "test-only-key", OPENAI_MODEL: "test-model" };
 }
 
 function preflightDependencies(environment: NodeJS.ProcessEnv): LivePortfolioDependencies {
   return {
+    allocateFixture: allocateLivePortfolioFixture,
     commandAvailable: async () => true,
-    createFixture: createLivePortfolioFixture,
     environment,
     forgeRoot: process.cwd(),
+    initializeFixture: initializeLivePortfolioFixture,
     installSignalHandlers: () => () => undefined,
     isInteractiveTerminal: () => true,
     loadEnvironment: async () => undefined,
     removeFixture: async (fixture) => fs.rm(fixture, { force: true, recursive: true }),
-    runFixtureTests: async () => 1,
+    runFixtureTests: async () => "expected_failure",
     scheduleForceKill: () => () => undefined,
     scheduleRunTimeout: () => () => undefined,
     spawnCli: () => {

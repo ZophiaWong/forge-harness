@@ -36,15 +36,16 @@ export interface LivePortfolioSpawnOptions {
 }
 
 export interface LivePortfolioDependencies {
+  allocateFixture(): Promise<string>;
   commandAvailable(command: "bash" | "git"): Promise<boolean>;
-  createFixture(): Promise<string>;
   environment: NodeJS.ProcessEnv;
   forgeRoot: string;
+  initializeFixture(fixture: string, signal: AbortSignal): Promise<void>;
   installSignalHandlers(handler: (signal: NodeJS.Signals) => void): () => void;
   isInteractiveTerminal(): boolean;
   loadEnvironment(forgeRoot: string, environment: NodeJS.ProcessEnv): Promise<void>;
   removeFixture(fixture: string): Promise<void>;
-  runFixtureTests(fixture: string): Promise<number>;
+  runFixtureTests(fixture: string, signal: AbortSignal): Promise<"expected_failure" | "passed">;
   scheduleForceKill(handler: () => void): () => void;
   scheduleRunTimeout(handler: () => void): () => void;
   spawnCli(
@@ -110,6 +111,7 @@ export async function runLivePortfolioDemo(
   let cancelForceKill: () => void = () => undefined;
   let cancelRunTimeout: () => void = () => undefined;
   let result: LivePortfolioResult = { cleaned: false, reason: "setup_failed", status: "FAIL" };
+  const fixtureSignal = new AbortController().signal;
   const stopChild = (
     reason: "interrupted" | "timed_out",
     signal: NodeJS.Signals,
@@ -132,14 +134,15 @@ export async function runLivePortfolioDemo(
   });
 
   try {
-    fixture = await dependencies.createFixture();
-    creatingFixture = false;
+    fixture = await dependencies.allocateFixture();
+    await dependencies.initializeFixture(fixture, fixtureSignal);
     dependencies.writeLine("[demo] Created a disposable retry fixture.");
     if (stopReason) {
       result = { cleaned: false, reason: stopReason, status: "FAIL" };
     } else {
-      const initialTestExit = await dependencies.runFixtureTests(fixture);
-      if (initialTestExit === 0) {
+      const initialTestResult = await dependencies.runFixtureTests(fixture, fixtureSignal);
+      creatingFixture = false;
+      if (initialTestResult === "passed") {
         result = { cleaned: false, reason: "fixture_not_failing", status: "FAIL" };
       } else if (stopReason) {
         result = { cleaned: false, reason: stopReason, status: "FAIL" };
@@ -217,138 +220,148 @@ export async function runLivePortfolioDemo(
   return reportLivePortfolioResult(dependencies, result);
 }
 
-export async function createLivePortfolioFixture(): Promise<string> {
-  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "forge-portfolio-live-"));
-  try {
-    await fs.mkdir(path.join(fixture, "src"), { recursive: true });
-    await fs.mkdir(path.join(fixture, "test"), { recursive: true });
-    await fs.writeFile(path.join(fixture, ".gitignore"), ".forge/\n", "utf8");
-    await fs.writeFile(
-      path.join(fixture, "package.json"),
-      `${JSON.stringify({
-        name: "forge-portfolio-retry-fixture",
-        private: true,
-        scripts: { test: "node --test" },
-        type: "module",
-      }, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixture, "src", "errors.mjs"),
-      [
-        "export class TransientError extends Error {",
-        "  name = \"TransientError\";",
-        "}",
-        "",
-        "export class PermanentError extends Error {",
-        "  name = \"PermanentError\";",
-        "}",
-        "",
-        "export function isTransientError(error) {",
-        "  return error instanceof TransientError;",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixture, "src", "retry.mjs"),
-      [
-        "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
-        "  let attempt = 0;",
-        "  while (attempt <= maxAttempts) {",
-        "    attempt += 1;",
-        "    try {",
-        "      return await operation();",
-        "    } catch (error) {",
-        "      if (attempt > maxAttempts) {",
-        "        throw error;",
-        "      }",
-        "    }",
-        "  }",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixture, "test", "retry.test.mjs"),
-      [
-        'import assert from "node:assert/strict";',
-        'import test from "node:test";',
-        "",
-        'import { PermanentError, TransientError, isTransientError } from "../src/errors.mjs";',
-        'import { runWithRetry } from "../src/retry.mjs";',
-        "",
-        'test("returns a first-attempt success without another call", async () => {',
-        "  let attempts = 0;",
-        "  const result = await runWithRetry(async () => {",
-        "    attempts += 1;",
-        '    return "ok";',
-        "  }, { maxAttempts: 3, isRetryable: isTransientError });",
-        '  assert.equal(result, "ok");',
-        "  assert.equal(attempts, 1);",
+export async function allocateLivePortfolioFixture(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), "forge-portfolio-live-"));
+}
+
+export async function initializeLivePortfolioFixture(
+  fixture: string,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  await fs.mkdir(path.join(fixture, "src"), { recursive: true });
+  signal.throwIfAborted();
+  await fs.mkdir(path.join(fixture, "test"), { recursive: true });
+  await fs.writeFile(
+    path.join(fixture, ".gitignore"),
+    ".forge/\n",
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "package.json"),
+    `${JSON.stringify({
+      name: "forge-portfolio-retry-fixture",
+      private: true,
+      scripts: { test: "node test/retry.test.mjs" },
+      type: "module",
+    }, null, 2)}\n`,
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "src", "errors.mjs"),
+    [
+      "export class TransientError extends Error {",
+      "  name = \"TransientError\";",
+      "}",
+      "",
+      "export class PermanentError extends Error {",
+      "  name = \"PermanentError\";",
+      "}",
+      "",
+      "export function isTransientError(error) {",
+      "  return error instanceof TransientError;",
+      "}",
+      "",
+    ].join("\n"),
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "src", "retry.mjs"),
+    [
+      "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
+      "  let attempt = 0;",
+      "  while (attempt <= maxAttempts) {",
+      "    attempt += 1;",
+      "    try {",
+      "      return await operation();",
+      "    } catch (error) {",
+      "      if (attempt > maxAttempts) {",
+      "        throw error;",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "test", "retry.test.mjs"),
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      "",
+      'import { PermanentError, TransientError, isTransientError } from "../src/errors.mjs";',
+      'import { runWithRetry } from "../src/retry.mjs";',
+      "",
+      'test("returns a first-attempt success without another call", async () => {',
+      "  let attempts = 0;",
+      "  const result = await runWithRetry(async () => {",
+      "    attempts += 1;",
+      '    return "ok";',
+      "  }, { maxAttempts: 3, isRetryable: isTransientError });",
+      '  assert.equal(result, "ok");',
+      "  assert.equal(attempts, 1);",
+      "});",
+      "",
+      'test("retries transient failures until the operation succeeds", async () => {',
+      "  let attempts = 0;",
+      "  const result = await runWithRetry(async () => {",
+      "    attempts += 1;",
+      "    if (attempts < 3) {",
+      '      throw new TransientError("try again");',
+      "    }",
+      '    return "recovered";',
+      "  }, { maxAttempts: 3, isRetryable: isTransientError });",
+      '  assert.equal(result, "recovered");',
+      "  assert.equal(attempts, 3);",
+      "});",
+      "",
+      'test("maxAttempts is the total operation limit", async () => {',
+      "  let attempts = 0;",
+      '  const failure = new TransientError("still unavailable");',
+      "  await assert.rejects(",
+      "    runWithRetry(async () => {",
+      "      attempts += 1;",
+      "      throw failure;",
+      "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
+      "    (error) => error === failure,",
+      "  );",
+      "  assert.equal(attempts, 3);",
+      "});",
+      "",
+      'test("stops immediately for a permanent failure", async () => {',
+      "  let attempts = 0;",
+      '  const failure = new PermanentError("do not retry");',
+      "  await assert.rejects(",
+      "    runWithRetry(async () => {",
+      "      attempts += 1;",
+      "      throw failure;",
+      "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
+      "    (error) => error === failure,",
+      "  );",
+      "  assert.equal(attempts, 1);",
         "});",
         "",
-        'test("retries transient failures until the operation succeeds", async () => {',
-        "  let attempts = 0;",
-        "  const result = await runWithRetry(async () => {",
-        "    attempts += 1;",
-        "    if (attempts < 3) {",
-        '      throw new TransientError("try again");',
-        "    }",
-        '    return "recovered";',
-        "  }, { maxAttempts: 3, isRetryable: isTransientError });",
-        '  assert.equal(result, "recovered");',
-        "  assert.equal(attempts, 3);",
-        "});",
-        "",
-        'test("maxAttempts is the total operation limit", async () => {',
-        "  let attempts = 0;",
-        '  const failure = new TransientError("still unavailable");',
-        "  await assert.rejects(",
-        "    runWithRetry(async () => {",
-        "      attempts += 1;",
-        "      throw failure;",
-        "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
-        "    (error) => error === failure,",
-        "  );",
-        "  assert.equal(attempts, 3);",
-        "});",
-        "",
-        'test("stops immediately for a permanent failure", async () => {',
-        "  let attempts = 0;",
-        '  const failure = new PermanentError("do not retry");',
-        "  await assert.rejects(",
-        "    runWithRetry(async () => {",
-        "      attempts += 1;",
-        "      throw failure;",
-        "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
-        "    (error) => error === failure,",
-        "  );",
-        "  assert.equal(attempts, 1);",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await runGit(fixture, ["init", "-q"]);
-    await runGit(fixture, ["config", "user.name", "Forge Portfolio Live"]);
-    await runGit(fixture, ["config", "user.email", "portfolio-live@example.invalid"]);
-    await runGit(fixture, [
-      "add",
-      ".gitignore",
-      "package.json",
-      "src/errors.mjs",
-      "src/retry.mjs",
-      "test/retry.test.mjs",
-    ]);
-    await runGit(fixture, ["commit", "--no-gpg-sign", "-qm", "initial failing fixture"]);
-    return fixture;
-  } catch (error) {
-    await fs.rm(fixture, { force: true, recursive: true });
-    throw error;
-  }
+    ].join("\n"),
+    { encoding: "utf8", signal },
+  );
+  await runGit(fixture, ["init", "-q"], signal);
+  await runGit(fixture, ["config", "user.name", "Forge Portfolio Live"], signal);
+  await runGit(fixture, ["config", "user.email", "portfolio-live@example.invalid"], signal);
+  await runGit(fixture, [
+    "add",
+    ".gitignore",
+    "package.json",
+    "src/errors.mjs",
+    "src/retry.mjs",
+    "test/retry.test.mjs",
+  ], signal);
+  await runGit(
+    fixture,
+    ["commit", "--no-gpg-sign", "-qm", "initial failing fixture"],
+    signal,
+  );
 }
 
 export async function validateLivePortfolioEvidence(fixture: string): Promise<void> {
@@ -729,9 +742,10 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
         () => false,
       );
     },
-    createFixture: createLivePortfolioFixture,
+    allocateFixture: allocateLivePortfolioFixture,
     environment: process.env,
     forgeRoot,
+    initializeFixture: initializeLivePortfolioFixture,
     installSignalHandlers: installProcessSignalHandlers,
     isInteractiveTerminal: () => Boolean(process.stdin.isTTY && process.stdout.isTTY),
     async loadEnvironment(root, environment) {
@@ -774,16 +788,116 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
   };
 }
 
-async function runInitialFixtureTests(fixture: string): Promise<number> {
-  try {
-    await execFileAsync("npm", ["test"], { cwd: fixture });
-    return 0;
-  } catch (error) {
-    if (isExecExitError(error)) {
-      return error.code;
-    }
-    throw error;
+export async function runInitialFixtureTests(
+  fixture: string,
+  signal: AbortSignal,
+): Promise<"expected_failure" | "passed"> {
+  const completion = await captureInitialTestCompletion(fixture, signal);
+  if (completion.signal) {
+    throw new Error(`initial test command terminated by ${completion.signal}`);
   }
+  if (completion.exitCode === 0) {
+    return "passed";
+  }
+  if (completion.exitCode !== 1) {
+    throw new Error(`initial test command had unexpected exit ${String(completion.exitCode)}`);
+  }
+  const output = completion.output;
+  const totals = {
+    fail: tapSummaryCount(output, "fail"),
+    pass: tapSummaryCount(output, "pass"),
+    tests: tapSummaryCount(output, "tests"),
+  };
+  if (Object.values(totals).some((value) => value === undefined)) {
+    throw new Error("initial test output was not valid TAP");
+  }
+  const plans = [...output.matchAll(/^1\.\.(\d+)$/gm)];
+  const records = [...output.matchAll(/^(not )?ok (\d+) - (.+)$/gm)].map((match) => ({
+    failed: match[1] !== undefined,
+    name: match[3]?.trim() ?? "",
+    number: Number(match[2]),
+  }));
+  const recordNumbers = records.map((record) => record.number).sort((left, right) => left - right);
+  if (plans.length !== 1
+    || Number(plans[0]?.[1]) !== 4
+    || records.length !== 4
+    || !sameStrings(recordNumbers.map(String), ["1", "2", "3", "4"])) {
+    throw new Error("initial test output was not valid TAP");
+  }
+  const failingNames = records
+    .filter((record) => record.failed)
+    .map((record) => record.name)
+    .sort((left, right) => left.localeCompare(right));
+  const expectedFailingNames = [
+    "maxAttempts is the total operation limit",
+    "stops immediately for a permanent failure",
+  ].sort((left, right) => left.localeCompare(right));
+  if (totals.tests !== 4
+    || totals.pass !== 2
+    || totals.fail !== 2
+    || records.filter((record) => !record.failed).length !== 2
+    || records.filter((record) => record.failed).length !== 2
+    || !sameStrings(failingNames, expectedFailingNames)) {
+    throw new Error("initial test result did not match the controlled failure contract");
+  }
+  return "expected_failure";
+}
+
+interface InitialTestCompletion {
+  exitCode: number | null;
+  output: string;
+  signal: NodeJS.Signals | null;
+}
+
+async function captureInitialTestCompletion(
+  fixture: string,
+  signal: AbortSignal,
+): Promise<InitialTestCompletion> {
+  signal.throwIfAborted();
+  const captureDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-live-tests-"));
+  const outputPath = path.join(captureDirectory, "output");
+  try {
+    signal.throwIfAborted();
+    const outputFile = await fs.open(outputPath, "w");
+    let completion: Pick<InitialTestCompletion, "exitCode" | "signal">;
+    try {
+      const child = spawn("npm", ["test"], {
+        cwd: fixture,
+        shell: false,
+        signal,
+        stdio: ["ignore", outputFile.fd, outputFile.fd],
+      });
+      completion = await new Promise((resolve, reject) => {
+        let commandError: Error | undefined;
+        child.once("error", (error) => {
+          commandError = error;
+        });
+        child.once("close", (exitCode, exitSignal) => {
+          if (commandError) {
+            reject(commandError);
+            return;
+          }
+          resolve({ exitCode, signal: exitSignal });
+        });
+      });
+    } finally {
+      await outputFile.close();
+    }
+    return {
+      ...completion,
+      output: await fs.readFile(outputPath, "utf8"),
+    };
+  } finally {
+    await fs.rm(captureDirectory, { force: true, recursive: true });
+  }
+}
+
+function tapSummaryCount(output: string, label: "fail" | "pass" | "tests"): number | undefined {
+  const matches = [...output.matchAll(new RegExp(`^# ${label} (\\d+)$`, "gm"))];
+  if (matches.length !== 1) {
+    return undefined;
+  }
+  return Number(matches[0]?.[1]);
 }
 
 function installProcessSignalHandlers(handler: (signal: NodeJS.Signals) => void): () => void {
@@ -848,16 +962,12 @@ function hasNonEmptyEnvironment(environment: NodeJS.ProcessEnv, name: string): b
   return typeof environment[name] === "string" && environment[name]?.trim().length !== 0;
 }
 
-async function runGit(cwd: string, args: string[]): Promise<void> {
-  await execFileAsync("git", args, { cwd });
+async function runGit(cwd: string, args: string[], signal?: AbortSignal): Promise<void> {
+  await execFileAsync("git", args, { cwd, signal });
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { cwd, encoding: "utf8" })).stdout;
-}
-
-function isExecExitError(error: unknown): error is Error & { code: number } {
-  return error instanceof Error && "code" in error && typeof error.code === "number";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
