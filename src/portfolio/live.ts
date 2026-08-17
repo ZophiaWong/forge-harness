@@ -107,7 +107,6 @@ export async function runLivePortfolioDemo(
 
   let fixture: string | undefined;
   let child: LivePortfolioProcess | undefined;
-  let childCompleted = false;
   let stopReason: "interrupted" | "timed_out" | undefined;
   let stopSignal: NodeJS.Signals | undefined;
   let childTerminationStarted = false;
@@ -183,7 +182,6 @@ export async function runLivePortfolioDemo(
           }
           try {
             childResult = await child.completion;
-            childCompleted = true;
           } finally {
             cancelForceKill();
             cancelForceKill = () => undefined;
@@ -221,9 +219,7 @@ export async function runLivePortfolioDemo(
   } catch {
     result = stopReason
       ? { cleaned: false, reason: stopReason, status: "FAIL" }
-      : childCompleted
-        ? { cleaned: false, reason: "child_failed", status: "FAIL" }
-        : { cleaned: false, reason: "setup_failed", status: "FAIL" };
+      : { cleaned: false, reason: "setup_failed", status: "FAIL" };
   } finally {
     cancelRunTimeout();
     if (fixture) {

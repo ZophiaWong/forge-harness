@@ -1156,6 +1156,23 @@ describe("focused live portfolio walkthrough", () => {
     expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
   });
 
+  it("keeps a launcher failure after zero child exit out of child_failed", async () => {
+    const result = await runLivePortfolioDemo({
+      ...preflightDependencies(configuredEnvironment()),
+      allocateFixture: async () => "/test/live-post-child-launcher-failure",
+      initializeFixture: async () => undefined,
+      removeFixture: async () => undefined,
+      spawnCli: () => completedProcess(async () => ({ exitCode: 0, signal: null })),
+      writeLine(line) {
+        if (line === "[demo] ----- Forge Runtime transcript ends -----") {
+          throw new Error("injected launcher output failure");
+        }
+      },
+    });
+
+    expect(result).toEqual({ cleaned: true, reason: "setup_failed", status: "FAIL" });
+  });
+
   it("forwards an interrupt to the child and cleans up the fixture", async () => {
     let fixture = "";
     let interrupt: ((signal: NodeJS.Signals) => void) | undefined;
