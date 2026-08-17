@@ -910,6 +910,7 @@ async function captureInitialTestCompletion(
     const outputFile = await fs.open(outputPath, "w");
     let completion: Pick<InitialTestCompletion, "exitCode" | "signal">;
     try {
+      signal.throwIfAborted();
       const child = spawn("npm", ["test"], {
         cwd: fixture,
         shell: false,
@@ -1012,7 +1013,9 @@ function hasNonEmptyEnvironment(environment: NodeJS.ProcessEnv, name: string): b
 }
 
 async function runGit(cwd: string, args: string[], signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   await execFileAsync("git", args, { cwd, signal });
+  signal?.throwIfAborted();
 }
 
 async function gitOutput(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {

@@ -66,6 +66,53 @@ describe("focused live portfolio walkthrough", () => {
     }
   });
 
+  it("stops initialization before the next Git command after cancellation is observed", async () => {
+    const fixture = await allocateLivePortfolioFixture();
+    const originalPath = process.env.PATH;
+    const wrapperDir = await fs.mkdtemp(path.join(fixture, "git-wrapper-"));
+    const logPath = path.join(fixture, "git-commands.log");
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const throwIfAborted = signal.throwIfAborted.bind(signal);
+
+    try {
+      const realGit = (await execFileAsync("which", ["git"], { encoding: "utf8" })).stdout.trim();
+      await fs.writeFile(
+        path.join(wrapperDir, "git"),
+        [
+          "#!/bin/sh",
+          `printf '%s\\n' \"$*\" >> ${JSON.stringify(logPath)}`,
+          `exec ${JSON.stringify(realGit)} \"$@\"`,
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${wrapperDir}${path.delimiter}${originalPath ?? ""}`;
+      Object.defineProperty(signal, "throwIfAborted", {
+        value() {
+          try {
+            if (readFileSync(logPath, "utf8").includes("init -q")) {
+              controller.abort();
+            }
+          } catch {
+            // The first Git command has not reached the process boundary yet.
+          }
+          throwIfAborted();
+        },
+      });
+
+      await expect(initializeLivePortfolioFixture(fixture, signal))
+        .rejects.toMatchObject({ name: "AbortError" });
+      expect(await fs.readFile(logPath, "utf8")).toBe("init -q\n");
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
   it("accepts only the controlled two-failure initial retry state", async () => {
     const fixture = await allocateLivePortfolioFixture();
 
@@ -89,6 +136,51 @@ describe("focused live portfolio walkthrough", () => {
       await expect(runInitialFixtureTests(fixture, new AbortController().signal))
         .rejects.toThrow(/initial test result/i);
     } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("does not launch npm when cancellation is observed after opening output capture", async () => {
+    const fixture = await allocateLivePortfolioFixture();
+    const originalPath = process.env.PATH;
+    const wrapperDir = await fs.mkdtemp(path.join(fixture, "npm-wrapper-"));
+    const markerPath = path.join(fixture, "npm-launched");
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const throwIfAborted = signal.throwIfAborted.bind(signal);
+    let cancellationChecks = 0;
+
+    try {
+      await fs.writeFile(
+        path.join(wrapperDir, "npm"),
+        [
+          "#!/bin/sh",
+          `printf 'launched\\n' > ${JSON.stringify(markerPath)}`,
+          "printf 'TAP version 13\\nok 1 - first passing test\\nok 2 - second passing test\\nnot ok 3 - maxAttempts is the total operation limit\\nnot ok 4 - stops immediately for a permanent failure\\n1..4\\n# tests 4\\n# pass 2\\n# fail 2\\n'",
+          "exit 1",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${wrapperDir}${path.delimiter}${originalPath ?? ""}`;
+      Object.defineProperty(signal, "throwIfAborted", {
+        value() {
+          cancellationChecks += 1;
+          if (cancellationChecks === 3) {
+            controller.abort();
+          }
+          throwIfAborted();
+        },
+      });
+
+      await expect(runInitialFixtureTests(fixture, signal))
+        .rejects.toMatchObject({ name: "AbortError" });
+      await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
       await fs.rm(fixture, { force: true, recursive: true });
     }
   });
