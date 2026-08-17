@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -753,6 +754,67 @@ describe("focused live portfolio walkthrough", () => {
       expect(commands).toContain("status --porcelain=v1 -z --untracked-files=all");
       expect(commands).not.toContain("rev-parse HEAD");
       expect(commands).not.toContain("diff --name-only");
+    } finally {
+      if (originalPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = originalPath;
+      }
+      if (originalRealGit === undefined) {
+        delete process.env.FORGE_LIVE_REAL_GIT;
+      } else {
+        process.env.FORGE_LIVE_REAL_GIT = originalRealGit;
+      }
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("does not launch the next Git command after cancellation at a command boundary", async () => {
+    const fixture = await createInitializedFixture();
+    const originalPath = process.env.PATH;
+    const originalRealGit = process.env.FORGE_LIVE_REAL_GIT;
+    const wrapperDir = path.join(fixture, "boundary-git-wrapper");
+    const logPath = path.join(fixture, "boundary-git-commands.log");
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const realGit = (await execFileAsync("which", ["git"], { encoding: "utf8" })).stdout.trim();
+      await fs.mkdir(wrapperDir);
+      await fs.writeFile(
+        path.join(wrapperDir, "git"),
+        [
+          "#!/usr/bin/env node",
+          "import { spawnSync } from 'node:child_process';",
+          "import { appendFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          `appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');`,
+          "const result = spawnSync(process.env.FORGE_LIVE_REAL_GIT, args, { stdio: 'inherit' });",
+          "process.exit(result.status ?? 1);",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${wrapperDir}${path.delimiter}${originalPath ?? ""}`;
+      process.env.FORGE_LIVE_REAL_GIT = realGit;
+      const controller = new AbortController();
+      const signal = controller.signal;
+      const throwIfAborted = signal.throwIfAborted.bind(signal);
+      Object.defineProperty(signal, "throwIfAborted", {
+        value() {
+          try {
+            if (readFileSync(logPath, "utf8").includes("rev-parse --show-toplevel")) {
+              controller.abort();
+            }
+          } catch {
+            // Reconciliation has not launched its first Git command yet.
+          }
+          throwIfAborted();
+        },
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture, signal))
+        .rejects.toMatchObject({ name: "AbortError" });
+      const commands = await fs.readFile(logPath, "utf8");
+      expect(commands).toBe("rev-parse --show-toplevel\n");
     } finally {
       if (originalPath === undefined) {
         delete process.env.PATH;

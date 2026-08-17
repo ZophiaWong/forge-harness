@@ -1016,7 +1016,10 @@ async function runGit(cwd: string, args: string[], signal?: AbortSignal): Promis
 }
 
 async function gitOutput(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
-  return (await execFileAsync("git", args, { cwd, encoding: "utf8", signal })).stdout;
+  signal?.throwIfAborted();
+  const output = (await execFileAsync("git", args, { cwd, encoding: "utf8", signal })).stdout;
+  signal?.throwIfAborted();
+  return output;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
