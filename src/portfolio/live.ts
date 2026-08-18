@@ -36,15 +36,16 @@ export interface LivePortfolioSpawnOptions {
 }
 
 export interface LivePortfolioDependencies {
+  allocateFixture(): Promise<string>;
   commandAvailable(command: "bash" | "git"): Promise<boolean>;
-  createFixture(): Promise<string>;
   environment: NodeJS.ProcessEnv;
   forgeRoot: string;
+  initializeFixture(fixture: string, signal: AbortSignal): Promise<void>;
   installSignalHandlers(handler: (signal: NodeJS.Signals) => void): () => void;
   isInteractiveTerminal(): boolean;
   loadEnvironment(forgeRoot: string, environment: NodeJS.ProcessEnv): Promise<void>;
   removeFixture(fixture: string): Promise<void>;
-  runFixtureTests(fixture: string): Promise<number>;
+  runFixtureTests(fixture: string, signal: AbortSignal): Promise<"expected_failure" | "passed">;
   scheduleForceKill(handler: () => void): () => void;
   scheduleRunTimeout(handler: () => void): () => void;
   spawnCli(
@@ -52,6 +53,7 @@ export interface LivePortfolioDependencies {
     args: string[],
     options: LivePortfolioSpawnOptions,
   ): LivePortfolioProcess;
+  validateEvidence(fixture: string, signal: AbortSignal): Promise<void>;
   writeLine(line: string): void;
 }
 
@@ -105,12 +107,23 @@ export async function runLivePortfolioDemo(
 
   let fixture: string | undefined;
   let child: LivePortfolioProcess | undefined;
-  let creatingFixture = true;
   let stopReason: "interrupted" | "timed_out" | undefined;
+  let stopSignal: NodeJS.Signals | undefined;
+  let childTerminationStarted = false;
   let cancelForceKill: () => void = () => undefined;
   let cancelRunTimeout: () => void = () => undefined;
   let result: LivePortfolioResult = { cleaned: false, reason: "setup_failed", status: "FAIL" };
-  const stopChild = (
+  const controller = new AbortController();
+  const terminateChild = (signal: NodeJS.Signals) => {
+    if (!child || childTerminationStarted) {
+      return;
+    }
+    childTerminationStarted = true;
+    child.kill(signal);
+    cancelForceKill();
+    cancelForceKill = dependencies.scheduleForceKill(() => child?.kill("SIGKILL"));
+  };
+  const stopRun = (
     reason: "interrupted" | "timed_out",
     signal: NodeJS.Signals,
   ) => {
@@ -118,28 +131,29 @@ export async function runLivePortfolioDemo(
       return;
     }
     stopReason = reason;
-    if (child) {
-      child.kill(signal);
-      cancelForceKill();
-      cancelForceKill = dependencies.scheduleForceKill(() => child?.kill("SIGKILL"));
-    }
+    stopSignal = signal;
+    controller.abort();
+    terminateChild(signal);
   };
   const removeSignalHandlers = dependencies.installSignalHandlers((signal) => {
-    stopChild("interrupted", signal);
+    stopRun("interrupted", signal);
   });
   cancelRunTimeout = dependencies.scheduleRunTimeout(() => {
-    stopChild("timed_out", "SIGTERM");
+    stopRun("timed_out", "SIGTERM");
   });
 
   try {
-    fixture = await dependencies.createFixture();
-    creatingFixture = false;
+    fixture = await dependencies.allocateFixture();
+    controller.signal.throwIfAborted();
+    await dependencies.initializeFixture(fixture, controller.signal);
+    controller.signal.throwIfAborted();
     dependencies.writeLine("[demo] Created a disposable retry fixture.");
     if (stopReason) {
       result = { cleaned: false, reason: stopReason, status: "FAIL" };
     } else {
-      const initialTestExit = await dependencies.runFixtureTests(fixture);
-      if (initialTestExit === 0) {
+      const initialTestResult = await dependencies.runFixtureTests(fixture, controller.signal);
+      controller.signal.throwIfAborted();
+      if (initialTestResult === "passed") {
         result = { cleaned: false, reason: "fixture_not_failing", status: "FAIL" };
       } else if (stopReason) {
         result = { cleaned: false, reason: stopReason, status: "FAIL" };
@@ -163,10 +177,20 @@ export async function runLivePortfolioDemo(
               shell: false,
             },
           );
-          childResult = await child.completion;
+          if (stopSignal) {
+            terminateChild(stopSignal);
+          }
+          try {
+            childResult = await child.completion;
+          } finally {
+            cancelForceKill();
+            cancelForceKill = () => undefined;
+            child = undefined;
+          }
         } finally {
           dependencies.writeLine("[demo] ----- Forge Runtime transcript ends -----");
         }
+        controller.signal.throwIfAborted();
         if (stopReason) {
           result = { cleaned: false, reason: stopReason, status: "FAIL" };
         } else if (childResult.signal) {
@@ -175,7 +199,8 @@ export async function runLivePortfolioDemo(
           result = { cleaned: false, reason: "child_failed", status: "FAIL" };
         } else {
           try {
-            await validateLivePortfolioEvidence(fixture);
+            await dependencies.validateEvidence(fixture, controller.signal);
+            controller.signal.throwIfAborted();
             result = stopReason
               ? { cleaned: false, reason: stopReason, status: "FAIL" }
               : {
@@ -184,7 +209,9 @@ export async function runLivePortfolioDemo(
                   status: "PASS",
                 };
           } catch {
-            result = { cleaned: false, reason: "invalid_session_evidence", status: "FAIL" };
+            result = stopReason
+              ? { cleaned: false, reason: stopReason, status: "FAIL" }
+              : { cleaned: false, reason: "invalid_session_evidence", status: "FAIL" };
           }
         }
       }
@@ -192,10 +219,9 @@ export async function runLivePortfolioDemo(
   } catch {
     result = stopReason
       ? { cleaned: false, reason: stopReason, status: "FAIL" }
-      : creatingFixture
-        ? { cleaned: false, reason: "setup_failed", status: "FAIL" }
-        : { cleaned: false, reason: "child_failed", status: "FAIL" };
+      : { cleaned: false, reason: "setup_failed", status: "FAIL" };
   } finally {
+    cancelRunTimeout();
     if (fixture) {
       try {
         await dependencies.removeFixture(fixture);
@@ -209,7 +235,6 @@ export async function runLivePortfolioDemo(
     if (stopReason && result.reason !== "cleanup_failed") {
       result = { cleaned: result.cleaned, reason: stopReason, status: "FAIL" };
     }
-    cancelRunTimeout();
     cancelForceKill();
     removeSignalHandlers();
   }
@@ -217,143 +242,158 @@ export async function runLivePortfolioDemo(
   return reportLivePortfolioResult(dependencies, result);
 }
 
-export async function createLivePortfolioFixture(): Promise<string> {
-  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "forge-portfolio-live-"));
-  try {
-    await fs.mkdir(path.join(fixture, "src"), { recursive: true });
-    await fs.mkdir(path.join(fixture, "test"), { recursive: true });
-    await fs.writeFile(path.join(fixture, ".gitignore"), ".forge/\n", "utf8");
-    await fs.writeFile(
-      path.join(fixture, "package.json"),
-      `${JSON.stringify({
-        name: "forge-portfolio-retry-fixture",
-        private: true,
-        scripts: { test: "node --test" },
-        type: "module",
-      }, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixture, "src", "errors.mjs"),
-      [
-        "export class TransientError extends Error {",
-        "  name = \"TransientError\";",
-        "}",
-        "",
-        "export class PermanentError extends Error {",
-        "  name = \"PermanentError\";",
-        "}",
-        "",
-        "export function isTransientError(error) {",
-        "  return error instanceof TransientError;",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixture, "src", "retry.mjs"),
-      [
-        "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
-        "  let attempt = 0;",
-        "  while (attempt <= maxAttempts) {",
-        "    attempt += 1;",
-        "    try {",
-        "      return await operation();",
-        "    } catch (error) {",
-        "      if (attempt > maxAttempts) {",
-        "        throw error;",
-        "      }",
-        "    }",
-        "  }",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(fixture, "test", "retry.test.mjs"),
-      [
-        'import assert from "node:assert/strict";',
-        'import test from "node:test";',
-        "",
-        'import { PermanentError, TransientError, isTransientError } from "../src/errors.mjs";',
-        'import { runWithRetry } from "../src/retry.mjs";',
-        "",
-        'test("returns a first-attempt success without another call", async () => {',
-        "  let attempts = 0;",
-        "  const result = await runWithRetry(async () => {",
-        "    attempts += 1;",
-        '    return "ok";',
-        "  }, { maxAttempts: 3, isRetryable: isTransientError });",
-        '  assert.equal(result, "ok");',
-        "  assert.equal(attempts, 1);",
-        "});",
-        "",
-        'test("retries transient failures until the operation succeeds", async () => {',
-        "  let attempts = 0;",
-        "  const result = await runWithRetry(async () => {",
-        "    attempts += 1;",
-        "    if (attempts < 3) {",
-        '      throw new TransientError("try again");',
-        "    }",
-        '    return "recovered";',
-        "  }, { maxAttempts: 3, isRetryable: isTransientError });",
-        '  assert.equal(result, "recovered");',
-        "  assert.equal(attempts, 3);",
-        "});",
-        "",
-        'test("maxAttempts is the total operation limit", async () => {',
-        "  let attempts = 0;",
-        '  const failure = new TransientError("still unavailable");',
-        "  await assert.rejects(",
-        "    runWithRetry(async () => {",
-        "      attempts += 1;",
-        "      throw failure;",
-        "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
-        "    (error) => error === failure,",
-        "  );",
-        "  assert.equal(attempts, 3);",
-        "});",
-        "",
-        'test("stops immediately for a permanent failure", async () => {',
-        "  let attempts = 0;",
-        '  const failure = new PermanentError("do not retry");',
-        "  await assert.rejects(",
-        "    runWithRetry(async () => {",
-        "      attempts += 1;",
-        "      throw failure;",
-        "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
-        "    (error) => error === failure,",
-        "  );",
-        "  assert.equal(attempts, 1);",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await runGit(fixture, ["init", "-q"]);
-    await runGit(fixture, ["config", "user.name", "Forge Portfolio Live"]);
-    await runGit(fixture, ["config", "user.email", "portfolio-live@example.invalid"]);
-    await runGit(fixture, [
-      "add",
-      ".gitignore",
-      "package.json",
-      "src/errors.mjs",
-      "src/retry.mjs",
-      "test/retry.test.mjs",
-    ]);
-    await runGit(fixture, ["commit", "--no-gpg-sign", "-qm", "initial failing fixture"]);
-    return fixture;
-  } catch (error) {
-    await fs.rm(fixture, { force: true, recursive: true });
-    throw error;
-  }
+export async function allocateLivePortfolioFixture(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), "forge-portfolio-live-"));
 }
 
-export async function validateLivePortfolioEvidence(fixture: string): Promise<void> {
+export async function initializeLivePortfolioFixture(
+  fixture: string,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  await fs.mkdir(path.join(fixture, "src"), { recursive: true });
+  signal.throwIfAborted();
+  await fs.mkdir(path.join(fixture, "test"), { recursive: true });
+  await fs.writeFile(
+    path.join(fixture, ".gitignore"),
+    ".forge/\n",
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "package.json"),
+    `${JSON.stringify({
+      name: "forge-portfolio-retry-fixture",
+      private: true,
+      scripts: { test: "node test/retry.test.mjs" },
+      type: "module",
+    }, null, 2)}\n`,
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "src", "errors.mjs"),
+    [
+      "export class TransientError extends Error {",
+      "  name = \"TransientError\";",
+      "}",
+      "",
+      "export class PermanentError extends Error {",
+      "  name = \"PermanentError\";",
+      "}",
+      "",
+      "export function isTransientError(error) {",
+      "  return error instanceof TransientError;",
+      "}",
+      "",
+    ].join("\n"),
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "src", "retry.mjs"),
+    [
+      "export async function runWithRetry(operation, { maxAttempts, isRetryable }) {",
+      "  let attempt = 0;",
+      "  while (attempt <= maxAttempts) {",
+      "    attempt += 1;",
+      "    try {",
+      "      return await operation();",
+      "    } catch (error) {",
+      "      if (attempt > maxAttempts) {",
+      "        throw error;",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    { encoding: "utf8", signal },
+  );
+  await fs.writeFile(
+    path.join(fixture, "test", "retry.test.mjs"),
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      "",
+      'import { PermanentError, TransientError, isTransientError } from "../src/errors.mjs";',
+      'import { runWithRetry } from "../src/retry.mjs";',
+      "",
+      'test("returns a first-attempt success without another call", async () => {',
+      "  let attempts = 0;",
+      "  const result = await runWithRetry(async () => {",
+      "    attempts += 1;",
+      '    return "ok";',
+      "  }, { maxAttempts: 3, isRetryable: isTransientError });",
+      '  assert.equal(result, "ok");',
+      "  assert.equal(attempts, 1);",
+      "});",
+      "",
+      'test("retries transient failures until the operation succeeds", async () => {',
+      "  let attempts = 0;",
+      "  const result = await runWithRetry(async () => {",
+      "    attempts += 1;",
+      "    if (attempts < 3) {",
+      '      throw new TransientError("try again");',
+      "    }",
+      '    return "recovered";',
+      "  }, { maxAttempts: 3, isRetryable: isTransientError });",
+      '  assert.equal(result, "recovered");',
+      "  assert.equal(attempts, 3);",
+      "});",
+      "",
+      'test("maxAttempts is the total operation limit", async () => {',
+      "  let attempts = 0;",
+      '  const failure = new TransientError("still unavailable");',
+      "  await assert.rejects(",
+      "    runWithRetry(async () => {",
+      "      attempts += 1;",
+      "      throw failure;",
+      "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
+      "    (error) => error === failure,",
+      "  );",
+      "  assert.equal(attempts, 3);",
+      "});",
+      "",
+      'test("stops immediately for a permanent failure", async () => {',
+      "  let attempts = 0;",
+      '  const failure = new PermanentError("do not retry");',
+      "  await assert.rejects(",
+      "    runWithRetry(async () => {",
+      "      attempts += 1;",
+      "      throw failure;",
+      "    }, { maxAttempts: 3, isRetryable: isTransientError }),",
+      "    (error) => error === failure,",
+      "  );",
+      "  assert.equal(attempts, 1);",
+        "});",
+        "",
+    ].join("\n"),
+    { encoding: "utf8", signal },
+  );
+  await runGit(fixture, ["init", "-q"], signal);
+  await runGit(fixture, ["config", "user.name", "Forge Portfolio Live"], signal);
+  await runGit(fixture, ["config", "user.email", "portfolio-live@example.invalid"], signal);
+  await runGit(fixture, [
+    "add",
+    ".gitignore",
+    "package.json",
+    "src/errors.mjs",
+    "src/retry.mjs",
+    "test/retry.test.mjs",
+  ], signal);
+  await runGit(
+    fixture,
+    ["commit", "--no-gpg-sign", "-qm", "initial failing fixture"],
+    signal,
+  );
+}
+
+export async function validateLivePortfolioEvidence(
+  fixture: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   const sessionsRoot = path.join(fixture, ".forge", "sessions");
   const sessionEntries = await fs.readdir(sessionsRoot, { withFileTypes: true });
+  signal?.throwIfAborted();
   const sessions: Array<{
     id: string;
     metadata: Record<string, unknown>;
@@ -365,7 +405,10 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
       continue;
     }
     const sessionDir = path.join(sessionsRoot, entry.name);
-    const value: unknown = JSON.parse(await fs.readFile(path.join(sessionDir, "session.json"), "utf8"));
+    const value: unknown = JSON.parse(await readEvidenceFile(
+      path.join(sessionDir, "session.json"),
+      signal,
+    ));
     if (!isRecord(value) || typeof value.id !== "string") {
       throw new Error("invalid session metadata");
     }
@@ -411,7 +454,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     throw new Error("root session is missing worktree metadata");
   }
 
-  const traceText = await fs.readFile(expectedRootTracePath, "utf8");
+  const traceText = await readEvidenceFile(expectedRootTracePath, signal);
   const traceLines = traceText.split("\n").filter((line) => line.length > 0);
   const events = traceLines.map((line, index) => {
     const event = parseRecordedTraceEvent(JSON.parse(line));
@@ -467,7 +510,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   }
 
   const taskGraphValue: unknown = JSON.parse(
-    await fs.readFile(expectedRootTaskGraphPath, "utf8"),
+    await readEvidenceFile(expectedRootTaskGraphPath, signal),
   );
   const graph = parseTeamTaskGraphFile(taskGraphValue);
   if (graph.tasks.length !== 1) {
@@ -507,7 +550,8 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     rootWorkspacePath: expectedRootWorkspacePath,
     targetBefore: integrationReceipt.targetBefore,
     traceBaseCommit: workspaceEvents[0]?.baseCommit,
-  });
+  }, signal);
+  signal?.throwIfAborted();
 
   const childSessions = sessions.filter((session) => session.metadata.child !== undefined);
   if (childSessions.length !== 1 || childSessions[0]?.id !== submissionSource.childSessionId) {
@@ -602,7 +646,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
     throw new Error("root trace does not contain one synchronous child handoff");
   }
 
-  const childTraceText = await fs.readFile(expectedChildTracePath, "utf8");
+  const childTraceText = await readEvidenceFile(expectedChildTracePath, signal);
   const childEvents = childTraceText.split("\n").filter((line) => line.length > 0).map((line, index) => {
     const event = parseRecordedTraceEvent(JSON.parse(line));
     if (event.sessionId !== childSession.id || event.sequence !== index + 1) {
@@ -625,6 +669,7 @@ export async function validateLivePortfolioEvidence(fixture: string): Promise<vo
   ) {
     throw new Error("child session is missing terminal evidence");
   }
+  signal?.throwIfAborted();
 }
 
 interface FinalRootGitStateExpectation {
@@ -638,7 +683,9 @@ interface FinalRootGitStateExpectation {
 
 async function reconcileFinalRootGitState(
   expectation: FinalRootGitStateExpectation,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   if (
     expectation.traceBaseCommit !== expectation.rootWorkspaceBaseCommit
     || expectation.targetBefore !== expectation.rootWorkspaceBaseCommit
@@ -655,6 +702,7 @@ async function reconcileFinalRootGitState(
   const actualRoot = (await gitOutput(
     expectation.rootWorkspacePath,
     ["rev-parse", "--show-toplevel"],
+    signal,
   )).trim();
   if (path.resolve(actualRoot) !== path.resolve(expectation.rootWorkspacePath)) {
     throw new Error("root Git top-level does not match the expected Worktree");
@@ -663,6 +711,7 @@ async function reconcileFinalRootGitState(
   const status = await gitOutput(
     expectation.rootWorkspacePath,
     ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    signal,
   );
   if (status.length > 0) {
     throw new Error("root Worktree must be clean before PASS");
@@ -671,6 +720,7 @@ async function reconcileFinalRootGitState(
   const head = (await gitOutput(
     expectation.rootWorkspacePath,
     ["rev-parse", "HEAD"],
+    signal,
   )).trim();
   if (head !== expectation.integratedCommit) {
     throw new Error("root HEAD does not match the integration receipt");
@@ -686,10 +736,18 @@ async function reconcileFinalRootGitState(
       `${expectation.targetBefore}..HEAD`,
       "--",
     ],
+    signal,
   )).split("\0").filter(Boolean);
   if (!sameStringSets(changedFiles, expectation.expectedChangedFiles)) {
     throw new Error("root base-to-HEAD path set does not match the child submission");
   }
+}
+
+async function readEvidenceFile(filePath: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  const contents = await fs.readFile(filePath, { encoding: "utf8", signal });
+  signal?.throwIfAborted();
+  return contents;
 }
 
 function hasValidPostCoreTail(events: RecordedTraceEvent[], completedIndex: number): boolean {
@@ -729,9 +787,10 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
         () => false,
       );
     },
-    createFixture: createLivePortfolioFixture,
+    allocateFixture: allocateLivePortfolioFixture,
     environment: process.env,
     forgeRoot,
+    initializeFixture: initializeLivePortfolioFixture,
     installSignalHandlers: installProcessSignalHandlers,
     isInteractiveTerminal: () => Boolean(process.stdin.isTTY && process.stdout.isTTY),
     async loadEnvironment(root, environment) {
@@ -770,20 +829,125 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
         },
       };
     },
+    validateEvidence: validateLivePortfolioEvidence,
     writeLine: (line) => console.log(line),
   };
 }
 
-async function runInitialFixtureTests(fixture: string): Promise<number> {
-  try {
-    await execFileAsync("npm", ["test"], { cwd: fixture });
-    return 0;
-  } catch (error) {
-    if (isExecExitError(error)) {
-      return error.code;
-    }
-    throw error;
+export async function runInitialFixtureTests(
+  fixture: string,
+  signal: AbortSignal,
+): Promise<"expected_failure" | "passed"> {
+  const completion = await captureInitialTestCompletion(fixture, signal);
+  if (completion.signal) {
+    throw new Error(`initial test command terminated by ${completion.signal}`);
   }
+  if (completion.exitCode === 0) {
+    return "passed";
+  }
+  if (completion.exitCode !== 1) {
+    throw new Error(`initial test command had unexpected exit ${String(completion.exitCode)}`);
+  }
+  const output = completion.output;
+  if (/^Bail out!(?:\s|$)/im.test(output)) {
+    throw new Error("initial test output was not valid TAP");
+  }
+  const totals = {
+    fail: tapSummaryCount(output, "fail"),
+    pass: tapSummaryCount(output, "pass"),
+    tests: tapSummaryCount(output, "tests"),
+  };
+  if (Object.values(totals).some((value) => value === undefined)) {
+    throw new Error("initial test output was not valid TAP");
+  }
+  const plans = [...output.matchAll(/^1\.\.(\d+)$/gm)];
+  const records = [...output.matchAll(/^(not )?ok (\d+) - (.+)$/gm)].map((match) => ({
+    failed: match[1] !== undefined,
+    name: match[3]?.trim() ?? "",
+    number: Number(match[2]),
+  }));
+  const recordNumbers = records.map((record) => record.number).sort((left, right) => left - right);
+  if (plans.length !== 1
+    || Number(plans[0]?.[1]) !== 4
+    || records.length !== 4
+    || !sameStrings(recordNumbers.map(String), ["1", "2", "3", "4"])) {
+    throw new Error("initial test output was not valid TAP");
+  }
+  const failingNames = records
+    .filter((record) => record.failed)
+    .map((record) => record.name)
+    .sort((left, right) => left.localeCompare(right));
+  const expectedFailingNames = [
+    "maxAttempts is the total operation limit",
+    "stops immediately for a permanent failure",
+  ].sort((left, right) => left.localeCompare(right));
+  if (totals.tests !== 4
+    || totals.pass !== 2
+    || totals.fail !== 2
+    || records.filter((record) => !record.failed).length !== 2
+    || records.filter((record) => record.failed).length !== 2
+    || !sameStrings(failingNames, expectedFailingNames)) {
+    throw new Error("initial test result did not match the controlled failure contract");
+  }
+  return "expected_failure";
+}
+
+interface InitialTestCompletion {
+  exitCode: number | null;
+  output: string;
+  signal: NodeJS.Signals | null;
+}
+
+async function captureInitialTestCompletion(
+  fixture: string,
+  signal: AbortSignal,
+): Promise<InitialTestCompletion> {
+  signal.throwIfAborted();
+  const captureDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "forge-live-tests-"));
+  const outputPath = path.join(captureDirectory, "output");
+  try {
+    signal.throwIfAborted();
+    const outputFile = await fs.open(outputPath, "w");
+    let completion: Pick<InitialTestCompletion, "exitCode" | "signal">;
+    try {
+      signal.throwIfAborted();
+      const child = spawn("npm", ["test"], {
+        cwd: fixture,
+        shell: false,
+        signal,
+        stdio: ["ignore", outputFile.fd, outputFile.fd],
+      });
+      completion = await new Promise((resolve, reject) => {
+        let commandError: Error | undefined;
+        child.once("error", (error) => {
+          commandError = error;
+        });
+        child.once("close", (exitCode, exitSignal) => {
+          if (commandError) {
+            reject(commandError);
+            return;
+          }
+          resolve({ exitCode, signal: exitSignal });
+        });
+      });
+    } finally {
+      await outputFile.close();
+    }
+    return {
+      ...completion,
+      output: await fs.readFile(outputPath, "utf8"),
+    };
+  } finally {
+    await fs.rm(captureDirectory, { force: true, recursive: true });
+  }
+}
+
+function tapSummaryCount(output: string, label: "fail" | "pass" | "tests"): number | undefined {
+  const matches = [...output.matchAll(new RegExp(`^# ${label} (\\d+)$`, "gm"))];
+  if (matches.length !== 1) {
+    return undefined;
+  }
+  return Number(matches[0]?.[1]);
 }
 
 function installProcessSignalHandlers(handler: (signal: NodeJS.Signals) => void): () => void {
@@ -834,11 +998,11 @@ function livePortfolioResultMessage(result: LivePortfolioResult): string {
     case "invalid_session_evidence":
       return "[demo] The run finished, but the expected c17c evidence or final root Git state was invalid.";
     case "setup_failed":
-      return "[demo] The temporary retry fixture could not be prepared.";
+      return "[demo] The Live walkthrough could not be started.";
     case "interrupted":
       return "[demo] The Forge run was interrupted.";
     case "timed_out":
-      return "[demo] Forge run exceeded 10 minutes and was stopped.";
+      return "[demo] Live walkthrough exceeded 10 minutes and was stopped.";
     case "cleanup_failed":
       return "[demo] The temporary demo directory could not be removed.";
   }
@@ -848,16 +1012,17 @@ function hasNonEmptyEnvironment(environment: NodeJS.ProcessEnv, name: string): b
   return typeof environment[name] === "string" && environment[name]?.trim().length !== 0;
 }
 
-async function runGit(cwd: string, args: string[]): Promise<void> {
-  await execFileAsync("git", args, { cwd });
+async function runGit(cwd: string, args: string[], signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  await execFileAsync("git", args, { cwd, signal });
+  signal?.throwIfAborted();
 }
 
-async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  return (await execFileAsync("git", args, { cwd, encoding: "utf8" })).stdout;
-}
-
-function isExecExitError(error: unknown): error is Error & { code: number } {
-  return error instanceof Error && "code" in error && typeof error.code === "number";
+async function gitOutput(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  const output = (await execFileAsync("git", args, { cwd, encoding: "utf8", signal })).stdout;
+  signal?.throwIfAborted();
+  return output;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -61,7 +61,7 @@ Live launcher 会在系统临时目录现场生成一个不依赖外部 package 
 
 Prompt 把这次演示限制为一个 edit task 和一个同步 edit child。这样可以控制面试时长，并让 submission、verification 和 Git receipt 都有明确的 source。实现范围只要求改动保持在 `src/**`；task 文案、阅读哪些文件、具体实现、编辑次数和 protocol call 顺序仍由模型决定。报告 PASS 前，validator 会把持久化的 submission 和 Git receipt 与最终 root Worktree 对账。Worktree 必须 clean；receipt 的 `targetBefore` 必须等于记录的 Worktree base；root `HEAD` 必须等于 `integratedCommit`；`targetBefore..HEAD` 的完整路径集合必须等于 child submission 的 `changedFiles`。固定拓扑只是演示边界，不代表 Runtime 只能处理一个任务。
 
-运行中的 Forge child 受 10 分钟 watchdog 限制。Launcher 会检查持久化的 c17c 证据，并在正常路径删除临时 repository；setup 或 validation 异常后的 cleanup 目前是 best effort。端到端 deadline 和 fixture ownership 的后续工作记录在 [#16](https://github.com/ZophiaWong/forge-harness/issues/16)。这只是一次结果可变的模型运行观察，不是 benchmark、CI 检查或可复用证据。Live 失败时应立刻回到确定性 walkthrough，不在面试现场排查。
+Launcher 在分配 fixture 前启动 10 分钟 timer。fixture 初始化、初始测试、Forge child 和最终 evidence validation 共用一个 `AbortSignal`。这是协作式取消，不是硬性的 wall-clock deadline：遇到无法中断的操作时，launcher 会等它返回，再进入 cleanup。分配出的 fixture 路径只归外层 launcher 管理；无论前面如何结束，都只删除一次，cleanup 不接收取消 signal。timeout 或人工 `SIGINT`/`SIGTERM` 谁先到，谁就确定取消原因，后续信号不会改写结果。child 正在运行时，timeout 先发送 `SIGTERM`，人工信号则原样转发；两秒后仍未退出，launcher 再发送一次 `SIGKILL`。进入 cleanup 前会停止 10 分钟 timer，但 signal handler 会保留到 cleanup 完成；此时第一次收到人工信号，仍会阻止 PASS。若删除失败，`cleanup_failed` 优先于此前结果。这只是一次结果可变的模型运行观察，不是 benchmark、CI 检查或可复用证据。Live 失败时应立刻回到确定性 walkthrough，不在面试现场排查。
 
 ## 证据与边界
 
