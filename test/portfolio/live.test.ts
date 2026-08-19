@@ -399,10 +399,13 @@ describe("focused live portfolio walkthrough", () => {
     expect(spawnCalls[0]?.args[4]).toBe([
       "Fix the failing retry-policy tests without modifying tests, package.json, or the public API.",
       "Keep implementation changes within src/** and keep the solution focused.",
+      "Before implementation, create one todo snapshot with four persistent items: inspection, isolated child implementation, task verification, and integration; do not delete or replace them.",
       "Track the work as one edit task with npm test as its verification command.",
-      "Use one synchronous isolated edit child for the implementation, then verify and integrate the result before finishing.",
+      "Assign the edit task to the Leader before delegating.",
+      "Use exactly one synchronous isolated edit child with maxToolRounds set to 8 for the implementation.",
+      "Then verify and integrate the result before finishing.",
     ].join(" "));
-    expect(spawnCalls[0]?.args[4]).not.toMatch(/slugify|task_001|maxToolRounds|task_create|task_transition|task_verify|src\/retry\.mjs/i);
+    expect(spawnCalls[0]?.args[4]).not.toMatch(/slugify|task_001|task_create|task_transition|task_verify|src\/retry\.mjs/i);
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
