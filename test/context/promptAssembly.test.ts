@@ -220,4 +220,20 @@ describe("prompt assembly", () => {
     expect(assembly.instructions).toContain("wait for teammate activity");
     expect(assembly.instructions).toContain("inject mailbox results");
   });
+  it("includes final todo reconciliation guidance", () => {
+    const assembly = assemblePrompt({
+      assets: { skills: [] },
+      task: "Coordinate implementation.",
+    });
+
+    expect(assembly.instructions).toContain(
+      "Before returning a candidate final answer, if this session already has a todo snapshot, reconcile every item status against direct evidence and call todo when the snapshot has changed. Do not create a todo only for this final check.",
+    );
+    expect(assembly.instructions).toContain(
+      "For multi-step tasks, use todo to track the current plan, progress, and acceptance criteria; update it when the work state changes.",
+    );
+    expect(assembly.instructions).toContain(
+      "todo is session-local execution planning; task_* tools operate on the root-session shared TaskGraph.",
+    );
+  });
 });
