@@ -57,6 +57,7 @@ const TOOL_RULES = [
   "Use edit for exact file text replacements and write for full-file create or overwrite operations.",
   "Use bash only when a shell command is needed.",
   "Use inspect-only commands unless the user explicitly asks for something else.",
+  "Before returning a candidate final answer, if this session already has a todo snapshot, reconcile every item status against direct evidence and call todo when the snapshot has changed. Do not create a todo only for this final check.",
   "For multi-step tasks, use todo to track the current plan, progress, and acceptance criteria; update it when the work state changes.",
   "todo is session-local execution planning; task_* tools operate on the root-session shared TaskGraph.",
   "Leader flow: create a task with task_create, acquire it with task_transition, record evidence, submit and review the result, then verify and integrate edit tasks through their dedicated tools.",

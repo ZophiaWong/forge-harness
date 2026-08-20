@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createTaskStateStore } from "../../src/runtime/task.js";
-import { createTodoTool } from "../../src/tools/todoTool.js";
+import { createTodoTool, todoToolDefinition } from "../../src/tools/todoTool.js";
 
 const validSnapshot = {
   acceptance: ["npm run build exits with code 0"],
@@ -22,6 +22,42 @@ const validSnapshot = {
 };
 
 describe("todo tool", () => {
+  it("describes the complete session-local snapshot and evidence-based status protocol", () => {
+    expect(todoToolDefinition.description).toContain("session-local");
+    expect(todoToolDefinition.description).toContain("full current snapshot");
+    expect(todoToolDefinition.description).toContain("preserve existing item ids");
+    expect(todoToolDefinition.description).toContain("direct evidence");
+    expect(todoToolDefinition.description).toContain("candidate final answer");
+    expect(todoToolDefinition.description).toContain("Do not create a todo only for this final check");
+    expect(todoToolDefinition.description).toContain(
+      "does not determine Runtime or TaskGraph completion",
+    );
+
+    const properties = todoToolDefinition.parameters.properties as {
+      items: {
+        description: string;
+        items: {
+          properties: {
+            note: { description: string };
+            status: { description: string };
+          };
+        };
+      };
+    };
+
+    expect(properties.items.description).toContain("Complete replacement snapshot");
+    expect(properties.items.description).toContain("stable ids");
+    expect(properties.items.description).toContain("reduce the open count");
+
+    const itemProperties = properties.items.items.properties;
+
+    expect(itemProperties.status.description).toContain("pending means not started");
+    expect(itemProperties.status.description).toContain("completed requires direct evidence");
+    expect(itemProperties.status.description).toContain("blocked means an unresolved blocker");
+    expect(itemProperties.status.description).toContain("At most one item may be in_progress");
+    expect(itemProperties.note.description).toContain("direct evidence");
+  });
+
   it("replaces the run task snapshot and returns a compact projected result", async () => {
     const store = createTaskStateStore();
     const tool = createTodoTool(store);
