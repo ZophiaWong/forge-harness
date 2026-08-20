@@ -19,7 +19,8 @@ export const LIVE_PORTFOLIO_PROMPT = [
   "Track the work as one edit task with npm test as its verification command.",
   "Assign the edit task to the Leader before delegating.",
   "Use exactly one synchronous isolated edit child with maxToolRounds set to 8 for the implementation.",
-  "Then verify and integrate the result before finishing.",
+  "After the child returns, record evidence and submit its result using the returned childSessionId.",
+  "Only after the result is submitted, verify it with npm test; integrate only after verification passes.",
 ].join(" ");
 
 export interface LivePortfolioProcessResult {
@@ -606,7 +607,7 @@ export async function validateLivePortfolioEvidence(
     ["delegate"],
     starts[0]?.parentCallId,
   );
-  const verifyApproval = requireManualApproval(events, ["task_verify"]);
+  const verifyApproval = requireFinalTaskVerificationApproval(events);
   const integrateApproval = requireManualApproval(events, ["task_integrate"]);
   if (
     starts.length !== 1
@@ -1080,13 +1081,57 @@ function requireManualApproval(
 function requireManualApprovals(
   events: RecordedTraceEvent[],
   toolNames: string[],
-): Array<{
+): ManualApprovalExecution[] {
+  const approvals = collectManualApprovalExecutions(events, toolNames);
+  if (approvals.some((approval) => approval.result.status !== "completed")) {
+    throw new Error(`manual approval execution missing for ${toolNames.join("/")}`);
+  }
+  return approvals;
+}
+
+function requireFinalTaskVerificationApproval(
+  events: RecordedTraceEvent[],
+): { approvalIndex: number; callIndex: number; resultIndex: number } {
+  const approvals = collectManualApprovalExecutions(events, ["task_verify"])
+    .sort((left, right) => left.callIndex - right.callIndex);
+  const successful = approvals.filter((approval) => approval.result.status === "completed");
+  if (successful.length !== 1) {
+    throw new Error("manual approval evidence missing for final task verification");
+  }
+  const finalApproval = successful[0] as ManualApprovalExecution;
+  const finalIndex = approvals.indexOf(finalApproval);
+  const recoverableFailures = approvals.slice(0, finalIndex);
+  if (
+    finalIndex !== approvals.length - 1
+    || recoverableFailures.some((approval) => (
+      approval.result.status !== "failed"
+      || approval.result.taskGraph?.health !== "healthy"
+      || approval.result.taskGraph.error?.code !== "invalid_input"
+      || approval.resultIndex >= finalApproval.callIndex
+    ))
+  ) {
+    throw new Error("manual approval execution missing for final task verification");
+  }
+  return {
+    approvalIndex: finalApproval.approvalIndex,
+    callIndex: finalApproval.callIndex,
+    resultIndex: finalApproval.resultIndex,
+  };
+}
+
+interface ManualApprovalExecution {
   approvalIndex: number;
   callId: string;
   callIndex: number;
+  result: Extract<RecordedTraceEvent, { type: "tool_result" }>;
   resultIndex: number;
   toolName: string;
-}> {
+}
+
+function collectManualApprovalExecutions(
+  events: RecordedTraceEvent[],
+  toolNames: string[],
+): ManualApprovalExecution[] {
   const matchingEvents = events
     .map((event, index) => ({ event, index }))
     .filter((entry): entry is {
@@ -1157,7 +1202,6 @@ function requireManualApprovals(
       || call?.event.type !== "tool_call"
       || results.length !== 1
       || result?.event.type !== "tool_result"
-      || result.event.status !== "completed"
       || call.index >= decision.index
       || result.index <= approval.index
     ) {
@@ -1167,6 +1211,7 @@ function requireManualApprovals(
       approvalIndex: approval.index,
       callId,
       callIndex: call.index,
+      result: result.event,
       resultIndex: result.index,
       toolName,
     };

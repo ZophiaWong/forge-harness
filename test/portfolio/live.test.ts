@@ -403,7 +403,8 @@ describe("focused live portfolio walkthrough", () => {
       "Track the work as one edit task with npm test as its verification command.",
       "Assign the edit task to the Leader before delegating.",
       "Use exactly one synchronous isolated edit child with maxToolRounds set to 8 for the implementation.",
-      "Then verify and integrate the result before finishing.",
+      "After the child returns, record evidence and submit its result using the returned childSessionId.",
+      "Only after the result is submitted, verify it with npm test; integrate only after verification passes.",
     ].join(" "));
     expect(spawnCalls[0]?.args[4]).not.toMatch(/slugify|task_001|task_create|task_transition|task_verify|src\/retry\.mjs/i);
     await expect(fs.access(fixture)).rejects.toMatchObject({ code: "ENOENT" });
@@ -1202,7 +1203,194 @@ describe("focused live portfolio walkthrough", () => {
           : event
       )));
 
-      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/execution/i);
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/final task verification/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts a healthy invalid task verification before the final successful verification", async () => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      await insertApprovedTaskVerificationAttempt(fixture, {
+        callId: "verify-too-early",
+        status: "failed",
+        taskGraph: healthyInvalidInputProjection(),
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts multiple healthy invalid task verifications before the final successful verification", async () => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      await insertApprovedTaskVerificationAttempt(fixture, {
+        callId: "verify-too-early-1",
+        status: "failed",
+        taskGraph: healthyInvalidInputProjection(),
+      });
+      await insertApprovedTaskVerificationAttempt(fixture, {
+        callId: "verify-too-early-2",
+        status: "failed",
+        taskGraph: healthyInvalidInputProjection(),
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an invalid task verification after the final successful verification", async () => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      await insertApprovedTaskVerificationAttempt(fixture, {
+        callId: "verify-after-success",
+        placement: "after_final",
+        status: "failed",
+        taskGraph: healthyInvalidInputProjection(),
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/final task verification/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    {
+      label: "a failed result without TaskGraph evidence",
+      status: "failed" as const,
+      taskGraph: undefined,
+    },
+    {
+      label: "an unhealthy invalid_input",
+      status: "failed" as const,
+      taskGraph: {
+        ...healthyInvalidInputProjection(),
+        health: "degraded",
+      },
+    },
+    {
+      label: "a healthy projection without an error",
+      status: "failed" as const,
+      taskGraph: { health: "healthy" },
+    },
+    {
+      label: "a verifier command failure",
+      status: "failed" as const,
+      taskGraph: taskGraphFailureProjection("verification_failed"),
+    },
+    {
+      label: "source drift",
+      status: "failed" as const,
+      taskGraph: taskGraphFailureProjection("source_drift"),
+    },
+    {
+      label: "a blocked invalid_input",
+      status: "blocked" as const,
+      taskGraph: healthyInvalidInputProjection(),
+    },
+    {
+      label: "a timed-out invalid_input",
+      status: "timed_out" as const,
+      taskGraph: healthyInvalidInputProjection(),
+    },
+  ])("rejects $label before the final successful verification", async ({ status, taskGraph }) => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      await insertApprovedTaskVerificationAttempt(fixture, {
+        callId: "verify-not-recoverable",
+        status,
+        ...(taskGraph ? { taskGraph } : {}),
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/final task verification/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects two successful task verification executions", async () => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      await insertApprovedTaskVerificationAttempt(fixture, {
+        callId: "verify-success-duplicate",
+        status: "completed",
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/final task verification/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    {
+      label: "denied",
+      mutate: (event: Record<string, unknown>) => (
+        event.type === "approval_result" && event.toolName === "task_verify"
+          ? { ...event, approved: false }
+          : event
+      ),
+    },
+    {
+      label: "auto-allowed",
+      mutate: (event: Record<string, unknown>) => (
+        event.type === "permission_decision" && event.toolName === "task_verify"
+          ? { ...event, action: "allow" }
+          : event
+      ),
+    },
+  ])("rejects $label task verification evidence", async ({ mutate }) => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => events.map(mutate));
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/approval/i);
+    } finally {
+      await fs.rm(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects out-of-order task verification approval evidence", async () => {
+    const fixture = await createInitializedFixture();
+
+    try {
+      await writePassingRootEvidence(fixture);
+      const rootSessionDir = await findRootSessionDir(fixture);
+      await rewriteTrace(rootSessionDir, (events) => {
+        const decisionIndex = events.findIndex((event) => (
+          event.type === "permission_decision" && event.toolName === "task_verify"
+        ));
+        const approvalIndex = events.findIndex((event) => (
+          event.type === "approval_result" && event.toolName === "task_verify"
+        ));
+        const reordered = [...events];
+        [reordered[decisionIndex], reordered[approvalIndex]] = [
+          reordered[approvalIndex] as Record<string, unknown>,
+          reordered[decisionIndex] as Record<string, unknown>,
+        ];
+        return reordered;
+      });
+
+      await expect(validateLivePortfolioEvidence(fixture)).rejects.toThrow(/approval/i);
     } finally {
       await fs.rm(fixture, { force: true, recursive: true });
     }
@@ -2417,6 +2605,91 @@ async function recordSuccessfulToolResult(
     toolName,
     type: "tool_result",
   });
+}
+
+interface ApprovedTaskVerificationAttempt {
+  callId: string;
+  placement?: "after_final" | "before_final";
+  status: "blocked" | "completed" | "failed" | "timed_out";
+  taskGraph?: Record<string, unknown>;
+}
+
+async function insertApprovedTaskVerificationAttempt(
+  fixture: string,
+  attempt: ApprovedTaskVerificationAttempt,
+): Promise<void> {
+  const rootSessionDir = await findRootSessionDir(fixture);
+  await rewriteTrace(rootSessionDir, (events) => {
+    const finalVerificationIndex = events.findIndex((event) => (
+      event.type === (attempt.placement === "after_final" ? "tool_result" : "tool_call")
+      && event.toolName === "task_verify"
+    ));
+    if (finalVerificationIndex < 0) {
+      throw new Error("final task verification evidence not found");
+    }
+    const payloads: Array<Record<string, unknown>> = [
+      {
+        argumentsText: '{"command":"npm test","id":"task_001"}',
+        callId: attempt.callId,
+        round: 6,
+        toolName: "task_verify",
+        type: "tool_call",
+      },
+      {
+        action: "ask",
+        callId: attempt.callId,
+        reason: "manual approval required",
+        risk: "mutating",
+        round: 6,
+        toolName: "task_verify",
+        type: "permission_decision",
+      },
+      {
+        approved: true,
+        callId: attempt.callId,
+        round: 6,
+        toolName: "task_verify",
+        type: "approval_result",
+      },
+      {
+        callId: attempt.callId,
+        projectedOutput: `task_verify ${attempt.status}`,
+        round: 6,
+        status: attempt.status,
+        ...(attempt.taskGraph ? { taskGraph: attempt.taskGraph } : {}),
+        toolName: "task_verify",
+        type: "tool_result",
+      },
+    ];
+    const insertionIndex = attempt.placement === "after_final"
+      ? finalVerificationIndex + 1
+      : finalVerificationIndex;
+    return [
+      ...events.slice(0, insertionIndex),
+      ...payloads.map((payload) => traceEnvelope(events, payload)),
+      ...events.slice(insertionIndex),
+    ];
+  });
+}
+
+function healthyInvalidInputProjection(): Record<string, unknown> {
+  return {
+    error: {
+      code: "invalid_input",
+      message: 'task "task_001" has no submitted edit source',
+    },
+    health: "healthy",
+  };
+}
+
+function taskGraphFailureProjection(code: string): Record<string, unknown> {
+  return {
+    error: {
+      code,
+      message: `task verification failed: ${code}`,
+    },
+    health: "healthy",
+  };
 }
 
 async function expectFailedNpmTest(fixture: string): Promise<void> {
