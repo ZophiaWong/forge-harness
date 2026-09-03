@@ -15,6 +15,7 @@ import {
   type EvidenceRunRole,
 } from "./evidenceTypes.js";
 import {
+  assertPhysicalFile,
   hasExactKeys,
   isIsoDate,
   isNodeError,
@@ -42,9 +43,17 @@ export interface ReserveEvidenceRunOptions extends AssertEvidenceRunMayStartOpti
 
 interface RunSelection {
   captures: EvidenceCaptureResult[];
+  externalRetryTarget?: ExternalRetryTarget;
   intent: EvidenceIntent;
   reservations: EvidenceRunReservation[];
   retryTargetOrphaned: boolean;
+}
+
+interface ExternalRetryTarget {
+  capture: EvidenceCaptureResult;
+  intent: EvidenceIntent;
+  intentPath: string;
+  reservation: EvidenceRunReservation;
 }
 
 export async function assertEvidenceRunMayStart(
@@ -64,7 +73,7 @@ export async function reserveEvidenceRun(
   if (!isIsoDate(options.startedAt)) {
     throw new Error("evidence run reservation requires an ISO start date");
   }
-  const selection = await inspectRunSelection(options);
+  const selection = await inspectRunSelection(options, runId);
   const reservation: EvidenceRunReservation = {
     artifactType: "forge-evidence-run-reservation",
     intentId: selection.intent.intentId,
@@ -84,6 +93,13 @@ export async function reserveEvidenceRun(
     options.role,
     `${slot}.json`,
   );
+  if (selection.externalRetryTarget) {
+    await reserveExternalRetryClaim(
+      selection.externalRetryTarget,
+      selection.intent,
+      reservation,
+    );
+  }
   await writeJsonExclusive(
     reservationPath,
     reservation,
@@ -158,8 +174,32 @@ export async function assertEvidenceLedgerClosed(
   }
 }
 
+export async function readExternalRetryTargets(
+  intentPath: string,
+  captures: EvidenceCaptureResult[],
+): Promise<Array<{ capture: EvidenceCaptureResult; intent: EvidenceIntent }>> {
+  const resolvedIntentPath = path.resolve(intentPath);
+  const intent = await readEvidenceIntent(resolvedIntentPath);
+  const localRunIds = new Set(captures.map((capture) => capture.runId));
+  const targets: Array<{ capture: EvidenceCaptureResult; intent: EvidenceIntent }> = [];
+  for (const capture of captures) {
+    if (!capture.retryOf || localRunIds.has(capture.retryOf)) {
+      continue;
+    }
+    const target = await findExternalRetryTarget(resolvedIntentPath, intent, {
+      kind: capture.kind,
+      retryOf: capture.retryOf,
+      retryRunId: capture.runId,
+      role: capture.role,
+    });
+    targets.push({ capture: target.capture, intent: target.intent });
+  }
+  return targets.sort((left, right) => left.capture.runId.localeCompare(right.capture.runId));
+}
+
 async function inspectRunSelection(
   options: AssertEvidenceRunMayStartOptions,
+  retryRunId?: string,
 ): Promise<RunSelection> {
   const intentPath = path.resolve(options.intentPath);
   const intent = await readEvidenceIntent(intentPath);
@@ -198,10 +238,21 @@ async function inspectRunSelection(
     }
   }
 
+  let externalTarget: ExternalRetryTarget | undefined;
   let retryTargetOrphaned = false;
   if (options.retryOf) {
-    const previousReservation = reservationsById.get(options.retryOf);
-    const previousCapture = capturesById.get(options.retryOf);
+    let previousReservation = reservationsById.get(options.retryOf);
+    let previousCapture = capturesById.get(options.retryOf);
+    if (!previousReservation && !previousCapture) {
+      externalTarget = await findExternalRetryTarget(intentPath, intent, {
+        kind: options.kind,
+        retryOf: options.retryOf,
+        ...(retryRunId ? { retryRunId } : {}),
+        role: options.role,
+      });
+      previousReservation = externalTarget.reservation;
+      previousCapture = externalTarget.capture;
+    }
     if (!previousReservation
       || previousReservation.kind !== options.kind
       || previousReservation.role !== options.role) {
@@ -218,7 +269,7 @@ async function inspectRunSelection(
       || sameRoleIds.size > 1) {
       throw new Error(`evidence role ${options.role} already used its one allowed retry`);
     }
-    retryTargetOrphaned = previousCapture === undefined;
+    retryTargetOrphaned = !externalTarget && previousCapture === undefined;
   } else if (sameRoleIds.size > 0) {
     throw new Error(`evidence intent already has a recorded run reservation for role ${options.role}`);
   }
@@ -235,7 +286,229 @@ async function inspectRunSelection(
       throw new Error("candidate evidence requires exactly one promotion-eligible baseline");
     }
   }
-  return { captures, intent, reservations, retryTargetOrphaned };
+  return {
+    captures,
+    ...(externalTarget ? { externalRetryTarget: externalTarget } : {}),
+    intent,
+    reservations,
+    retryTargetOrphaned,
+  };
+}
+
+async function findExternalRetryTarget(
+  currentIntentPath: string,
+  currentIntent: EvidenceIntent,
+  options: Pick<AssertEvidenceRunMayStartOptions, "kind" | "role"> & {
+    retryOf: string;
+    retryRunId?: string;
+  },
+): Promise<ExternalRetryTarget> {
+  const evidenceRoot = path.join(currentIntent.collector.checkout, ".forge", "evidence");
+  const intentPaths = await discoverEvidenceIntentPaths(evidenceRoot);
+  const matches: ExternalRetryTarget[] = [];
+  let existingRetryCount = 0;
+
+  for (const candidateIntentPath of intentPaths) {
+    if (candidateIntentPath === currentIntentPath) {
+      continue;
+    }
+    const candidateIntent = await readEvidenceIntent(candidateIntentPath);
+    await assertIntentPathInsideCollector(candidateIntentPath, candidateIntent);
+    const candidateReservations = await readEvidenceRunReservations(candidateIntentPath);
+    existingRetryCount += candidateReservations.filter(
+      (reservation) => reservation.retryOf === options.retryOf,
+    ).length;
+    const reservation = candidateReservations.find(
+      (entry) => entry.runId === options.retryOf,
+    );
+    if (!reservation) {
+      continue;
+    }
+    const capturePath = path.join(
+      path.dirname(candidateIntentPath),
+      "runs",
+      options.retryOf,
+      "capture-result.json",
+    );
+    if (!await pathExists(capturePath)) {
+      throw new Error(`external evidence retry target ${options.retryOf} has no capture result`);
+    }
+    await assertPhysicalFile(capturePath, "external evidence retry capture");
+    const capture = parseEvidenceCaptureResult(JSON.parse(
+      await fs.readFile(capturePath, "utf8"),
+    ) as unknown);
+    if (capture.runId !== options.retryOf
+      || capture.intentId !== candidateIntent.intentId
+      || capture.kind !== reservation.kind
+      || capture.role !== reservation.role
+      || capture.retryOf !== reservation.retryOf) {
+      throw new Error(`external evidence retry target ${options.retryOf} is inconsistent`);
+    }
+    if (reservation.kind !== options.kind
+      || reservation.role !== options.role
+      || reservation.retryOf
+      || capture.captureStatus !== "failed"
+      || !capture.reasonCode
+      || !capture.infrastructureInvalid
+      || capture.promotionEligible) {
+      throw new Error("external evidence retries require an infrastructure-invalid failed capture");
+    }
+    assertCompatibleRetryIntent(currentIntent, candidateIntent);
+    matches.push({
+      capture,
+      intent: candidateIntent,
+      intentPath: candidateIntentPath,
+      reservation,
+    });
+  }
+
+  if (existingRetryCount > 0) {
+    throw new Error(`evidence retry target ${options.retryOf} already used its one allowed retry`);
+  }
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? `evidence retry target ${options.retryOf} is not a preregistered ${options.role} run`
+        : `evidence retry target ${options.retryOf} is ambiguous across evidence intents`,
+    );
+  }
+  const target = matches[0] as ExternalRetryTarget;
+  const claim = await readExternalRetryClaim(target.intentPath, options.retryOf);
+  if (claim && (!options.retryRunId
+    || claim.originalIntentId !== target.intent.intentId
+    || claim.originalRunId !== options.retryOf
+    || claim.retryIntentId !== currentIntent.intentId
+    || claim.retryRunId !== options.retryRunId
+    || claim.kind !== options.kind
+    || claim.role !== options.role)) {
+    throw new Error(`evidence retry target ${options.retryOf} already used its one allowed retry`);
+  }
+  return target;
+}
+
+async function discoverEvidenceIntentPaths(evidenceRoot: string): Promise<string[]> {
+  const intentPaths: string[] = [];
+  async function visit(directory: string): Promise<void> {
+    const intentPath = path.join(directory, "intent.json");
+    if (await pathExists(intentPath)) {
+      await assertPhysicalFile(intentPath, "discovered evidence intent");
+      intentPaths.push(intentPath);
+      return;
+    }
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        throw new Error("evidence intent discovery cannot traverse symlinks");
+      }
+      if (entry.isDirectory()) {
+        await visit(path.join(directory, entry.name));
+      }
+    }
+  }
+  await visit(evidenceRoot);
+  return intentPaths.sort((left, right) => left.localeCompare(right));
+}
+
+interface ExternalRetryClaim {
+  artifactType: "forge-evidence-external-retry-claim";
+  claimedAt: string;
+  kind: EvidenceRunKind;
+  originalIntentId: string;
+  originalRunId: string;
+  retryIntentId: string;
+  retryRunId: string;
+  role: EvidenceRunRole;
+  schemaVersion: typeof EVIDENCE_SCHEMA_VERSION;
+}
+
+async function reserveExternalRetryClaim(
+  target: ExternalRetryTarget,
+  retryIntent: EvidenceIntent,
+  retryReservation: EvidenceRunReservation,
+): Promise<void> {
+  const claim: ExternalRetryClaim = {
+    artifactType: "forge-evidence-external-retry-claim",
+    claimedAt: retryReservation.startedAt,
+    kind: retryReservation.kind,
+    originalIntentId: target.intent.intentId,
+    originalRunId: target.capture.runId,
+    retryIntentId: retryIntent.intentId,
+    retryRunId: retryReservation.runId,
+    role: retryReservation.role,
+    schemaVersion: EVIDENCE_SCHEMA_VERSION,
+  };
+  await writeJsonExclusive(
+    externalRetryClaimPath(target.intentPath, target.capture.runId),
+    claim,
+    `evidence retry target ${target.capture.runId} already used its one allowed retry`,
+  );
+}
+
+async function readExternalRetryClaim(
+  originalIntentPath: string,
+  originalRunId: string,
+): Promise<ExternalRetryClaim | undefined> {
+  const claimPath = externalRetryClaimPath(originalIntentPath, originalRunId);
+  if (!await pathExists(claimPath)) {
+    return undefined;
+  }
+  await assertPhysicalFile(claimPath, "external evidence retry claim");
+  const value = JSON.parse(await fs.readFile(claimPath, "utf8")) as unknown;
+  if (!isRecord(value)
+    || !hasExactKeys(value, [
+      "artifactType",
+      "claimedAt",
+      "kind",
+      "originalIntentId",
+      "originalRunId",
+      "retryIntentId",
+      "retryRunId",
+      "role",
+      "schemaVersion",
+    ])
+    || value.artifactType !== "forge-evidence-external-retry-claim"
+    || value.schemaVersion !== EVIDENCE_SCHEMA_VERSION
+    || (value.kind !== "eval" && value.kind !== "live")
+    || !["baseline", "candidate", "live", "observation"].includes(value.role as string)
+    || typeof value.originalIntentId !== "string"
+    || typeof value.originalRunId !== "string"
+    || typeof value.retryIntentId !== "string"
+    || typeof value.retryRunId !== "string"
+    || !isIsoDate(value.claimedAt)) {
+    throw new Error("invalid external evidence retry claim");
+  }
+  requireSafeIdentifier(value.originalIntentId, "original retry intent id");
+  requireSafeIdentifier(value.originalRunId, "original retry run id");
+  requireSafeIdentifier(value.retryIntentId, "retry intent id");
+  requireSafeIdentifier(value.retryRunId, "retry run id");
+  if ((value.kind === "live") !== (value.role === "live")) {
+    throw new Error("invalid external evidence retry claim role");
+  }
+  return value as unknown as ExternalRetryClaim;
+}
+
+function externalRetryClaimPath(originalIntentPath: string, originalRunId: string): string {
+  return path.join(
+    path.dirname(originalIntentPath),
+    "retry-claims",
+    `${requireSafeIdentifier(originalRunId, "original retry run id")}.json`,
+  );
+}
+
+function assertCompatibleRetryIntent(current: EvidenceIntent, previous: EvidenceIntent): void {
+  if (current.mode !== previous.mode
+    || current.subject.ref !== previous.subject.ref
+    || current.subject.commit !== previous.subject.commit
+    || current.subject.tree !== previous.subject.tree
+    || current.environment.endpointHash !== previous.environment.endpointHash
+    || current.environment.model !== previous.environment.model
+    || current.environment.providerId !== previous.environment.providerId
+    || current.selectionPolicy.evalAttemptsPerBatch !== previous.selectionPolicy.evalAttemptsPerBatch
+    || current.selectionPolicy.evalBatchLimit !== previous.selectionPolicy.evalBatchLimit
+    || current.selectionPolicy.keepEveryRun !== previous.selectionPolicy.keepEveryRun
+    || current.selectionPolicy.retry !== previous.selectionPolicy.retry
+    || current.selectionPolicy.selection !== previous.selectionPolicy.selection) {
+    throw new Error("external evidence retry target belongs to an incompatible intent");
+  }
 }
 
 async function readEvidenceRunReservations(intentPath: string): Promise<EvidenceRunReservation[]> {
@@ -260,12 +533,7 @@ async function readEvidenceRunReservations(intentPath: string): Promise<Evidence
       if (!await pathExists(reservationPath)) {
         continue;
       }
-      const stats = await fs.lstat(reservationPath);
-      if (!stats.isFile()
-        || stats.isSymbolicLink()
-        || await fs.realpath(reservationPath) !== reservationPath) {
-        throw new Error("evidence run reservation must be a physical file");
-      }
+      await assertPhysicalFile(reservationPath, "evidence run reservation");
       const reservation = parseEvidenceRunReservation(JSON.parse(
         await fs.readFile(reservationPath, "utf8"),
       ) as unknown);

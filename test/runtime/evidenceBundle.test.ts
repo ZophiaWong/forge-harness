@@ -551,6 +551,186 @@ describe("release evidence bundle", () => {
     })).resolves.toMatchObject({ retryOf: "eval-infra-first" });
   });
 
+  it("links an infrastructure retry across compatible intents after the collector advances", async () => {
+    const subject = await createTaggedRepository();
+    const collector = await createTaggedRepository();
+    const firstIntent = await prepareEvidenceIntent({
+      collectorRoot: collector,
+      endpoint: "https://gateway.example/v1",
+      mode: "observation",
+      model: "gpt-5.4-mini",
+      now: () => new Date("2026-08-28T01:00:00.000Z"),
+      providerId: "my-gateway",
+      randomSuffix: () => "firstint",
+      ref: "v1.0.0",
+      subjectRoot: subject,
+    });
+    const firstIntentPath = await writeEvidenceIntent(firstIntent, undefined, collector);
+    const failedRun = evidenceRun("live-prior-collector-failure");
+    await reserveRun(firstIntentPath, failedRun);
+    await recordEvidenceCaptureFailure({
+      intent: firstIntent,
+      outputRoot: path.join(path.dirname(firstIntentPath), "runs"),
+      reasonCode: "live_capture_failed",
+      run: failedRun,
+    });
+
+    await fs.writeFile(path.join(collector, "collector-fix.txt"), "fixed\n", "utf8");
+    await git(collector, ["add", "collector-fix.txt"]);
+    await git(collector, ["commit", "-qm", "fix collector"]);
+    const secondIntent = await prepareEvidenceIntent({
+      collectorRoot: collector,
+      endpoint: "https://gateway.example/v1",
+      mode: "observation",
+      model: "gpt-5.4-mini",
+      now: () => new Date("2026-08-28T02:00:00.000Z"),
+      providerId: "my-gateway",
+      randomSuffix: () => "retryint",
+      ref: "v1.0.0",
+      subjectRoot: subject,
+    });
+    const secondIntentPath = await writeEvidenceIntent(secondIntent, undefined, collector);
+
+    await expect(assertEvidenceRunMayStart({
+      intentPath: secondIntentPath,
+      kind: "live",
+      retryOf: failedRun.runId,
+      role: "live",
+    })).resolves.toMatchObject({ retryOf: failedRun.runId });
+
+    const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-cross-intent-retry-"));
+    tempRoots.push(rawRoot);
+    await fs.writeFile(path.join(rawRoot, "evidence.json"), "{}\n", "utf8");
+    const sourceAtStart = await beginEvidenceCapture(secondIntent);
+    const retryRun = {
+      ...evidenceRun("live-new-collector-retry"),
+      retryOf: failedRun.runId,
+    };
+    await reserveRun(secondIntentPath, retryRun);
+    await sealRunEvidence({
+      intent: secondIntent,
+      outputRoot: path.join(path.dirname(secondIntentPath), "runs"),
+      rawSources: [{ prefix: "live", root: rawRoot }],
+      run: retryRun,
+      sourceAtStart,
+    });
+    const observationRun = {
+      baselineEligible: false,
+      behavior: {
+        attemptCount: 13,
+        canonical: true,
+        hardViolation: false,
+        infrastructureInvalid: false,
+        valid: true,
+        verdict: "NO_BASELINE",
+      },
+      completedAt: "2026-08-28T03:00:00.000Z",
+      infrastructureInvalid: false,
+      kind: "eval" as const,
+      limitations: [],
+      promotionEligible: true,
+      role: "observation" as const,
+      runId: "eval-new-collector-observation",
+      startedAt: "2026-08-28T02:30:00.000Z",
+    };
+    await reserveRun(secondIntentPath, observationRun);
+    await sealRunEvidence({
+      intent: secondIntent,
+      outputRoot: path.join(path.dirname(secondIntentPath), "runs"),
+      rawSources: [{ prefix: "eval", root: rawRoot }],
+      run: observationRun,
+      sourceAtStart,
+    });
+
+    const promoted = await promoteEvidenceIntent({ intentPath: secondIntentPath });
+    const release = JSON.parse(await fs.readFile(promoted.releaseManifestPath, "utf8")) as {
+      collector: { commit: string };
+      failedCaptures: Array<Record<string, unknown>>;
+      runs: Array<{ retryOf?: string; runId: string }>;
+    };
+    expect(release.collector.commit).toBe(secondIntent.collector.commit);
+    expect(release.failedCaptures).toEqual([expect.objectContaining({
+      behavioralVerdict: "PASS:verified_session_evidence",
+      collector: {
+        clean: true,
+        commit: firstIntent.collector.commit,
+        tree: firstIntent.collector.tree,
+      },
+      infrastructureInvalid: true,
+      intentId: firstIntent.intentId,
+      reasonCode: "live_capture_failed",
+      role: "live",
+      runId: failedRun.runId,
+    })]);
+    expect(release.runs).toContainEqual(expect.objectContaining({
+      retryOf: failedRun.runId,
+      runId: retryRun.runId,
+    }));
+  });
+
+  it("atomically admits only one cross-intent retry for an original run", async () => {
+    const subject = await createTaggedRepository();
+    const collector = await createTaggedRepository();
+    const originalIntent = await prepareEvidenceIntent({
+      collectorRoot: collector,
+      endpoint: "https://gateway.example/v1",
+      mode: "observation",
+      model: "gpt-5.4-mini",
+      now: () => new Date("2026-08-28T01:00:00.000Z"),
+      providerId: "my-gateway",
+      randomSuffix: () => "original",
+      ref: "v1.0.0",
+      subjectRoot: subject,
+    });
+    const originalIntentPath = await writeEvidenceIntent(originalIntent, undefined, collector);
+    const originalRun = evidenceRun("live-global-retry-target");
+    await reserveRun(originalIntentPath, originalRun);
+    await recordEvidenceCaptureFailure({
+      intent: originalIntent,
+      outputRoot: path.join(path.dirname(originalIntentPath), "runs"),
+      reasonCode: "live_capture_failed",
+      run: originalRun,
+    });
+
+    await fs.writeFile(path.join(collector, "collector-fix.txt"), "fixed\n", "utf8");
+    await git(collector, ["add", "collector-fix.txt"]);
+    await git(collector, ["commit", "-qm", "fix collector"]);
+    const retryIntents = await Promise.all([
+      ["2026-08-28T02:00:00.000Z", "retryone"],
+      ["2026-08-28T02:01:00.000Z", "retrytwo"],
+    ].map(async ([createdAt, suffix]) => {
+      const intent = await prepareEvidenceIntent({
+        collectorRoot: collector,
+        endpoint: "https://gateway.example/v1",
+        mode: "observation",
+        model: "gpt-5.4-mini",
+        now: () => new Date(createdAt as string),
+        providerId: "my-gateway",
+        randomSuffix: () => suffix as string,
+        ref: "v1.0.0",
+        subjectRoot: subject,
+      });
+      return {
+        intent,
+        intentPath: await writeEvidenceIntent(intent, undefined, collector),
+      };
+    }));
+
+    const reservations = await Promise.allSettled(retryIntents.map(
+      ({ intentPath }, index) => reserveEvidenceRun({
+        intentPath,
+        kind: "live",
+        retryOf: originalRun.runId,
+        role: "live",
+        runId: `live-concurrent-retry-${index + 1}`,
+        startedAt: `2026-08-28T02:1${index}:00.000Z`,
+      }),
+    ));
+
+    expect(reservations.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(reservations.filter((result) => result.status === "rejected")).toHaveLength(1);
+  });
+
   it("turns an orphaned preregistration into a linked failed capture before the only retry", async () => {
     const repository = await createTaggedRepository();
     const intent = await prepareIntent(repository);
