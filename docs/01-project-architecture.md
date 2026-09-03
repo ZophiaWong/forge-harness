@@ -58,15 +58,15 @@ sequenceDiagram
 
 | Module | 负责什么 | 主要章节 |
 | --- | --- | --- |
-| `src/cli/` | 接收任务、解析参数、把请求交给 harness；启动 Leader 管理的 teammate process。 | `c01`, `c17b` |
+| `src/cli/` | 接收任务、解析参数、把请求交给 harness；启动 Leader 管理的 teammate process；提供 release evidence 的统一 operator CLI。 | `c01`, `c17b`, evergreen Runtime hardening |
 | `src/core/` | turn runner、agent loop control、LLM call path。 | `c01`, `c08`, `c17c` |
 | `src/tools/` | tool definition、dispatch、adapter、tool result。 | `c02`, `c04`, `c16a`, `c16b`, `c17a` 到 `c17c` |
 | `src/governance/` | risk classification、permission decision、approval。 | `c03`, `c14`, `c16a`, `c16b`, `c17c` |
 | `src/context/` | `Observation`、`ContextProjection`、prompt assembly、compaction、mailbox projection。 | `c05`, `c11`, `c12`, `c16b`, `c17b`, `c17c` |
-| `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、replay。 | `c06`, `c07`, `c08`, `c13`, `c14`, `c16b`, `c17a` 到 `c18` |
+| `src/runtime/` | `Session`、`TraceEvent`、`RuntimeState`、`Verification`、workspace binding、release evidence bundle 与未来 replay。 | `c06`, `c07`, `c08`, `c13`, `c14`, `c16b`, `c17a` 到 `c18`, evergreen Runtime hardening |
 | `src/domain/` | shared runtime terms and protocols。 | `c17a` 到 `c18` 随需要补齐 |
 | `src/extensions/` | hooks、skills、background runs、subagents、MCP、plugin loading、team runtime 和 coordination protocol。 | `c09` 到 `c17c` |
-| `src/eval/` | 固定 pre-deployment scenarios、确定性 grader、experiment identity、baseline、regression report 与独立 CLI。它复用 production bootstrap，但不属于新教程章节。 | evergreen Runtime hardening |
+| `src/eval/` | 固定 pre-deployment scenarios、确定性 grader、experiment identity、baseline、regression report、独立 CLI 与 release collector adapter。它复用 production bootstrap，但不属于新教程章节。 | evergreen Runtime hardening |
 
 不要提前建一个 `src/state/` god module。状态应该以 domain data 和 runtime projection 的形式存在，由使用它的模块持有。
 
@@ -95,7 +95,7 @@ flowchart TB
 | `L1 Loop & Execution` | 模型输出怎样变成真实动作？ | agent loop、model call、tool call、tool result、tool dispatch、shell/file tools、MCP adapter、explicit integration。 | `c01`, `c02`, `c04`, `c16a`, `c17c` |
 | `L2 Governance & Action Boundary` | 哪些动作能执行，执行前要过什么边界？ | risk classification、permission decision、approval、deny rules、safe executor、reviewable file editing、worktree boundary、plugin session trust、Leader review gate。 | `c03`, `c04`, `c14`, `c16a`, `c16b`, `c17c` |
 | `L3 Context & Knowledge` | 模型下一轮应该看到什么？ | message history、`Observation`、`ContextProjection`、system prompt assembly、skills、memory、context compaction、summary handoff、plugin skill namespace、mailbox message。 | `c05`, `c11`, `c12`, `c15a`, `c15b`, `c16b`, `c17b`, `c17c` |
-| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence、plugin activation snapshot、task graph、team lifecycle、completion evidence、attempt reconciliation、event replay。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c16a`, `c16b`, `c17a`, `c17b`, `c17c`, `c18` |
+| `L4 State, Evidence & Reliability` | 运行中发生了什么，完成前怎样证明？ | `Session`、`TraceEvent`、`RuntimeState`、checks、failure summary、recovery loop、child session evidence、plugin activation snapshot、task graph、team lifecycle、completion evidence、release evidence bundle、attempt reconciliation、event replay。 | `c06`, `c07`, `c08`, `c09`, `c10`, `c12`, `c13`, `c14`, `c15a`, `c15b`, `c16a`, `c16b`, `c17a`, `c17b`, `c17c`, `c18`, evergreen Runtime hardening |
 | `L5 Coordination & Scale` | 任务变长、变多、变并行后怎么组织？ | hooks、todo/task state、background tasks、cron、child sessions、async handoff、plugin loading、shared task graph、long-lived teammates、mailbox、coordination protocol、recovery attempts。 | `c09`, `c10`, `c13`, `c14`, `c15a`, `c15b`, `c16b`, `c17a`, `c17b`, `c17c`, `c18` |
 
 ## Layer 重叠怎么读

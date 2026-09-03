@@ -4,11 +4,73 @@ import path from "node:path";
 import type { RecordedTraceEvent } from "../runtime/trace.js";
 import { parseRecordedTraceEvent } from "../runtime/traceSchema.js";
 import type { EvalTraceSession } from "./scenario.js";
+import type { EvalSuiteSummary } from "./types.js";
 
 export interface CollectEvalTraceSessionsOptions {
   attemptRoot: string;
   emptyRootSessionId?: string;
   rootTracePath: string;
+}
+
+export async function assertEvalEvidenceRefsClosed(
+  runRoot: string,
+  summary: EvalSuiteSummary,
+): Promise<string[]> {
+  const resolvedRoot = path.resolve(runRoot);
+  const rootStats = await fs.lstat(resolvedRoot);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error("eval evidence run root must be a real directory");
+  }
+  if (await fs.realpath(resolvedRoot) !== resolvedRoot) {
+    throw new Error("eval evidence run root cannot resolve through a symlink");
+  }
+
+  const references = new Set<string>();
+  for (const attempt of summary.attempts) {
+    if (attempt.evidenceRefs.length === 0) {
+      throw new Error(`eval attempt ${attempt.attemptId} has no raw evidence references`);
+    }
+    for (const reference of attempt.evidenceRefs) {
+      references.add(requireSafeEvalEvidenceRef(reference));
+    }
+    for (const assertion of attempt.assertions) {
+      if (assertion.evidenceRefs.length === 0) {
+        throw new Error(`eval assertion ${attempt.attemptId}/${assertion.id} has no raw evidence references`);
+      }
+      for (const reference of assertion.evidenceRefs) {
+        references.add(requireSafeEvalEvidenceRef(reference));
+      }
+    }
+  }
+
+  const ordered = [...references].sort((left, right) => left.localeCompare(right));
+  for (const reference of ordered) {
+    const candidate = path.resolve(resolvedRoot, ...reference.split("/"));
+    const relative = path.relative(resolvedRoot, candidate);
+    if (!isContainedRelativePath(relative)) {
+      throw new Error(`eval evidence reference ${reference} escaped the run root`);
+    }
+    let stats;
+    try {
+      stats = await fs.lstat(candidate);
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        throw new Error(`eval evidence reference ${reference} does not exist`, { cause: error });
+      }
+      throw error;
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`eval evidence reference ${reference} cannot be a symlink`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`eval evidence reference ${reference} must be a regular file`);
+    }
+    const realCandidate = await fs.realpath(candidate);
+    if (realCandidate !== candidate || !isContainedRelativePath(path.relative(resolvedRoot, realCandidate))) {
+      throw new Error(`eval evidence reference ${reference} cannot resolve through a symlink`);
+    }
+  }
+  return ordered;
 }
 
 export async function readEvalTrace(tracePath: string): Promise<RecordedTraceEvent[]> {
@@ -165,4 +227,19 @@ function isContainedRelativePath(relative: string): boolean {
     && relative !== ".."
     && !relative.startsWith(`..${path.sep}`)
     && !path.isAbsolute(relative);
+}
+
+function requireSafeEvalEvidenceRef(reference: string): string {
+  if (!reference
+    || reference.includes("\\")
+    || path.posix.isAbsolute(reference)
+    || path.win32.isAbsolute(reference)
+    || reference.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error(`eval evidence reference ${JSON.stringify(reference)} must be a safe relative path`);
+  }
+  return reference;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }

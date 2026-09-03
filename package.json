@@ -1,6 +1,6 @@
 {
   "name": "forge-harness",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "A TypeScript coding-agent Runtime for governed execution, evidence, isolation, and coordination.",
   "type": "module",
@@ -16,6 +16,7 @@
     "demo:portfolio": "npm run --silent build && node dist/portfolio/cli.js",
     "demo:portfolio:live": "npm run --silent build && node dist/portfolio/liveCli.js",
     "docs:check": "node scripts/check-doc-links.mjs",
+    "evidence": "npm run --silent build && node dist/cli/evidence.js",
     "eval": "npm run --silent build && node dist/eval/cli.js",
     "smoke:c17c-capstone": "vitest run test/smoke/c17cCapstone.test.ts",
     "smoke:c17c-child": "vitest run test/smoke/c17cChildIntegration.test.ts",

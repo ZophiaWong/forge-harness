@@ -6,13 +6,13 @@
 
 Forge Harness is a from-scratch TypeScript coding-agent Runtime. The project starts with a runnable model-tool loop and grows through independently runnable checkpoints that add governed tool execution, context management, durable execution evidence, trusted extensions, Worktree-isolated delegation, and multi-agent coordination.
 
-The current implementation reaches `c17c Coordination / Completion Protocol`. Source, tests, deterministic smoke runs, curated live evidence, and offline eval reports document the behavior boundaries. The Chinese tutorial explains how the Runtime grew from one checkpoint to the next.
+The current implementation reaches `c17c Coordination / Completion Protocol`. Source, tests, deterministic smoke runs, curated historical snapshots, and offline eval reports document the behavior boundaries. The Chinese tutorial explains how the Runtime grew from one checkpoint to the next.
 
 The repository provides source code for local inspection and execution, not a hosted service.
 
 ## One observed completion
 
-The current [c17c live snapshot](docs/assets/evidence/c17c-team-completion.json) records one model-driven run:
+The historical [c17c live snapshot](docs/assets/evidence/c17c-team-completion.json) records one model-driven run captured at source commit `75714f2`:
 
 ```text
 pre-approval writes  blocked
@@ -131,6 +131,20 @@ npm run smoke:c17c-child
 
 The capstone smoke combines TaskGraph ownership, review, verification, Git integration, and CompletionGate. The child smoke focuses on one-shot edit-source integration. Neither proves future model adherence or external service availability.
 
+## Release evidence
+
+Release evidence has a separate lifecycle from an ordinary demo or eval:
+
+```text
+execute -> validate -> preserve raw bundle -> promote evidence
+```
+
+The unified `npm run evidence` CLI preregisters an exact clean tag/commit/tree and collector commit, captures Live or 13-attempt Eval raw material, writes per-file and archive SHA-256 values, keeps behavioral verdict separate from capture status, and verifies promoted public/private assets. A capture failure never turns a behavioral failure into a pass, and an unsealed run cannot support a release claim.
+
+Public manifests and sanitized reports are intended for the matching GitHub Release. Raw archives and private inventories are intended for the maintainer-only `ZophiaWong/forge-harness-evidence` companion repository. Existing curated snapshots are useful historical observations, but they are not a substitute for a fresh release manifest linked to raw attempts or Sessions.
+
+See the Chinese [Release evidence runbook](docs/release-evidence.md) for the frozen `v1.0.0` backfill, the `v1.0.1` baseline/candidate gate, infrastructure-only retries, upload approval boundaries, and download-after-upload verification. The repository does not claim that a version has completed this process until its Release assets can pass `npm run evidence -- verify`.
+
 ## Offline behavioral eval
 
 The pre-deployment eval runs 13 model-driven attempts against fixed Forge scenarios, then compares deterministic grader counts with a versioned baseline:
@@ -141,7 +155,7 @@ npm run eval -- run --model <model>
 
 Here “offline” means outside real user traffic, not disconnected from the model API. Token and latency telemetry is reported but never changes the behavioral verdict. Version 1 has no LLM judge, price table, model leaderboard, automatic pull-request trigger, or nightly model run.
 
-The linked [regression report](docs/assets/evidence/offline-eval-regression-report.md) records the first independent valid and comparable batch for the current hardened identity. Its `REGRESSED` verdict is kept as-is: async child handoff improved, while one compaction ordering assertion declined. The promoted baseline is committed at [`eval/baselines/`](eval/baselines/), and the candidate was not resampled for a preferred verdict.
+The linked historical [regression report](docs/assets/evidence/offline-eval-regression-report.md) records the first independent valid and comparable batch for its then-current hardened identity at source commit `6f4630a3c266433a1234a08b4b738c81516dcf99`. Its `REGRESSED` verdict is kept as-is: async child handoff improved, while one compaction ordering assertion declined. The matching historical baseline is committed at [`eval/baselines/`](eval/baselines/), and the candidate was not resampled for a preferred verdict. Changes to the Eval contract make later runs a new identity rather than silently reusing that baseline.
 
 The suite, baseline promotion rules, exit codes, manual GitHub workflow, and cleanup boundary are documented in [Offline eval and regression reports](docs/offline-eval.md). The eval is evergreen Runtime hardening and does not consume tutorial chapter `c18`.
 
@@ -161,6 +175,7 @@ Each runbook separates a repeatable deterministic check from an optional model-d
 - [Engineering case study](docs/engineering-case-study.md): the failures that forced each Runtime mechanism and the alternatives not taken.
 - [Evidence Index](docs/evidence-index.md): claim-to-source, test, smoke, and live-evidence mapping.
 - [Offline eval](docs/offline-eval.md): canonical scenarios, comparability, baseline promotion, reports, and limitations.
+- [Release evidence runbook](docs/release-evidence.md): fresh source binding, raw bundle sealing, promotion, private storage, and release verification.
 - [Design Studies](docs/design-studies/README.md): context management, Tool Runtime, Session persistence, and multi-agent coordination.
 - [Deep Agent Runtime Research](https://github.com/ZophiaWong/forge-harness/tree/research/agent-runtime-design-studies/docs/design-studies): separate-branch source studies comparing Forge, Pi, and a provenance-limited Claude local snapshot across loop completion, tool boundaries, context, Sessions, coordination, and extension trust.
 - [Tutorial roadmap](docs/02-tutorial-roadmap.md): the two-part Chinese learning path.

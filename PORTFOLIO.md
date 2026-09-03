@@ -28,7 +28,7 @@ These stories are selective entry points, not a complete capability list.
 
 The c17c protocol connects the layers around one edit task. A teammate first submits a plan, the Leader approves it, and the edit happens in an isolated Worktree. The source is fingerprinted, verified with its registered command, committed, and integrated with a Git receipt. `CompletionGate` reports the missing obligation when a candidate arrives early and allows root verification only after the team state is complete.
 
-The public live snapshot records one observed run. It does not guarantee future model behavior. The [c17c evidence](docs/assets/evidence/c17c-team-completion.json) and [architecture overview](docs/architecture-overview.md) contain the detailed state transitions.
+The public live snapshot records one historical observed run. It does not guarantee future model behavior and is not fresh release evidence for the current `HEAD`. The [c17c evidence](docs/assets/evidence/c17c-team-completion.json) and [architecture overview](docs/architecture-overview.md) contain the detailed state transitions.
 
 ## Interview demo modes
 
@@ -68,5 +68,7 @@ The launcher starts a ten-minute timer before fixture allocation and uses one co
 ## Evidence and boundaries
 
 The [Evidence Index](docs/evidence-index.md) maps each claim to source, focused tests, deterministic smoke runs, optional live evidence, and a stated limitation. The [engineering case study](docs/engineering-case-study.md) explains the failures and design choices in sequence.
+
+Fresh release claims use a separate preregistered and hash-verified raw-bundle workflow. See the [Release evidence runbook](docs/release-evidence.md). A version is not described as having closed that loop until its downloaded public/private Release assets pass `npm run evidence -- verify`.
 
 The c17c Runtime does not claim OS-level sandboxing, crash-safe resume or reconciliation, distributed scheduling, durable cross-run queues, deterministic model reasoning, statistical eval significance, or a hosted Web UI. Approved extensions still run in-process with host permissions.

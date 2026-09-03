@@ -61,7 +61,7 @@ The exact model rounds may vary. The Runtime invariants must not:
 
 ## Limits
 
-The committed live snapshot was captured from the current c17c baseline. Its `limitations` field records the model's prompt-level deviations and the Runtime boundaries that contained them: pre-approval writes were blocked, and a premature completion candidate did not reach root verification. The snapshot does not guarantee future tool selection, message sequence, or round count.
+The committed live snapshot was captured from the c17c source at commit `75714f2`. Its `limitations` field records the model's prompt-level deviations and the Runtime boundaries that contained them: pre-approval writes were blocked, and a premature completion candidate did not reach root verification. The snapshot does not guarantee future tool selection, message sequence, or round count, and it is not fresh release evidence for a later `HEAD`.
 
 The protocol is scoped to one root run and has no crash reconciliation, cross-run resume, distributed lock service, or automatic recovery after a successful Git side effect whose TaskGraph receipt was not persisted.
 

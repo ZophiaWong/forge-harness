@@ -4,7 +4,7 @@
 
 Forge Harness 是一个从零构建的 TypeScript coding-agent Runtime。项目从可运行的 model-tool loop 起步，通过可独立运行的 checkpoint 逐步加入受治理的工具执行、上下文管理、持久化运行证据、可信扩展、Worktree 隔离委派与多 Agent 协作。
 
-教程路径保留了 22 个可运行 checkpoint。当前实现推进到 `c17c Coordination / Completion Protocol`。源码、测试、deterministic smoke、经过整理的 live evidence 和 offline eval report 共同说明各项机制的行为边界。
+教程路径保留了 22 个可运行 checkpoint。当前实现推进到 `c17c Coordination / Completion Protocol`。源码、测试、deterministic smoke、历史 curated snapshot 和 offline eval report 共同说明各项机制的行为边界。
 
 ## Runtime 负责哪些机制
 
@@ -28,7 +28,7 @@ Forge Harness 是一个从零构建的 TypeScript coding-agent Runtime。项目�
 
 c17c 把多个层次围绕一个 edit task 串起来。teammate 先提交 plan，Leader 审批后，修改才会在独立 Worktree 中发生。Runtime 随后记录 source fingerprint，使用注册的 verification command 检查 source，创建 commit，并通过 Git receipt 完成集成。Candidate 提前到达时，`CompletionGate` 会返回缺失的 obligation；只有 team state 完整后，root verification 才会运行。
 
-公开 live snapshot 记录了一次实际运行，不代表模型未来一定重复相同的行为。详细状态转换见 [c17c evidence](docs/assets/evidence/c17c-team-completion.json) 和 [architecture overview](docs/architecture-overview.md)。
+公开 live snapshot 记录了一次历史实际运行，不代表模型未来一定重复相同的行为，也不是当前 `HEAD` 的 fresh release evidence。详细状态转换见 [c17c evidence](docs/assets/evidence/c17c-team-completion.json) 和 [architecture overview](docs/architecture-overview.md)。
 
 ## 面试演示模式
 
@@ -68,5 +68,7 @@ Launcher 在分配 fixture 前启动 10 分钟 timer。fixture 初始化、初�
 ## 证据与边界
 
 [Evidence Index](docs/evidence-index.md) 把每项主张对应到源码、focused tests、deterministic smoke、可选 live evidence 和明确限制。[Engineering case study](docs/engineering-case-study.md) 按演进顺序说明问题和设计取舍。
+
+Fresh release claim 采用另一条经过 preregistration、raw bundle 封存和 SHA-256 复验的流程，详见 [Release evidence runbook](docs/release-evidence.md)。只有重新下载的 public/private Release assets 能通过 `npm run evidence -- verify`，对应版本才算完成闭环。
 
 当前 c17c Runtime 不声称具备 OS-level sandbox、crash-safe resume 或 reconciliation、分布式调度、跨 run durable queue、deterministic model reasoning、统计显著性评估或 hosted Web UI。已批准的 extension 仍在当前进程和 host permissions 下运行。

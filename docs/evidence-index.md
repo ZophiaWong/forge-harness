@@ -8,6 +8,19 @@ claim -> implementation -> deterministic validation -> optional live run
 
 The implementation defines the boundary. Tests and smoke runs exercise it without relying on model judgment. Live snapshots show that the integrated CLI reached the same invariants in one model-driven run; they do not promise that every future model run will take the same path.
 
+Release-grade freshness adds another chain:
+
+```text
+clean immutable subject + clean collector
+  -> first preregistered execution
+  -> domain validation
+  -> raw Session/attempt bundle + private inventory
+  -> sanitized public manifest/report
+  -> SHA-256 round-trip verification
+```
+
+The public implementation seam is [`evidenceBundle.ts`](../src/runtime/evidenceBundle.ts); its internal Runtime modules own intent, run ledger, capture, schema safety, and promotion. Live and Eval adapters are in [`liveEvidence.ts`](../src/portfolio/liveEvidence.ts) and [`releaseEvidence.ts`](../src/eval/releaseEvidence.ts). The [Release evidence runbook](release-evidence.md) defines the `v1.0.0` backfill and `v1.0.1` release flow. A curated file committed under `docs/assets/evidence/` is not, by itself, fresh release evidence: the matching Release must expose a verifiable public manifest whose archive hashes resolve to maintainer-preserved raw bundles.
+
 ## Recruiter walkthrough
 
 | Command | Evidence produced | Does not prove |
@@ -26,8 +39,13 @@ The [bilingual portfolio](../PORTFOLIO.md) is a navigation layer. The [cue cards
 | `npm run smoke:c17c-capstone` | A deterministic temporary-Git scenario reaches integrated edit evidence and a ready CompletionGate. | Plugin startup, interactive approval, or model adherence to the live protocol. |
 | `npm run smoke:c17c-child` | A deterministic one-shot edit-child source can be verified and integrated. | Async scheduling or a live model handoff. |
 | `npm run eval -- run --model <model>` | A fixed 13-attempt behavioral batch produces a sanitized summary and regression report against a compatible baseline. | General coding ability, deterministic model reasoning, statistical significance, or production-user behavior. |
+| `npm run evidence -- prepare ...` | Preregisters exact subject tag/commit/tree, collector commit/tree, clean state, model/provider, endpoint hash, and first-run selection policy. | That Live/Eval execution or raw capture later succeeds. |
+| `npm run evidence -- live ...` | Calls the tagged subject Live runner/validator and attempts to seal Session, Trace, TaskGraph, test, fixture, and portable Git bytes before fixture cleanup. | Future model adherence; `PASS` without `captureStatus=sealed`; OS isolation. |
+| `npm run evidence -- eval ...` | Calls the tagged subject suite, closes every evidence reference, and seals the complete attempt root. Candidate comparison requires an eligible external baseline from the same intent. | Statistical significance, general coding skill, or a preferred verdict. |
+| `npm run evidence -- promote ...` | Applies the observation or regression selection gate and atomically stages public manifests/reports separately from private archives/inventories. | That external Release uploads happened or remain downloadable. |
+| `npm run evidence -- verify ...` | Recomputes archive, inventory, per-file, report, and nested release-manifest SHA-256/size relationships. | Signer identity, SLSA provenance, or content-level secret scanning of private raw bytes. |
 
-The ordinary GitHub Actions workflow runs documentation checks, type checking, the complete test suite, and the build without calling a model. The separate eval workflow is manual `workflow_dispatch` only because it needs credentials and nondeterministic model output.
+The ordinary GitHub Actions workflow runs documentation checks, type checking, the complete test suite, and the build without calling a model. The separate eval workflow is manual `workflow_dispatch` only because it needs credentials and nondeterministic model output. Its 14-day sanitized artifact is a short-term diagnostic aid, not the maintainer's long-term private evidence store.
 
 ## Capability map
 
@@ -131,7 +149,7 @@ Claim: a candidate Runtime can run fixed Forge-specific behavioral contracts bef
 - Focused tests: [`test/eval/`](../test/eval), including synthetic grader cases, comparator priority, fingerprint stability, baseline eligibility, safe cleanup, and scripted Runtime integration
 - Manual workflow: [`eval.yml`](../.github/workflows/eval.yml)
 - Operating guide: [Offline eval and regression reports](offline-eval.md)
-- Curated evidence: [offline eval regression report](assets/evidence/offline-eval-regression-report.md), the first independent valid and comparable 13-attempt batch for the current hardened identity. It records a `REGRESSED` result without resampling: async child handoff improved, while one compaction ordering assertion declined.
+- Curated evidence: [offline eval regression report](assets/evidence/offline-eval-regression-report.md), the first independent valid and comparable 13-attempt batch for its historical hardened identity at source commit `6f4630a3c266433a1234a08b4b738c81516dcf99`. It records a `REGRESSED` result without resampling: async child handoff improved, while one compaction ordering assertion declined. It is not fresh evidence for the current `HEAD`.
 - Boundary: “offline” means outside user traffic, not offline from the model provider. Token and latency do not gate the verdict. v1 has no LLM judge, price table, multi-model ranking, or statistical claim.
 
 ## Interpreting the evidence

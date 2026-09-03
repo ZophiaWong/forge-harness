@@ -129,6 +129,20 @@ Each run writes:
 
 The attempt directories are private diagnostic material and can contain raw Trace data or model text. Public automation uploads only the three sanitized report files.
 
+### 普通 Eval 与 release evidence
+
+`npm run eval -- run` 适合日常调试和 pre-deployment regression，但它没有预注册 release tag，也不会为 raw run root 生成 private inventory/archive。因此，单独执行这条命令不能填补某个 release 的 fresh evidence gap。
+
+面向 release 时使用统一 collector：
+
+```bash
+npm run evidence -- eval --intent <intent.json> --role observation
+npm run evidence -- eval --intent <intent.json> --role baseline
+npm run evidence -- eval --intent <intent.json> --role candidate --baseline <external-baseline.json>
+```
+
+Collector 仍调用 subject tag 自己的 `runEvalSuite` 和 grader，但会额外检查 subject commit、完整 raw run root 与每个 `evidenceRef`。Observation 不建立 regression baseline；baseline 只有在完整、有效且无 hard violation 时才生成外部 `baseline.json`；candidate 只能读取同一 evidence intent 中已封存和验证的 baseline。完整流程见 [Release evidence 采集与发布](release-evidence.md)。
+
 ## Baseline and verdict
 
 Promote a complete, valid, zero-hard-violation 13-attempt summary locally:
@@ -167,7 +181,7 @@ Missing provider usage is reported as partial or unavailable. Token and latency 
 
 ## Manual GitHub workflow and cleanup
 
-`.github/workflows/eval.yml` runs only through `workflow_dispatch`. It reads the API key from repository secrets, always writes the Markdown report to the GitHub Step Summary, and retains only the three sanitized report files for 14 days. Pushes, pull requests, and schedules do not invoke a model.
+`.github/workflows/eval.yml` runs only through `workflow_dispatch`. It reads the API key from repository secrets, always writes the Markdown report to the GitHub Step Summary, and retains only the three sanitized report files for 14 days. Pushes, pull requests, and schedules do not invoke a model. The workflow artifact is a short-term diagnostic aid; it is not a raw release bundle or the maintainer's long-term private evidence store.
 
 Remove completed or invalid marked runs with:
 

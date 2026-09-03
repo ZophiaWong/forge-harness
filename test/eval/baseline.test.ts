@@ -137,8 +137,7 @@ describe("eval baseline promotion", () => {
   it("writes the derived baseline path and requires replace for an existing identity", async () => {
     const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-baseline-"));
     tempRoots.push(repositoryRoot);
-    const summaryPath = path.join(repositoryRoot, "summary.json");
-    await fs.writeFile(summaryPath, `${JSON.stringify(validSummary(), null, 2)}\n`, "utf8");
+    const summaryPath = await writeSummaryWithEvidence(repositoryRoot, "summary.json", validSummary());
 
     const first = await promoteEvalBaseline({
       from: summaryPath,
@@ -166,8 +165,7 @@ describe("eval baseline promotion", () => {
     const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-replace-"));
     tempRoots.push(repositoryRoot);
     const firstSummary = validSummary();
-    const firstPath = path.join(repositoryRoot, "first.json");
-    await fs.writeFile(firstPath, `${JSON.stringify(firstSummary, null, 2)}\n`, "utf8");
+    const firstPath = await writeSummaryWithEvidence(repositoryRoot, "first.json", firstSummary);
     const first = await promoteEvalBaseline({
       from: firstPath,
       replace: false,
@@ -178,8 +176,7 @@ describe("eval baseline promotion", () => {
     secondSummary.attempts[0].assertions[0].status = "passed";
     secondSummary.attempts[0].outcome = "passed";
     secondSummary.aggregates = aggregateAttempts(secondSummary.attempts);
-    const secondPath = path.join(repositoryRoot, "second.json");
-    await fs.writeFile(secondPath, `${JSON.stringify(secondSummary, null, 2)}\n`, "utf8");
+    const secondPath = await writeSummaryWithEvidence(repositoryRoot, "second.json", secondSummary);
     let callbackSawOldFile = false;
 
     const replaced = await promoteEvalBaseline({
@@ -217,4 +214,38 @@ describe("eval baseline promotion", () => {
       repositoryRoot,
     })).rejects.toThrow(/relative evidence reference/);
   });
+
+  it("keeps ordinary baseline promotion independent from release raw-bundle closure", async () => {
+    const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "forge-eval-missing-evidence-"));
+    tempRoots.push(repositoryRoot);
+    const summaryPath = path.join(repositoryRoot, "summary.json");
+    await fs.writeFile(summaryPath, `${JSON.stringify(validSummary(), null, 2)}\n`, "utf8");
+
+    await expect(promoteEvalBaseline({
+      from: summaryPath,
+      replace: false,
+      repositoryRoot,
+    })).resolves.toMatchObject({
+      baseline: { sourceRunId: "run-001" },
+    });
+  });
 });
+
+async function writeSummaryWithEvidence(
+  root: string,
+  name: string,
+  summary: EvalSuiteSummary,
+): Promise<string> {
+  const references = new Set(summary.attempts.flatMap((attempt) => [
+    ...attempt.evidenceRefs,
+    ...attempt.assertions.flatMap((assertion) => assertion.evidenceRefs),
+  ]));
+  for (const reference of references) {
+    const pathname = path.join(root, ...reference.split("/"));
+    await fs.mkdir(path.dirname(pathname), { recursive: true });
+    await fs.writeFile(pathname, "{}\n", "utf8");
+  }
+  const summaryPath = path.join(root, name);
+  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  return summaryPath;
+}
