@@ -18,6 +18,7 @@ import {
   runInitialFixtureTests,
   runLivePortfolioDemo,
   validateLivePortfolioEvidence,
+  type InitialTestCompletion,
   type LivePortfolioDependencies,
   type LivePortfolioProcess,
   type LivePortfolioProcessResult,
@@ -115,12 +116,25 @@ describe("focused live portfolio walkthrough", () => {
 
   it("accepts only the controlled two-failure initial retry state", async () => {
     const fixture = await allocateLivePortfolioFixture();
+    let observedCompletion: InitialTestCompletion | undefined;
 
     try {
       await initializeLivePortfolioFixture(fixture, new AbortController().signal);
 
-      await expect(runInitialFixtureTests(fixture, new AbortController().signal))
+      await expect(runInitialFixtureTests(
+        fixture,
+        new AbortController().signal,
+        (completion) => {
+          observedCompletion = completion;
+        },
+      ))
         .resolves.toBe("expected_failure");
+      expect(observedCompletion).toMatchObject({
+        command: "npm test",
+        exitCode: 1,
+        output: expect.stringContaining("# fail 2"),
+        signal: null,
+      });
 
       const testPath = path.join(fixture, "test", "retry.test.mjs");
       const tests = await fs.readFile(testPath, "utf8");
@@ -2195,7 +2209,10 @@ async function writePassingRootEvidence(
   if (!graph) {
     throw new Error("root session did not create a task graph");
   }
-  const store = createFileTeamTaskStore({ graphPath: graph.taskGraphPath });
+  const store = createFileTeamTaskStore({
+    graphPath: graph.taskGraphPath,
+    now: monotonicTestClock(),
+  });
   const rootWorkspace = await prepareWorktreeSession({
     baseCwd: cwd,
     lifecycleEmitter: createLifecycleEmitter({ recorder: session.recorder }),
@@ -2690,6 +2707,11 @@ function taskGraphFailureProjection(code: string): Record<string, unknown> {
     },
     health: "healthy",
   };
+}
+
+function monotonicTestClock(): () => Date {
+  let timestamp = Date.now();
+  return () => new Date(timestamp++);
 }
 
 async function expectFailedNpmTest(fixture: string): Promise<void> {

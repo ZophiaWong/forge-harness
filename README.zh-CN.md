@@ -6,13 +6,13 @@
 
 Forge Harness 是一个从零构建的 TypeScript coding-agent Runtime。项目从可运行的 model-tool loop 起步，通过可独立运行的 checkpoint 逐步加入受治理的工具执行、上下文管理、持久化运行证据、可信扩展、Worktree 隔离委派与多 Agent 协作。
 
-当前实现推进到 `c17c Coordination / Completion Protocol`。源码、测试、deterministic smoke、经过整理的 live evidence 和 offline eval report 共同说明各项机制的行为边界。中文教程解释 Runtime 如何从一个 checkpoint 演进到下一个 checkpoint。
+当前实现推进到 `c17c Coordination / Completion Protocol`。源码、测试、deterministic smoke、历史 curated snapshot 和 offline eval report 共同说明各项机制的行为边界。中文教程解释 Runtime 如何从一个 checkpoint 演进到下一个 checkpoint。
 
 仓库以源码形式提供，可供阅读和本地运行，不包含托管服务。
 
 ## 一次实际完成记录
 
-当前的 [c17c live snapshot](docs/assets/evidence/c17c-team-completion.json) 记录了一次模型实跑：
+这份历史 [c17c live snapshot](docs/assets/evidence/c17c-team-completion.json) 记录了 source commit `75714f2` 上的一次模型实跑：
 
 ```text
 pre-approval writes  blocked
@@ -131,6 +131,20 @@ npm run smoke:c17c-child
 
 Capstone smoke 串起 TaskGraph ownership、review、verification、Git integration 与 CompletionGate；child smoke 聚焦 one-shot edit source 的集成。它们不证明未来模型一定遵守协议，也不验证外部服务是否可用。
 
+## Release evidence
+
+面向 release 的证据使用独立生命周期：
+
+```text
+execute -> validate -> preserve raw bundle -> promote evidence
+```
+
+统一的 `npm run evidence` CLI 会预注册 clean tag/commit/tree 与 collector commit，封存 Live 或 13-attempt Eval 的 raw 材料，记录逐文件和 archive SHA-256，并把 behavioral verdict 与 capture status 分开。封存失败不会改写行为结果，但该运行不能支持 release claim。
+
+Public manifest 和脱敏 report 用于对应的 GitHub Release；raw archive 与 private inventory 用于仅维护者可读的 `ZophiaWong/forge-harness-evidence` companion repository。仓库中已有的 curated snapshot 是历史观察，不等于能追到 raw attempt/Session 的 fresh release evidence。
+
+[Release evidence runbook](docs/release-evidence.md)给出了冻结 `v1.0.0` 的 external-collector 回补、`v1.0.1` baseline/candidate gate、仅限 infrastructure-invalid 的重试规则、外部 mutation 审批边界，以及上传后重新下载验证。只有 Release assets 能通过 `npm run evidence -- verify` 时，仓库才会把对应版本视为完成证据闭环。
+
 ## Offline behavioral eval
 
 Pre-deployment eval 会用固定 Forge 场景执行 13 次真实模型 attempt，再用确定性 grader 的通过数与版本化 baseline 比较：
@@ -141,7 +155,7 @@ npm run eval -- run --model <model>
 
 这里的 “offline” 指不承载真实用户流量，不代表断网；运行仍会调用模型 API。Token 与 latency 只进入报告，不影响 behavioral verdict。v1 不包含 LLM-as-a-judge、价格表、多模型榜单、自动 PR 触发或 nightly model run。
 
-这份 [regression report](docs/assets/evidence/offline-eval-regression-report.md) 记录当前 hardened identity 的第一批有效且可比较的独立运行。它的 `REGRESSED` verdict 原样保留：async child handoff 有一项改善，但 compaction ordering 有一项下降。promoted baseline 已提交在 [`eval/baselines/`](eval/baselines/)，candidate 没有为了得到偏好的 verdict 而重采样。
+这份历史 [regression report](docs/assets/evidence/offline-eval-regression-report.md) 记录了 source commit `6f4630a3c266433a1234a08b4b738c81516dcf99` 当时 hardened identity 的第一批有效且可比较的独立运行。它的 `REGRESSED` verdict 原样保留：async child handoff 有一项改善，但 compaction ordering 有一项下降。对应的历史 baseline 已提交在 [`eval/baselines/`](eval/baselines/)，candidate 没有为了得到偏好的 verdict 而重采样。Eval contract 发生变化后，后续运行会得到新 identity，不会静默复用它。
 
 [Offline eval and regression reports](docs/offline-eval.md)说明了 canonical scenarios、baseline promotion、exit code、手动 GitHub workflow 与清理边界。这是 evergreen Runtime hardening，不占用教程 `c18`。
 
@@ -161,6 +175,7 @@ npm run eval -- run --model <model>
 - [工程案例](docs/engineering-case-study.md)：哪些具体失败迫使 Runtime 增加机制，以及没有采用哪些替代方案。
 - [证据索引](docs/evidence-index.md)：能力陈述与源码、测试、smoke、live evidence 的对应关系。
 - [Offline eval](docs/offline-eval.md)：canonical scenarios、comparability、baseline promotion、报告与限制。
+- [Release evidence runbook](docs/release-evidence.md)：fresh source binding、raw bundle 封存、promotion、private storage 与 release verification。
 - [Design Studies](docs/design-studies/README.md)：上下文管理、Tool Runtime、Session persistence 和多 Agent 协调。
 - [Agent Runtime 深度研究](https://github.com/ZophiaWong/forge-harness/tree/research/agent-runtime-design-studies/docs/design-studies)：独立 research branch 上的源码研究，对照 Forge、Pi 与 provenance 受限的 Claude 本地快照，讨论 loop completion、tool boundary、context、Session、coordination 和 extension trust。
 - [教程路线图](docs/02-tutorial-roadmap.md)：两部分中文学习路径。

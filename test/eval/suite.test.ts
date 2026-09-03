@@ -258,6 +258,54 @@ describe("eval suite runner", () => {
     expect(second.report.diffs.every((diff) => diff.scenarioId === "governed-read-only")).toBe(true);
   });
 
+  it("uses an explicit external baseline without falling back to repository state", async () => {
+    const repositoryRoot = await createRuntimeRepository("forge-eval-explicit-baseline-");
+    const attemptRunner = vi.fn(async (input: Parameters<NonNullable<Parameters<typeof runEvalSuite>[0]["attemptRunner"]>>[0]) => (
+      fakeAttempt(input.scenario.id, input.ordinal)
+    ));
+    const first = await runEvalSuite({
+      attemptRunner,
+      comparisonBaseline: null,
+      model: "gpt-test",
+      now: () => new Date("2026-08-03T01:00:00.000Z"),
+      providerId: "openai",
+      randomSuffix: () => "external1",
+      repositoryRoot,
+      scenarioId: "governed-read-only",
+    });
+    const externalBaseline: EvalBaseline = {
+      aggregates: first.summary.aggregates,
+      artifactType: "forge-eval-baseline",
+      identity: first.summary.identity,
+      metrics: zeroMetrics,
+      promotedAt: "2026-08-03T01:30:00.000Z",
+      schemaVersion: 1,
+      sourceRunId: first.summary.runId,
+    };
+    const corruptRepositoryBaseline = evalBaselinePath(repositoryRoot, first.summary.identity);
+    await fs.mkdir(path.dirname(corruptRepositoryBaseline), { recursive: true });
+    await fs.writeFile(corruptRepositoryBaseline, "not-json\n", "utf8");
+
+    const candidate = await runEvalSuite({
+      attemptRunner,
+      comparisonBaseline: externalBaseline,
+      model: "gpt-test",
+      now: () => new Date("2026-08-03T02:00:00.000Z"),
+      providerId: "openai",
+      randomSuffix: () => "external2",
+      repositoryRoot,
+      scenarioId: "governed-read-only",
+    });
+
+    expect(candidate.summary.valid).toBe(true);
+    expect(candidate.summary.issues).not.toContain("baseline_corrupt");
+    expect(candidate.report).toMatchObject({
+      baselineSourceRunId: first.summary.runId,
+      compatibility: { status: "comparable" },
+      verdict: "UNCHANGED",
+    });
+  });
+
   it("requires an explicit provider id whenever OPENAI_BASE_URL is customized", async () => {
     const repositoryRoot = await createRuntimeRepository("forge-eval-provider-");
 

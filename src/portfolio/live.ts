@@ -28,6 +28,13 @@ export interface LivePortfolioProcessResult {
   signal: NodeJS.Signals | null;
 }
 
+export interface InitialTestCompletion {
+  command: "npm test";
+  exitCode: number | null;
+  output: string;
+  signal: NodeJS.Signals | null;
+}
+
 export interface LivePortfolioProcess {
   completion: Promise<LivePortfolioProcessResult>;
   kill(signal: NodeJS.Signals): void;
@@ -841,8 +848,14 @@ function defaultLivePortfolioDependencies(): LivePortfolioDependencies {
 export async function runInitialFixtureTests(
   fixture: string,
   signal: AbortSignal,
+  observeCompletion?: (completion: Readonly<InitialTestCompletion>) => void,
 ): Promise<"expected_failure" | "passed"> {
   const completion = await captureInitialTestCompletion(fixture, signal);
+  try {
+    observeCompletion?.(Object.freeze({ ...completion }));
+  } catch {
+    // Evidence observers must not change the subject validator's behavior.
+  }
   if (completion.signal) {
     throw new Error(`initial test command terminated by ${completion.signal}`);
   }
@@ -896,12 +909,6 @@ export async function runInitialFixtureTests(
   return "expected_failure";
 }
 
-interface InitialTestCompletion {
-  exitCode: number | null;
-  output: string;
-  signal: NodeJS.Signals | null;
-}
-
 async function captureInitialTestCompletion(
   fixture: string,
   signal: AbortSignal,
@@ -938,6 +945,7 @@ async function captureInitialTestCompletion(
       await outputFile.close();
     }
     return {
+      command: "npm test",
       ...completion,
       output: await fs.readFile(outputPath, "utf8"),
     };

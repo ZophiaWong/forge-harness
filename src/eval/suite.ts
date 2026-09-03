@@ -36,6 +36,7 @@ import {
 } from "./scenarios.js";
 import {
   EVAL_SCHEMA_VERSION,
+  type EvalBaseline,
   type EvalModelMetrics,
   type EvalSuiteSummary,
   type RegressionReport,
@@ -50,6 +51,7 @@ export interface RunEvalSuiteOptions {
   apiKey?: string;
   attemptRunner?: EvalAttemptRunner;
   baseURL?: string;
+  comparisonBaseline?: EvalBaseline | null;
   contractSourceLoader?: (runtimeRepositoryRoot: string) => Promise<Record<string, string>>;
   model: string;
   now?: () => Date;
@@ -204,14 +206,18 @@ export async function runEvalSuite(options: RunEvalSuiteOptions): Promise<RunEva
     scope: options.scenarioId ? "scenario" : "suite",
     valid: complete && !hasInvalid,
   };
-  let discoveredBaseline;
+  let discoveredBaseline: EvalBaseline | undefined;
   let baselineCorrupt = false;
-  try {
-    discoveredBaseline = await loadComparisonBaseline(repositoryRoot, identity);
-  } catch {
-    baselineCorrupt = true;
-    summary.valid = false;
-    summary.issues = unique([...summary.issues, "baseline_corrupt"]);
+  if (Object.prototype.hasOwnProperty.call(options, "comparisonBaseline")) {
+    discoveredBaseline = options.comparisonBaseline ?? undefined;
+  } else {
+    try {
+      discoveredBaseline = await loadComparisonBaseline(repositoryRoot, identity);
+    } catch {
+      baselineCorrupt = true;
+      summary.valid = false;
+      summary.issues = unique([...summary.issues, "baseline_corrupt"]);
+    }
   }
   const baseline = discoveredBaseline && options.scenarioId
     ? scopeBaselineToScenario(discoveredBaseline, options.scenarioId)

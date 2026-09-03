@@ -1,6 +1,6 @@
 # Forge Offline Eval Regression Report
 
-This sanitized snapshot records the first independent valid and comparable batch after promoting the current hardened baseline. Private attempt directories, raw Trace payloads, prompts, and model text remain local under `.forge/evals/`.
+This sanitized historical snapshot records the first independent valid and comparable batch after promoting the then-current hardened baseline at source commit `6f4630a3c266433a1234a08b4b738c81516dcf99`. Private attempt directories, raw Trace payloads, prompts, and model text were retained locally under `.forge/evals/`; this snapshot is not fresh evidence for a later `HEAD`.
 
 - Verdict: `REGRESSED`
 - Candidate run: `20260805-015424-b8573e30`
@@ -18,7 +18,7 @@ This sanitized snapshot records the first independent valid and comparable batch
 
 The candidate has no hard-invariant or infrastructure findings. It improved the async child handoff count by one, but the compaction scenario lost one ordered-read pass. The comparator therefore returns `REGRESSED`; an improvement in one assertion does not cancel a decline in another.
 
-This is the first valid comparable candidate for the current identity. It is retained as evidence without resampling for a preferred verdict. The report evaluates Forge-owned Runtime contracts, not general coding ability or deterministic model behavior.
+This was the first valid comparable candidate for that historical identity. It is retained as evidence without resampling for a preferred verdict. The report evaluates Forge-owned Runtime contracts, not general coding ability or deterministic model behavior.
 
 ## Behavioral differences
 

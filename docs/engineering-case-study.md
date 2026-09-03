@@ -84,7 +84,7 @@ The baseline stores pass counts for each scenario and each outcome assertion. A 
 
 Token usage and model-call duration are useful for explaining change, but v1 does not convert tokens into price or make efficiency a release gate. It also avoids semantic LLM judging, significance claims, automatic pull-request calls, and resampling until a green run appears. The first independent valid comparable batch is the evidence sample, even when its verdict is red.
 
-The linked [regression report](assets/evidence/offline-eval-regression-report.md) records the first independent valid and comparable batch for the current hardened identity. Its `REGRESSED` verdict is kept as evidence: async child handoff improved, while one compaction ordering assertion declined. The candidate was not resampled for a preferred verdict.
+The linked historical [regression report](assets/evidence/offline-eval-regression-report.md) records the first independent valid and comparable batch for the hardened identity at source commit `6f4630a3c266433a1234a08b4b738c81516dcf99`. Its `REGRESSED` verdict is kept as evidence: async child handoff improved, while one compaction ordering assertion declined. The candidate was not resampled for a preferred verdict, and the report is not presented as fresh evidence for a later `HEAD`.
 
 ## Known maintenance pressure
 
