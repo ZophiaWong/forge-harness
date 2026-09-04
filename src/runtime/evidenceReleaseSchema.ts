@@ -53,11 +53,17 @@ export function parseEvidenceReleaseManifest(value: unknown): EvidenceReleaseMan
     if (!isRecord(capture)
       || !hasSchemaKeys(capture, [
         "behavioralVerdict",
+        "collector",
+        "infrastructureInvalid",
+        "intentId",
         "reasonCode",
         "role",
         "runId",
       ], ["retryOf"])
       || typeof capture.behavioralVerdict !== "string"
+      || !isPublicGitIdentity(capture.collector)
+      || capture.infrastructureInvalid !== true
+      || typeof capture.intentId !== "string"
       || typeof capture.reasonCode !== "string"
       || !["baseline", "candidate", "live", "observation"].includes(capture.role as string)
       || typeof capture.runId !== "string"
@@ -65,6 +71,7 @@ export function parseEvidenceReleaseManifest(value: unknown): EvidenceReleaseMan
       throw new Error("invalid failed release evidence capture");
     }
     requireSafeIdentifier(capture.runId, "failed capture run id");
+    requireSafeIdentifier(capture.intentId as string, "failed capture intent id");
     requireSafeIdentifier(capture.reasonCode, "failed capture reason");
     if (capture.retryOf !== undefined) {
       requireSafeIdentifier(capture.retryOf as string, "failed capture retry run id");

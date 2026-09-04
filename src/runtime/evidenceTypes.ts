@@ -102,6 +102,9 @@ export interface EvidenceReleaseManifest {
   environment: EvidenceIntent["environment"];
   failedCaptures: Array<{
     behavioralVerdict: string;
+    collector: EvidenceGitIdentity & { clean: true };
+    infrastructureInvalid: true;
+    intentId: string;
     reasonCode: string;
     retryOf?: string;
     role: EvidenceRunRole;

@@ -20,6 +20,56 @@ afterEach(async () => {
 });
 
 describe("Live release evidence", () => {
+  it("captures final evidence from the integrated root session worktree", async () => {
+    const { intentPath } = await createIntent();
+    let rootWorkspace = "";
+
+    const result = await runLiveEvidence({ intentPath }, {
+      buildSubject: async () => commandEvidence("npm run --silent build", 0, "built\n"),
+      async captureFinalTests(capturedWorkspace) {
+        const source = await fs.readFile(
+          path.join(capturedWorkspace, "src", "subject.js"),
+          "utf8",
+        );
+        return commandEvidence(
+          "npm test",
+          source.includes("value = 2") ? 0 : 1,
+          source,
+        );
+      },
+      captureInitialTests: async () => commandEvidence("npm test", 1, "raw initial TAP\n"),
+      environment: liveEnvironment(),
+      loadSubjectModule: async () => fakeSubjectModule(
+        () => undefined,
+        undefined,
+        true,
+        (workspace) => {
+          rootWorkspace = workspace;
+        },
+      ),
+      now: sequenceDates(
+        "2026-08-28T01:20:00.000Z",
+        "2026-08-28T01:30:00.000Z",
+        "2026-08-28T01:31:00.000Z",
+      ),
+      randomSuffix: () => "rootwork",
+    });
+
+    expect(rootWorkspace).not.toBe("");
+    expect(result).toMatchObject({
+      capture: {
+        behavioralVerdict: "PASS:verified_session_evidence",
+        captureStatus: "sealed",
+        promotionEligible: true,
+      },
+      exitCode: 0,
+    });
+    expect(await fs.readFile(
+      path.join(result.stagingRoot, "fixture", "src", "subject.js"),
+      "utf8",
+    )).toContain("value = 2");
+  });
+
   it("archives subject evidence before the disposable fixture is removed", async () => {
     const { intentPath, repository } = await createIntent();
     let fixture = "";
@@ -269,6 +319,7 @@ function fakeSubjectModule(
     status: "PASS",
   },
   exposeInitialCompletion = true,
+  onRootWorkspace: (workspace: string) => void = () => undefined,
 ): SubjectLiveModule {
   return {
     async allocateLivePortfolioFixture() {
@@ -291,6 +342,17 @@ function fakeSubjectModule(
       await git(fixture, ["config", "user.email", "subject@example.invalid"]);
       await git(fixture, ["add", "."]);
       await git(fixture, ["commit", "-qm", "fixture"]);
+      const rootWorkspace = path.join(fixture, ".forge", "worktrees", "root");
+      await fs.mkdir(path.dirname(rootWorkspace), { recursive: true });
+      await git(fixture, ["worktree", "add", "-q", "-b", "forge/run/root", rootWorkspace, "HEAD"]);
+      await fs.writeFile(
+        path.join(rootWorkspace, "src", "subject.js"),
+        "export const value = 2;\n",
+        "utf8",
+      );
+      await git(rootWorkspace, ["add", "src/subject.js"]);
+      await git(rootWorkspace, ["commit", "-qm", "integrated fixture edit"]);
+      onRootWorkspace(rootWorkspace);
     },
     async runInitialFixtureTests(_fixture, _signal, observeCompletion) {
       if (exposeInitialCompletion) {

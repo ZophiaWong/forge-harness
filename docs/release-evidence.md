@@ -64,7 +64,7 @@ runs/<evidence-run-id>/
 
 `capture-result.json` 分别记录 behavioral verdict、capture status、infrastructure validity、baseline eligibility 和 promotion eligibility。Public manifest 只包含来源身份、结果、限制、report hash 及 private archive 的名称、大小和 SHA-256；它不包含 prompt、model output、raw tool arguments、绝对路径或 checkout path。
 
-Private archive 保留原始字节。Live 包括 Session、Trace、TaskGraph、fixture 输入、初始/最终测试记录和可移植 Git bundle；Eval 包括完整 subject run root、所有 attempt evidence 和 subject 原始 report。Raw 内容可能很敏感，只能进入维护者私有存储。Collector 会拒绝 symlink、path escape 和常见 credential 文件名，但这不是内容级 secret scanner。
+Private archive 保留原始字节。Live 包括 Session、Trace、TaskGraph、root session 集成后的 worktree 输入、初始/最终测试记录和可移植 Git bundle；Eval 包括完整 subject run root、所有 attempt evidence 和 subject 原始 report。Raw 内容可能很敏感，只能进入维护者私有存储。Collector 会拒绝 symlink、path escape 和常见 credential 文件名，但这不是内容级 secret scanner。
 
 在 build 或模型调用前，collector 还会以原子、不可覆盖的文件写入
 `reservations/<kind>/<role>/<original|retry>.json`。因此即使进程在生成
@@ -90,7 +90,7 @@ promotion/
     └── <evidence-run-id>-inventory.json
 ```
 
-如果某次 capture 本身失败，Release manifest 会保留其 run ID、behavioral verdict、reason code 和 retry 关系，但不会把未封存 staging 伪装成 archive。后续成功 retry 的 manifest 仍通过 `retryOf` 指向该记录。
+如果某次 capture 本身失败，Release manifest 会保留其 run ID、intent ID、当时的 collector commit/tree、behavioral verdict、reason code 和 retry 关系，但不会把未封存 staging 伪装成 archive。后续成功 retry 的 manifest 仍通过 `retryOf` 指向该记录。
 
 公开资产发布到对应 GitHub Release。Private archive 和 inventory 发布到维护者私有 companion repository `ZophiaWong/forge-harness-evidence`。GitHub Actions artifact 只用于短期排障，不是长期 raw evidence 存储。
 
@@ -119,7 +119,7 @@ npm run evidence -- eval \
   --role observation
 ```
 
-Live collector 调用旧 tag 自己的 runner 和 validator，并在旧 runner 删除 disposable fixture 前复制证据。Eval collector 调用旧 tag 自己的 suite 和 grader。`v1.0.0` 会读取仓库内的 legacy baseline，因此它的 subject report 原样留在 private archive；对外公开的 observation report 由 collector 从同一份 subject summary 派生为 `NO_BASELINE`，不会把这次回补说成 regression baseline。
+Live collector 调用旧 tag 自己的 runner 和 validator，并在旧 runner 删除 disposable fixture 前复制证据。最终测试、fixture snapshot 和 Git bundle 取自 root session 完成 integration 后的隔离 worktree；外层 fixture 的原始分支只用于建立初始失败状态。Eval collector 调用旧 tag 自己的 suite 和 grader。`v1.0.0` 会读取仓库内的 legacy baseline，因此它的 subject report 原样留在 private archive；对外公开的 observation report 由 collector 从同一份 subject summary 派生为 `NO_BASELINE`，不会把这次回补说成 regression baseline。
 
 第一组 Live 无论 `PASS` 或 behavioral `FAIL` 都必须保留。完整 observational Eval 即使含普通失败或 hard violation 也如实报告；不得为了更好结果重采样。如果 hard violation 令旧 suite 提前停止，promotion 会因不满 13 attempts 而拒绝，此时 release acceptance 未满足，也不能偷偷重跑。
 
@@ -188,6 +188,15 @@ Live 使用相同的 `--retry-of`。每个角色最多只有一次 linked retry�
 必须直接指向最初 preregistered run；retry 本身不能再次重试。允许的 retry
 仍然 invalid 时，流程暂停。原 capture-result、raw archive 或保留下来的 staging
 不能删除。普通行为失败、hard violation、`REGRESSED`、或仅仅“结果不够好”都不是重试理由。
+
+如果 capture failure 暴露了 collector 缺陷，应先提交并验证修复，再建立新的 intent，
+如实记录新的 collector commit。此时 `--retry-of` 可以指向同一 `.forge/evidence`
+树中旧 intent 的 failed capture，但两个 intent 的 subject tag/commit/tree、mode、
+provider/model/endpoint hash 和 selection policy 必须完全相同。Release manifest 会同时
+列出旧 failed capture 的 intent/collector identity 和新 run 的 `retryOf`。跨 intent
+只适用于 failed capture；已经封存的 infrastructure-invalid run 仍在原 intent 中重试。
+开始 retry 前，collector 会在 original intent 下原子写入共享 claim。两个新 intent
+即使并发申请，也只有一个能进入 build 和模型调用。
 
 ## 发布、下载与复验
 

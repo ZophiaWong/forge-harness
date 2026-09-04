@@ -381,16 +381,17 @@ async function captureLiveFixture(
   stagingRoot: string,
   dependencies: LiveEvidenceDependencies,
 ): Promise<CapturedCommandEvidence> {
+  const evidenceWorkspace = await resolveLiveEvidenceWorkspace(fixture);
   await Promise.all([
     copyIfExists(path.join(fixture, ".forge", "sessions"), path.join(stagingRoot, "sessions")),
-    copyFixtureInputs(fixture, path.join(stagingRoot, "fixture")),
+    copyFixtureInputs(evidenceWorkspace, path.join(stagingRoot, "fixture")),
   ]);
   const gitRoot = path.join(stagingRoot, "git");
   await fs.mkdir(gitRoot, { recursive: true });
   let finalTests: CapturedCommandEvidence | undefined;
   let finalTestError: unknown;
   try {
-    finalTests = await dependencies.captureFinalTests(fixture);
+    finalTests = await dependencies.captureFinalTests(evidenceWorkspace);
     await writeEvidenceJson(path.join(stagingRoot, "operator", "final-test.json"), finalTests);
   } catch (error) {
     finalTestError = error;
@@ -399,23 +400,82 @@ async function captureLiveFixture(
     });
   }
   const [head, tree, status, diff] = await Promise.all([
-    git(fixture, ["rev-parse", "HEAD"]),
-    git(fixture, ["rev-parse", "HEAD^{tree}"]),
-    git(fixture, ["status", "--porcelain=v1", "--untracked-files=all"]),
-    git(fixture, ["diff", "--binary", "HEAD"]),
+    git(evidenceWorkspace, ["rev-parse", "HEAD"]),
+    git(evidenceWorkspace, ["rev-parse", "HEAD^{tree}"]),
+    git(evidenceWorkspace, ["status", "--porcelain=v1", "--untracked-files=all"]),
+    git(evidenceWorkspace, ["diff", "--binary", "HEAD"]),
   ]);
   await Promise.all([
     writeEvidenceJson(path.join(gitRoot, "facts.json"), { head, tree }),
     fs.writeFile(path.join(gitRoot, "status.txt"), status ? `${status}\n` : "", "utf8"),
     fs.writeFile(path.join(gitRoot, "working-tree.patch"), diff, "utf8"),
     execFileAsync("git", ["bundle", "create", path.join(gitRoot, "repository.bundle"), "--all"], {
-      cwd: fixture,
+      cwd: evidenceWorkspace,
     }),
   ]);
   if (finalTestError) {
     throw finalTestError;
   }
   return finalTests as CapturedCommandEvidence;
+}
+
+async function resolveLiveEvidenceWorkspace(fixture: string): Promise<string> {
+  const sessionsRoot = path.join(fixture, ".forge", "sessions");
+  let sessionEntries;
+  try {
+    sessionEntries = await fs.readdir(sessionsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return fixture;
+    }
+    throw error;
+  }
+
+  const rootSessionIds: string[] = [];
+  for (const entry of sessionEntries) {
+    if (entry.isSymbolicLink()) {
+      throw new Error("Live session evidence cannot contain symlinked session directories");
+    }
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    try {
+      const taskGraph = await fs.lstat(path.join(sessionsRoot, entry.name, "task-graph.json"));
+      if (!taskGraph.isFile() || taskGraph.isSymbolicLink()) {
+        throw new Error("Live root task graph must be a real file");
+      }
+      rootSessionIds.push(entry.name);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  if (rootSessionIds.length === 0) {
+    return fixture;
+  }
+  if (rootSessionIds.length !== 1) {
+    throw new Error("Live evidence must contain exactly one root session task graph");
+  }
+
+  const worktreesRoot = path.join(fixture, ".forge", "worktrees");
+  const workspace = path.join(worktreesRoot, rootSessionIds[0] as string);
+  const [worktreesStats, workspaceStats] = await Promise.all([
+    fs.lstat(worktreesRoot),
+    fs.lstat(workspace),
+  ]);
+  if (!worktreesStats.isDirectory() || worktreesStats.isSymbolicLink()
+    || !workspaceStats.isDirectory() || workspaceStats.isSymbolicLink()) {
+    throw new Error("Live root session worktree must be a real directory");
+  }
+  const [realWorktreesRoot, realWorkspace] = await Promise.all([
+    fs.realpath(worktreesRoot),
+    fs.realpath(workspace),
+  ]);
+  if (!realWorkspace.startsWith(`${realWorktreesRoot}${path.sep}`)) {
+    throw new Error("Live root session worktree escapes the fixture worktree root");
+  }
+  return workspace;
 }
 
 async function copyFixtureInputs(fixture: string, destination: string): Promise<void> {

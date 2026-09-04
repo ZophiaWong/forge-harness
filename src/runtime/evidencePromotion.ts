@@ -9,6 +9,7 @@ import {
 import {
   assertEvidenceLedgerClosed,
   readEvidenceCaptureResults,
+  readExternalRetryTargets,
 } from "./evidenceRunLedger.js";
 import { parseEvidenceReleaseManifest } from "./evidenceReleaseSchema.js";
 import {
@@ -49,6 +50,7 @@ export async function promoteEvidenceIntent(
   const runsRoot = path.join(intentRoot, "runs");
   const captures = await readEvidenceCaptureResults(intentPath);
   await assertEvidenceLedgerClosed(intentPath, captures);
+  const externalRetryTargets = await readExternalRetryTargets(intentPath, captures);
 
   const sealedRuns: Array<{
     archivePath: string;
@@ -60,19 +62,17 @@ export async function promoteEvidenceIntent(
   }> = [];
   const failedCaptures: EvidenceReleaseManifest["failedCaptures"] = [];
 
+  for (const target of externalRetryTargets) {
+    failedCaptures.push(toFailedReleaseCapture(target.capture, target.intent));
+  }
+
   for (const capture of captures.sort((left, right) => left.runId.localeCompare(right.runId))) {
     const runRoot = path.join(runsRoot, capture.runId);
     if (capture.intentId !== intent.intentId) {
       throw new Error(`evidence capture ${capture.runId} does not match its intent`);
     }
     if (capture.captureStatus !== "sealed" || !capture.artifacts) {
-      failedCaptures.push({
-        behavioralVerdict: capture.behavioralVerdict,
-        reasonCode: capture.reasonCode as string,
-        ...(capture.retryOf ? { retryOf: capture.retryOf } : {}),
-        role: capture.role,
-        runId: capture.runId,
-      });
+      failedCaptures.push(toFailedReleaseCapture(capture, intent));
       continue;
     }
     const artifacts = capture.artifacts;
@@ -97,6 +97,8 @@ export async function promoteEvidenceIntent(
       reports,
     });
   }
+
+  failedCaptures.sort((left, right) => left.runId.localeCompare(right.runId));
 
   validatePromotionSelection(intent, sealedRuns.map((run) => run.manifest));
   const outputRoot = path.resolve(options.outputRoot ?? path.join(intentRoot, "promotion"));
@@ -214,6 +216,28 @@ export async function promoteEvidenceIntent(
     await fs.rm(temporaryRoot, { force: true, recursive: true });
     throw error;
   }
+}
+
+function toFailedReleaseCapture(
+  capture: EvidenceCaptureResult,
+  intent: EvidenceIntent,
+): EvidenceReleaseManifest["failedCaptures"][number] {
+  if (capture.captureStatus !== "failed"
+    || !capture.infrastructureInvalid
+    || !capture.reasonCode) {
+    throw new Error(`evidence capture ${capture.runId} is not a failed infrastructure capture`);
+  }
+  const { checkout: _collectorCheckout, ...collector } = intent.collector;
+  return {
+    behavioralVerdict: capture.behavioralVerdict,
+    collector,
+    infrastructureInvalid: true,
+    intentId: intent.intentId,
+    reasonCode: capture.reasonCode,
+    ...(capture.retryOf ? { retryOf: capture.retryOf } : {}),
+    role: capture.role,
+    runId: capture.runId,
+  };
 }
 
 export async function verifyPublishedEvidence(options: {
